@@ -20,6 +20,7 @@ class ItemKNN(NeighbourRec):
     _search_space = {
         "num_neighbours": {"type": "int", "args": [1, 100]},
         "shrink": {"type": "int", "args": [0, 100]},
+        "weighting": {"type": "categorical", "args": [None, "tf_idf", "bm25"]}
     }
 
     def __init__(
