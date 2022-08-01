@@ -63,7 +63,7 @@ def log_to_pred(spark):
     ids=[
         "als",
         "admm_slim",
-        "ItemKNN",
+        "knn",
         "lightfm",
         "multvae",
         "neuromf",
@@ -116,7 +116,7 @@ def test_predict_pairs_warm_only(log, log_to_pred, model):
         SLIM(seed=SEED),
         Word2VecRec(seed=SEED, min_count=0),
     ],
-    ids=["admm_slim", "ItemKNN", "slim", "word2vec",],
+    ids=["admm_slim", "knn", "slim", "word2vec",],
 )
 def test_predict_pairs_raises(log, model):
     with pytest.raises(ValueError, match="log is not provided,.*"):
@@ -149,7 +149,7 @@ def test_predict_pairs_raises_pairs_format(log):
         "als_cosine",
         "w2v_cosine",
         "admm_slim",
-        "ItemKNN",
+        "knn",
         "slim",
     ],
 )
@@ -244,7 +244,7 @@ def fit_predict_selected(model, train_log, inf_log, user_features, users):
     ids=[
         "admm_slim",
         "cluster",
-        "ItemKNN",
+        "knn",
         "lightfm",
         "multvae",
         "slim",
@@ -300,7 +300,7 @@ def test_predict_cold_users(model, long_log_with_features, user_features):
     ],
     ids=[
         "als",
-        "ItemKNN",
+        "knn",
         "lightfm_no_feat",
         "multvae",
         "neuromf",
