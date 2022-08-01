@@ -39,6 +39,10 @@ class ItemKNN(NeighbourRec):
         self.shrink = shrink
         self.use_relevance = use_relevance
         self.num_neighbours = num_neighbours
+
+        valid_weightings = self._search_space["weighting"]["args"]
+        if weighting not in valid_weightings:
+            raise ValueError(f"weighting must be one of {valid_weightings}")
         self.weighting = weighting
 
     @property
