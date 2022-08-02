@@ -72,37 +72,18 @@ class ItemKNN(NeighbourRec):
         similarity = self._shrink(dot_products, self.shrink)
         return similarity
 
-    def _get_item_vectors(self, log: DataFrame):
+    def _reweight_log(self, log: DataFrame):
         if self.weighting == "bm25":
-            left, right = self._get_tf_bm25(log)
-        else:
-            left = log.withColumnRenamed(
-                "item_idx", "item_idx_one"
-            ).withColumnRenamed("relevance", "rel_one")
-            right = log.withColumnRenamed(
-                "item_idx", "item_idx_two"
-            ).withColumnRenamed("relevance", "rel_two")
+            log = self._get_tf_bm25(log)
 
-        if self.weighting in ["tf_idf", "bm25"]:
-            if self.weighting == "tf_idf":
-                idf1, idf2 = ItemKNN._get_idf(log)
-            elif self.weighting == "bm25":
-                idf1, idf2 = ItemKNN._get_idf_bm25(log)
+        idf = ItemKNN._get_idf(log)
 
-            left = left.join(idf1, how="inner", on="user_idx")
+        log = log.join(idf, how="inner", on="user_idx").withColumn(
+            "relevance",
+            sf.col("relevance") * sf.col("idf"),
+        )
 
-            left = left.withColumn(
-                "rel_one",
-                sf.col("rel_one") * sf.col("idf1"),
-            )
-
-            right = right.join(idf2, how="inner", on="user_idx")
-            right = right.withColumn(
-                "rel_two",
-                sf.col("rel_two") * sf.col("idf2"),
-            )
-
-        return left, right
+        return log
 
     def _get_tf_bm25(self, log: DataFrame):
         item_stats = log.groupBy("item_idx").agg(
@@ -111,7 +92,7 @@ class ItemKNN(NeighbourRec):
         avgdl = item_stats.select(sf.mean("n_users_per_item")).take(1)[0][0]
         log = log.join(item_stats, how="inner", on="item_idx")
 
-        left = (
+        log = (
             log.withColumn(
                 "relevance",
                 sf.col("relevance") * (self.bm25_k1 + 1) / (
@@ -121,76 +102,38 @@ class ItemKNN(NeighbourRec):
                         )
                     )
                 )
-            )
-            .drop("n_users_per_item")
-            .withColumnRenamed("item_idx", "item_idx_one")
-            .withColumnRenamed("relevance", "rel_one")
+            ).drop("n_users_per_item")
         )
 
-        right = (
-            log.withColumn(
-                "relevance",
-                sf.col("relevance") * (self.bm25_k1 + 1) / (
-                    sf.col("relevance") + self.bm25_k1 * (
-                        1 - self.bm25_b + self.bm25_b * (
-                            sf.col("n_users_per_item") / avgdl
-                        )
-                    )
-                )
-            )
-            .drop("n_users_per_item")
-            .withColumnRenamed("item_idx", "item_idx_two")
-            .withColumnRenamed("relevance", "rel_two")
-        )
-        return left, right
+        return log
 
     @staticmethod
     def _get_idf(log: DataFrame):
         df = log.groupBy("user_idx").agg(sf.count("item_idx").alias("DF"))
         n_items = log.select("item_idx").distinct().count()
 
-        idf1 = (
-            df.withColumn("idf1", sf.log1p(sf.lit(n_items) / sf.col("DF")))
-            .drop("DF")
-        )
-
-        idf2 = (
-            df.withColumn("idf2", sf.log1p(sf.lit(n_items) / sf.col("DF")))
-            .drop("DF")
-        )
-
-        return idf1, idf2
-
-    @staticmethod
-    def _get_idf_bm25(log: DataFrame):
-        df = log.groupBy("user_idx").agg(sf.count("item_idx").alias("DF"))
-        n_items = log.select("item_idx").distinct().count()
-
-        idf1 = (
-            df.withColumn(
-                "idf1",
-                sf.log1p(
-                    (sf.lit(n_items) - sf.col("DF") + 0.5)
-                    / (sf.col("DF") + 0.5)
-                ),
+        if self.weighting == "tf_idf":
+            idf = (
+                df.withColumn("idf", sf.log1p(sf.lit(n_items) / sf.col("DF")))
+                .drop("DF")
             )
-            .drop("DF")
-            .withColumnRenamed("item_idx", "item_idx_one")
-        )
-
-        idf2 = (
-            df.withColumn(
-                "idf2",
-                sf.log1p(
-                    (sf.lit(n_items) - sf.col("DF") + 0.5)
-                    / (sf.col("DF") + 0.5)
-                ),
+        elif self.weighting == "bm25":
+            idf = (
+                df.withColumn(
+                    "idf",
+                    sf.log1p(
+                        (sf.lit(n_items) - sf.col("DF") + 0.5)
+                        / (sf.col("DF") + 0.5)
+                    ),
+                )
+                .drop("DF")
             )
-            .drop("DF")
-            .withColumnRenamed("item_idx", "item_idx_two")
-        )
+        else:
+            raise ValueError(
+                f"weighting must be one of {self._search_space["weighting"]["args"]}"
+            )
 
-        return idf1, idf2
+        return idf
 
     def _get_products(self, log: DataFrame) -> DataFrame:
         """
@@ -199,7 +142,15 @@ class ItemKNN(NeighbourRec):
         :param log: DataFrame with interactions, `[user_idx, item_idx, relevance]`
         :return: similarity matrix `[item_idx_one, item_idx_two, norm1, norm2]`
         """
-        left, right = self._get_item_vectors(log)
+        if self.weighting:
+            log = self._reweight_log(log)
+
+        left = log.withColumnRenamed(
+            "item_idx", "item_idx_one"
+        ).withColumnRenamed("relevance", "rel_one")
+        right = log.withColumnRenamed(
+            "item_idx", "item_idx_two"
+        ).withColumnRenamed("relevance", "rel_two")
 
         dot_products = (
             left.join(right, how="inner", on="user_idx")
