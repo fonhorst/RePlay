@@ -73,10 +73,16 @@ class ItemKNN(NeighbourRec):
         return similarity
 
     def _reweight_log(self, log: DataFrame):
+        """
+        Reweight relevance according to TD-IDF or BM25 weighting.
+
+        :param log: DataFrame with interactions, `[user_idx, item_idx, relevance]`
+        :return: log `[user_idx, item_idx, relevance]`
+        """
         if self.weighting == "bm25":
             log = self._get_tf_bm25(log)
 
-        idf = ItemKNN._get_idf(log)
+        idf = self._get_idf(log)
 
         log = log.join(idf, how="inner", on="user_idx").withColumn(
             "relevance",
@@ -86,6 +92,12 @@ class ItemKNN(NeighbourRec):
         return log
 
     def _get_tf_bm25(self, log: DataFrame):
+        """
+        Adjust relevance by BM25 term frequency.
+
+        :param log: DataFrame with interactions, `[user_idx, item_idx, relevance]`
+        :return: log `[user_idx, item_idx, relevance]`
+        """
         item_stats = log.groupBy("item_idx").agg(
             sf.count("user_idx").alias("n_users_per_item")
         )
@@ -102,13 +114,20 @@ class ItemKNN(NeighbourRec):
                         )
                     )
                 )
-            ).drop("n_users_per_item")
+            )
+            .drop("n_users_per_item")
         )
 
         return log
 
-    @staticmethod
-    def _get_idf(log: DataFrame):
+    def _get_idf(self, log: DataFrame):
+        """
+        Return inverse document score for log reweighting.
+
+        :param log: DataFrame with interactions, `[user_idx, item_idx, relevance]`
+        :return: idf `[idf]`
+        :raises: ValueError if self.weighting not in ["tf_idf", "bm25"]
+        """
         df = log.groupBy("user_idx").agg(sf.count("item_idx").alias("DF"))
         n_items = log.select("item_idx").distinct().count()
 
@@ -129,9 +148,7 @@ class ItemKNN(NeighbourRec):
                 .drop("DF")
             )
         else:
-            raise ValueError(
-                f"weighting must be one of {self._search_space["weighting"]["args"]}"
-            )
+            raise ValueError("weighting must be one of ['tf_idf', 'bm25']")
 
         return idf
 
