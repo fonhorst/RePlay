@@ -113,6 +113,7 @@ def test_bm25(weighting_log, bm25_model):
     recs = bm25_model.predict(weighting_log, k=1, users=[0, 1]).toPandas()
     assert recs.loc[recs["user_idx"] == 1, "item_idx"].iloc[0] == 0
 
+
 def test_weighting_raises(log, tf_idf_model):
     with pytest.raises(ValueError, match="weighting must be one of .*"):
         tf_idf_model.weighting = " "
