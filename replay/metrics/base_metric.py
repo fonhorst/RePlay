@@ -3,16 +3,18 @@ Base classes for quality and diversity metrics.
 """
 import operator
 from abc import ABC, abstractmethod
-from typing import Dict, Union
+from typing import Dict, Union, Optional
 
+import numpy as np
 import pandas as pd
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
+from pyspark.sql import Window
 from scipy.stats import norm
 
 from replay.constants import AnyDataFrame, IntOrList, NumType
-from replay.utils import convert2spark
+from replay.utils import convert2spark, get_top_k_recs
 
 
 # pylint: disable=no-member
@@ -272,3 +274,132 @@ class RecOnlyMetric(Metric):
             '''self._get_enriched_recommendations''' method
         :return: metric value for current user
         """
+
+
+class NCISMetric(Metric):
+    def __init__(
+        self,
+        prev_policy_weights: AnyDataFrame,
+        threshold: float,
+        activation: Optional[str] = None
+
+    ):  # pylint: disable=super-init-not-called
+        """
+        Here we calculate self-information for each item
+
+        :param log: historical data
+        """
+        self.prev_policy_weights = (convert2spark(prev_policy_weights)
+                                    .withColumnRenamed("relevance",
+                                                   "prev_relevance"))
+        self.threshold = threshold
+        if activation is None or activation in ("logit", "sigmoid", "softmax"):
+            self.activation = activation
+        else:
+            raise ValueError(
+                "Unexpected `activation` - {}".format(activation))
+
+    def _reweighting(self, recommendations):
+        if self.activation == 'softmax':
+            min_relevance_by_user = (recommendations
+                                     .groupBy("user_idx").agg(
+                {"min_prev_rel": sf.min("prev_relevance"),
+                 "min_rel": sf.min("relevance")})
+            )
+            recommendations = (
+                recommendations
+                .join(min_relevance_by_user, on="user_idx")
+                .withColumn("prev_relevance", sf.exp(sf.col(
+                    "prev_relevance")-sf.col("min_prev_rel")))
+                .withColumn("prev_relevance", sf.col(
+                    "prev_relevance")/sf.sum("prev_relevance").over(
+                    Window.partitionBy("user_idx")))
+                .withColumn("relevance", sf.exp(sf.col(
+                    "relevance") - sf.col("min_rel")))
+                .withColumn("relevance", sf.col(
+                    "relevance") / sf.sum("relevance").over(
+                    Window.partitionBy("user_idx")))
+            )
+
+        elif self.activation in ['logit', 'sigmoid']:
+
+            recommendations = (
+                recommendations
+                .withColumn("prev_relevance", 1/ (1+ sf.exp(-sf.col(
+                    "prev_relevance"))))
+                .withColumn("prev_relevance", 1 / (1 + sf.exp(-sf.col(
+                    "prev_relevance"))))
+            )
+
+        elif self.activation is None:
+            pass
+
+        return (recommendations.withColumn("weight",
+                sf.when(sf.col("prev_relevance") == sf.lit(0), sf.lit(
+            self.threshold))
+                .when(sf.col("relevance")/sf.col("prev_relevance") < sf.lit(
+                1.0/self.threshold), sf.lit(1.0/self.threshold))
+                .when(sf.col("relevance") / sf.col("prev_relevance") > sf.lit(
+                self.threshold), sf.lit(self.threshold))
+                .otherwise(sf.col("relevance") / sf.col("prev_relevance"))
+                ).select("user_idx", "item_idx", "relevance", "weight"))
+
+    def _get_enriched_recommendations(
+            self, recommendations: AnyDataFrame, ground_truth: AnyDataFrame
+    ) -> DataFrame:
+        """
+        Merge recommendations and ground truth into a single DataFrame
+        and aggregate items into lists so that each user has only one record.
+
+        :param recommendations: recommendation list
+        :param ground_truth: test data
+        :return:  ``[user_id, pred, ground_truth]``
+        """
+        recommendations = convert2spark(recommendations)
+        ground_truth = convert2spark(ground_truth)
+
+        true_items_by_users = ground_truth.groupby("user_idx").agg(
+            sf.collect_set("item_idx").alias("ground_truth")
+        )
+
+        group_on = ["item_idx"]
+        if "user_idx" in self.prev_policy_weights.columns:
+            group_on.append("user_idx")
+
+        recommendations = recommendations.join(self.prev_policy_weights,
+                                                   on=group_on,
+                                                   how="left")
+        recommendations = recommendations.withColumn(
+                "prev_relevance", sf.coalesce("prev_relevance", sf.lit(0.0)))
+
+        recommendations = self._reweighting(recommendations)
+
+
+        sort_udf = sf.udf(
+            sorter,
+            returnType=st.ArrayType(ground_truth.schema["item_idx"].dataType),
+        )
+        weight_udf = sf.udf(
+            sorter,
+            returnType=st.ArrayType(recommendations.schema["weight"].dataType),
+        )
+
+        recommendations = (
+            recommendations
+                .groupby("user_idx")
+                .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias(
+                 "pred"))
+                .select("user_idx", sort_udf(sf.col("pred")).alias("pred")
+                        , weight_udf(sf.col("pred")).alias("weight"))
+                .join(true_items_by_users, how="right", on=["user_idx"])
+        )
+
+        return recommendations.withColumn(
+            "pred",
+            sf.coalesce(
+                "pred",
+                sf.array().cast(
+                    st.ArrayType(ground_truth.schema["item_idx"].dataType)
+                ),
+            ),
+        )
