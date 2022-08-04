@@ -51,6 +51,7 @@ class ItemKNN(NeighbourRec):
             "shrink": self.shrink,
             "use_relevance": self.use_relevance,
             "num_neighbours": self.num_neighbours,
+            "weighting": self.weighting,
         }
 
     @staticmethod
