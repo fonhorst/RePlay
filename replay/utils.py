@@ -540,7 +540,10 @@ def join_with_col_renaming(
 
     on_condition = sf.lit(True)
     for name in on_col_name:
-        right = right.withColumnRenamed(name, f"{name}_{suffix}")
+        if how == "right":
+            left = left.withColumnRenamed(name, f"{name}_{suffix}")
+        else:
+            right = right.withColumnRenamed(name, f"{name}_{suffix}")
         on_condition &= sf.col(name) == sf.col(f"{name}_{suffix}")
 
     return (left.join(right, on=on_condition, how=how)).drop(
