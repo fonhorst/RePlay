@@ -14,6 +14,7 @@ from replay.data_preparator import Indexer
 from replay.models import *
 from replay.models.base_rec import BaseRecommender
 from replay.session_handler import State
+from replay.splitters import Splitter
 
 
 def save(model: BaseRecommender, path: str):
@@ -67,6 +68,16 @@ def save_indexer(indexer: Indexer, path: str):
     indexer.item_indexer.save(join(path, "item_indexer"))
     indexer.inv_user_indexer.save(join(path, "inv_user_indexer"))
     indexer.inv_item_indexer.save(join(path, "inv_item_indexer"))
+
+
+def save_splitter(splitter: Splitter, path: str):
+    """
+    Save initialized splitter
+    """
+    init_args = splitter._init_args
+    with open(join(path, "init_args.json"), "w") as json_file:
+        json.dump(init_args, json_file)
+        
 
 
 def load_indexer(path: str):

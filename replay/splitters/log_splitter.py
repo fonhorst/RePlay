@@ -24,6 +24,7 @@ class DateSplitter(Splitter):
     """
     Split into train and test by date.
     """
+    _init_arg_names = ["test_start", "drop_cold_users", "drop_cold_items", "drop_zero_rel_in_test"]
 
     def __init__(
         self,
