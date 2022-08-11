@@ -13,6 +13,21 @@ You can
 - Combine predictions from different models
 - Create a two-level model
 
+## Resources
+
+### Examples in google colab
+1. [01_replay_basics.ipynb](https://colab.research.google.com/github/sb-ai-lab/RePlay/blob/main/experiments/01_replay_basics.ipynb)
+2. [02_models_comparison.ipynb](https://colab.research.google.com/github/sb-ai-lab/RePlay/blob/main/experiments/02_models_comparison.ipynb)
+3. [03_features_preprocessing_and_lightFM.ipynb](https://colab.research.google.com/github/sb-ai-lab/RePlay/blob/main/experiments/03_features_preprocessing_and_lightFM.ipynb)
+
+
+### Videos and papers
+* **Video guides**:
+	- (Russian) [AI Journey 2021](https://www.youtube.com/watch?v=M9XqEJb2Ncc)
+
+* **Papers**:
+	- Yan-Martin Tamm, Rinchin Damdinov, Alexey Vasilev [Quality Metrics in Recommender Systems: Do We Calculate Metrics Consistently?](https://dl.acm.org/doi/10.1145/3460231.3478848)
+
 
 ## Docs
 
