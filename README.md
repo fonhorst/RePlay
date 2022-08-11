@@ -13,6 +13,59 @@ You can
 - Combine predictions from different models
 - Create a two-level model
 
+## Quickstart
+
+```python
+from rs_datasets import MovieLens
+
+from replay.data_preparator import DataPreparator, Indexer
+from replay.metrics import HitRate, NDCG
+from replay.models import KNN
+from replay.session_handler import State
+from replay.splitters import UserSplitter
+
+spark = State().session
+
+ml_1m = MovieLens("1m")
+
+# data preprocessing
+preparator = DataPreparator()
+log = preparator.transform(
+    columns_mapping={'relevance': 'rating'}, data=ml_1m.ratings
+)
+indexer = Indexer(user_col='user_id', item_col='item_id')
+indexer.fit(users=log.select('user_id'))
+log_replay = indexer.transform(df=log)
+
+# data splitting
+user_splitter = UserSplitter(
+    item_test_size=10,
+    user_test_size=500,
+    drop_cold_items=True,
+    drop_cold_users=True,
+    shuffle=True,
+    seed=42,
+)
+train, test = user_splitter.split(log_replay)
+
+# model training
+model = KNN()
+model.fit(train)
+
+# model inference
+recs = model.predict(
+    log=train,
+    k=K,
+    users=test.select('user_idx').distinct(),
+    filter_seen_items=True,
+)
+
+# model evaluation
+metrics = Experiment(test,  {NDCG(): K, HitRate(): K})
+metrics.add_result("knn", recs)
+```
+
+
 ## Resources
 
 ### Examples in google colab
