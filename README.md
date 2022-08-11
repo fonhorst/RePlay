@@ -61,10 +61,16 @@ ml_1m = MovieLens("1m")
 # data preprocessing
 preparator = DataPreparator()
 log = preparator.transform(
-    columns_mapping={'relevance': 'rating'}, data=ml_1m.ratings
+    columns_mapping={
+        'user_id': 'user_id',
+        'item_id': 'item_id',
+        'relevance': 'rating',
+        'timestamp': 'timestamp'
+    }, 
+    data=ml_1m.ratings
 )
 indexer = Indexer(user_col='user_id', item_col='item_id')
-indexer.fit(users=log.select('user_id'))
+indexer.fit(users=log.select('user_id'), items=log.select('item_id'))
 log_replay = indexer.transform(df=log)
 
 # data splitting
