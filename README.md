@@ -24,6 +24,7 @@ You can
 * [Installation](#installation)
 * [Quickstart](#quickstart)
 * [Resources](#examples)
+* [Contributing to RePlay](#contributing)
 
 
 <a name="installation"></a>
@@ -110,3 +111,7 @@ metrics.add_result("knn", recs)
 * **Papers**:
 	- Yan-Martin Tamm, Rinchin Damdinov, Alexey Vasilev [Quality Metrics in Recommender Systems: Do We Calculate Metrics Consistently?](https://dl.acm.org/doi/10.1145/3460231.3478848)
 
+<a name="contributing"></a>
+## Contributing to RePlay
+
+For more details visit [development section in docs](https://sb-ai-lab.github.io/RePlay/pages/installation.html#development)
