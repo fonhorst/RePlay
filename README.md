@@ -26,8 +26,22 @@ You can
 * [Resources](#examples)
 
 
+<a name="installation"></a>
+## Installation
+
+Use Linux machine with Python 3.7+, Java 8+ and C++ compiler.
+
+```bash
+pip install replay-rec
+```
+
+To get the latest development version or RePlay, [install it from the GitHab repository](https://sb-ai-lab.github.io/RePlay/pages/installation.html#development).
+It is preferable to use a virtual environment for your installation.
+
+If you encounter an error during RePlay installation, check the [troubleshooting](https://sb-ai-lab.github.io/RePlay/pages/installation.html#troubleshooting) guide.
 
 
+<a name="quickstart"></a>
 ## Quickstart
 
 ```python
@@ -80,7 +94,7 @@ metrics = Experiment(test,  {NDCG(): K, HitRate(): K})
 metrics.add_result("knn", recs)
 ```
 
-
+<a name="examples"></a>
 ## Resources
 
 ### Examples in google colab
@@ -96,21 +110,3 @@ metrics.add_result("knn", recs)
 * **Papers**:
 	- Yan-Martin Tamm, Rinchin Damdinov, Alexey Vasilev [Quality Metrics in Recommender Systems: Do We Calculate Metrics Consistently?](https://dl.acm.org/doi/10.1145/3460231.3478848)
 
-
-## Docs
-
-[Documentation](https://sb-ai-lab.github.io/RePlay/)
-
-
-### Installation
-
-Use Linux machine with Python 3.7+, Java 8+ and C++ compiler. 
-
-```bash
-pip install replay-rec
-```
-
-To get the latest development version or RePlay, [install it from the GitHab repository](https://sb-ai-lab.github.io/RePlay/pages/installation.html#development). 
-It is preferable to use a virtual environment for your installation.
-
-If you encounter an error during RePlay installation, check the [troubleshooting](https://sb-ai-lab.github.io/RePlay/pages/installation.html#troubleshooting) guide.
