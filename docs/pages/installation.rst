@@ -81,4 +81,4 @@ Association Rules Item-to-Item Recommender currently doesn't have predict interf
 
 Current model inheritance in RePlay:
 
-.. image:: /images/model_inheritance.jpg.jpg
+.. image:: /images/model_inheritance.jpg
