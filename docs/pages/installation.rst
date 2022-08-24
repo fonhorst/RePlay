@@ -77,7 +77,8 @@ For models inherited from *BaseTorchRec*::
     fit->_fit_wrap->_fit->train
     predict(_pairs)->_predict(_pairs)_wrap->_predict(_pairs)->_predict_by_user(_pairs)->_predict_pairs_inner
 
-Association Rules Item-to-Item Recommender currently doesn't have predict interface.
+Currently *AssociationRulesItemRec* currently doesn't have ``predict(_pairs)`` interface.
+*ClusterRec*, *ImplicitWrap* and *RandomRec* currently doesn't have ``predict_pairs`` interface.
 
 Current model inheritance in RePlay:
 
