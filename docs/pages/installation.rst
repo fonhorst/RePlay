@@ -53,3 +53,32 @@ You can also clone repository and install with poetry
 
 Poetry resolves dependencies from ``pyproject.toml`` and fixes versions into ``poetry.lock`` file.
 New packages can be added into configuration file with ``poetry add package``.
+
+Adding new model
+-------------------
+
+Usually for new model we need updates in ``fit``, ``predict`` and ``predict_pairs``.
+
+Typical function chains for ``fit`` and ``predict(_pairs)``::
+
+    fit->_fit_wrap->_fit
+    predict(_pairs)->_predict(_pairs)_wrap->_predict(_pairs)
+
+For *LightFMWrap*::
+
+    predict(_pairs)->_predict(_pairs)_wrap->_predict(_pairs)->_predict_selected_pairs
+
+For *Word2VecRec* and models inherited from *NeighbourRec*::
+
+    predict(_pairs)->_predict(_pairs)_wrap->_predict(_pairs)->_predict_pairs_inner
+
+For models inherited from *BaseTorchRec*::
+
+    fit->_fit_wrap->_fit->train
+    predict(_pairs)->_predict(_pairs)_wrap->_predict(_pairs)->_predict_by_user(_pairs)->_predict_pairs_inner
+
+Association Rules Item-to-Item Recommender currently doesn't have predict interface.
+
+Current model inheritance in RePlay:
+
+.. image:: /images/model_inheritance.jpg.jpg
