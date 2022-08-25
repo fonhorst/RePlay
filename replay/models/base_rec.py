@@ -13,7 +13,17 @@ import collections
 import logging
 from abc import ABC, abstractmethod
 from copy import deepcopy
-from typing import Any, Dict, Iterable, List, Optional, Union, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Union,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import pandas as pd
 from optuna import create_study
@@ -26,8 +36,10 @@ from replay.metrics import Metric, NDCG
 from replay.optuna_objective import SplitData, MainObjective
 from replay.session_handler import State
 from replay.utils import (
+    cache_temp_view,
     convert2spark,
     cosine_similarity,
+    drop_temp_view,
     get_top_k,
     get_top_k_recs,
     vector_euclidean_distance_similarity,
@@ -51,11 +63,11 @@ class BaseRecommender(ABC):
     study = None
     fit_users: DataFrame
     fit_items: DataFrame
-    fit_statistics: Optional[Dict[str, int]]
     _num_users: int
     _num_items: int
     _user_dim_size: int
     _item_dim_size: int
+    cached_dfs: Optional[Set] = None
 
     # pylint: disable=too-many-arguments, too-many-locals, no-member
     def optimize(
@@ -372,21 +384,42 @@ class BaseRecommender(ABC):
         :return:
         """
 
-    @staticmethod
+    def _cache_model_temp_view(self, df: DataFrame, df_name: str) -> None:
+        """
+        Create Spark SQL temporary view for df, cache it and add temp view name to self.cached_dfs.
+        Temp view name is : "id_<python object id>_model_<RePlay model name>_<df_name>"
+        """
+        full_name = f"id_{id(self)}_model_{str(self)}_{df_name}"
+        cache_temp_view(df, full_name)
+
+        if self.cached_dfs is None:
+            self.cached_dfs = set()
+        self.cached_dfs.add(full_name)
+
+    def _clear_model_temp_view(self, df_name: str) -> None:
+        """
+        Uncache and drop Spark SQL temporary view and remove from self.cached_dfs
+        Temp view to replace will be constructed as
+        "id_<python object id>_model_<RePlay model name>_<df_name>"
+        """
+        full_name = f"id_{id(self)}_model_{str(self)}_{df_name}"
+        drop_temp_view(full_name)
+        if self.cached_dfs is not None:
+            self.cached_dfs.discard(full_name)
+
     def _filter_seen(
-        recs: DataFrame, log: DataFrame, k: int, users: DataFrame
+        self, recs: DataFrame, log: DataFrame, k: int, users: DataFrame
     ):
         """
         Filter seen items (presented in log) out of the users' recommendations.
         For each user return from `k` to `k + number of seen by user` recommendations.
         """
-
-        users_log = log.join(users, on="user_idx").cache()
-        num_seen = (
-            users_log.groupBy("user_idx").agg(
-                sf.count("item_idx").alias("seen_count")
-            )
-        ).cache()
+        users_log = log.join(users, on="user_idx")
+        self._cache_model_temp_view(users_log, "filter_seen_users_log")
+        num_seen = users_log.groupBy("user_idx").agg(
+            sf.count("item_idx").alias("seen_count")
+        )
+        self._cache_model_temp_view(num_seen, "filter_seen_num_seen")
 
         # count maximal number of items seen by users
         max_seen = 0
@@ -420,9 +453,6 @@ class BaseRecommender(ABC):
             & (sf.col("item_idx") == sf.col("item")),
             how="anti",
         ).drop("user", "item")
-
-        users_log.unpersist()
-        num_seen.unpersist()
 
         return recs
 
@@ -484,8 +514,16 @@ class BaseRecommender(ABC):
         if filter_seen_items and log:
             recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
 
-        recs = get_top_k_recs(recs, k=k)
-        return recs.select("user_idx", "item_idx", "relevance")
+        cached_recs = (
+            get_top_k_recs(recs, k=k)
+            .select("user_idx", "item_idx", "relevance")
+            .cache()
+        )
+        cached_recs.count()
+        self._clear_model_temp_view("filter_seen_users_log")
+        self._clear_model_temp_view("filter_seen_num_seen")
+        self._clear_model_temp_view("not_exists")
+        return cached_recs
 
     @staticmethod
     def _get_ids(
