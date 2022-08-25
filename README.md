@@ -104,10 +104,10 @@ metrics.add_result("knn", recs)
 <a name="examples"></a>
 ## Resources
 
-### Examples in google colab
-1. [01_replay_basics.ipynb](https://colab.research.google.com/github/sb-ai-lab/RePlay/blob/main/experiments/01_replay_basics.ipynb)
-2. [02_models_comparison.ipynb](https://colab.research.google.com/github/sb-ai-lab/RePlay/blob/main/experiments/02_models_comparison.ipynb)
-3. [03_features_preprocessing_and_lightFM.ipynb](https://colab.research.google.com/github/sb-ai-lab/RePlay/blob/main/experiments/03_features_preprocessing_and_lightFM.ipynb)
+### Usage examples
+1. [01_replay_basics.ipynb](https://github.com/sb-ai-lab/RePlay/blob/main/experiments/01_replay_basics.ipynb) - get started with RePlay.
+2. [02_models_comparison.ipynb](https://github.com/sb-ai-lab/RePlay/blob/main/experiments/02_models_comparison.ipynb) - reproducible models comparison on [MovieLens-1M dataset](https://grouplens.org/datasets/movielens/1m/).
+3. [03_features_preprocessing_and_lightFM.ipynb](https://github.com/sb-ai-lab/RePlay/blob/main/experiments/03_features_preprocessing_and_lightFM.ipynb) - LightFM example with pyspark for feature preprocessing.
 
 
 ### Videos and papers
