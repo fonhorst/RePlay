@@ -522,7 +522,6 @@ class BaseRecommender(ABC):
         cached_recs.count()
         self._clear_model_temp_view("filter_seen_users_log")
         self._clear_model_temp_view("filter_seen_num_seen")
-        self._clear_model_temp_view("not_exists")
         return cached_recs
 
     @staticmethod
