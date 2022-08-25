@@ -50,7 +50,7 @@ from rs_datasets import MovieLens
 
 from replay.data_preparator import DataPreparator, Indexer
 from replay.metrics import HitRate, NDCG
-from replay.models import KNN
+from replay.models import ItemKNN
 from replay.session_handler import State
 from replay.splitters import UserSplitter
 
@@ -85,7 +85,7 @@ user_splitter = UserSplitter(
 train, test = user_splitter.split(log_replay)
 
 # model training
-model = KNN()
+model = ItemKNN()
 model.fit(train)
 
 # model inference
