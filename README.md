@@ -112,9 +112,9 @@ metrics.add_result("knn", recs)
 
 ### Videos and papers
 * **Video guides**:
-	- (Russian) [AI Journey 2021](https://www.youtube.com/watch?v=M9XqEJb2Ncc)
+	- [Replay for offline recommendations, AI Journey 2021](https://www.youtube.com/watch?v=ejQZKGAG0xs)
 
-* **Papers**:
+* **Research papers**:
 	- Yan-Martin Tamm, Rinchin Damdinov, Alexey Vasilev [Quality Metrics in Recommender Systems: Do We Calculate Metrics Consistently?](https://dl.acm.org/doi/10.1145/3460231.3478848)
 
 <a name="contributing"></a>
