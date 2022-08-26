@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Data Preparation &mdash; RePlay  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+        <script src="../../_static/jquery.js"></script>
+        <script src="../../_static/underscore.js"></script>
+        <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Distributions" href="distributions.html" />
+    <link rel="prev" title="Scenarios" href="scenarios.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+            <a href="../../index.html" class="icon icon-home"> RePlay
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../overview.html">Get Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../spark.html">Settings</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../modules.html">Modules</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="filters.html">Filters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="time.html">Time Smoothing</a></li>
+<li class="toctree-l2"><a class="reference internal" href="models.html">Models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="saver.html">Serializer</a></li>
+<li class="toctree-l2"><a class="reference internal" href="splitters.html">Splitters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="metrics.html">Metrics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="experiment.html">Compare Results</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scenarios.html">Scenarios</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Data Preparation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="distributions.html">Distributions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../useful.html">Useful Info</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">RePlay</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home"></a> &raquo;</li>
+          <li><a href="../modules.html">Modules</a> &raquo;</li>
+      <li>Data Preparation</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/pages/modules/data_preparator.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <div class="section" id="data-preparation">
+<span id="data-preparator"></span><h1>Data Preparation<a class="headerlink" href="#data-preparation" title="Permalink to this headline"></a></h1>
+<p>Replay has a number of requirements for input data.
+We await that input columns are in the form <code class="docutils literal notranslate"><span class="pre">[user_id,</span> <span class="pre">item_id,</span> <span class="pre">timestamp,</span> <span class="pre">relevance]</span></code>.
+And internal format is a spark DataFrame with indexed integer values for <code class="docutils literal notranslate"><span class="pre">[user_idx,</span> <span class="pre">item_idx]</span></code>.
+You can convert indexes of your Spark DataFrame with <code class="docutils literal notranslate"><span class="pre">Indexer</span></code> class.</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="replay.data_preparator.Indexer">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">replay.data_preparator.</span></span><span class="sig-name descname"><span class="pre">Indexer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">user_col</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'user_id'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">item_col</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'item_id'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#replay.data_preparator.Indexer" title="Permalink to this definition"></a></dt>
+<dd><p>This class is used to convert arbitrary id to numerical idx and back.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="replay.data_preparator.Indexer.fit">
+<span class="sig-name descname"><span class="pre">fit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">users</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">items</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#replay.data_preparator.Indexer.fit" title="Permalink to this definition"></a></dt>
+<dd><p>Creates indexers to map raw id to numerical idx so that spark can handle them.
+:type users: <code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>
+:param users: DataFrame containing user column
+:type items: <code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>
+:param items: DataFrame containing item column
+:rtype: <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code>
+:return:</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="replay.data_preparator.Indexer.inverse_transform">
+<span class="sig-name descname"><span class="pre">inverse_transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#replay.data_preparator.Indexer.inverse_transform" title="Permalink to this definition"></a></dt>
+<dd><p>Convert DataFrame to the initial indexes.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>df</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>) – DataFrame with numerical <code class="docutils literal notranslate"><span class="pre">user_idx/item_idx</span></code> columns</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></p>
+</dd>
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>DataFrame with original user/item columns</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="replay.data_preparator.Indexer.transform">
+<span class="sig-name descname"><span class="pre">transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#replay.data_preparator.Indexer.transform" title="Permalink to this definition"></a></dt>
+<dd><p>Convert raw <code class="docutils literal notranslate"><span class="pre">user_col</span></code> and <code class="docutils literal notranslate"><span class="pre">item_col</span></code> to numerical <code class="docutils literal notranslate"><span class="pre">user_idx</span></code> and <code class="docutils literal notranslate"><span class="pre">item_idx</span></code></p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>df</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>) – dataframe with raw indexes</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>]</p>
+</dd>
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>dataframe with converted indexes</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<p>If your DataFrame is in the form of Pandas DataFrame and has different column names, you can either
+preprocess it yourself with <code class="docutils literal notranslate"><span class="pre">convert2spark</span></code> function or use <code class="docutils literal notranslate"><span class="pre">DataPreparator</span></code> class</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="replay.data_preparator.DataPreparator">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">replay.data_preparator.</span></span><span class="sig-name descname"><span class="pre">DataPreparator</span></span><a class="headerlink" href="#replay.data_preparator.DataPreparator" title="Permalink to this definition"></a></dt>
+<dd><dl class="simple">
+<dt>Transforms data to a library format:</dt><dd><ul class="simple">
+<li><p>read as a spark dataframe/ convert pandas dataframe to spark</p></li>
+<li><p>check for nulls</p></li>
+<li><p>create relevance/timestamp columns if absent</p></li>
+<li><p>convert dates to TimestampType</p></li>
+</ul>
+</dd>
+</dl>
+<p>Examples:</p>
+<p>Loading log DataFrame</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">replay.data_preparator</span> <span class="kn">import</span> <span class="n">DataPreparator</span>
+<span class="go">&gt;&gt;&gt;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">log</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;user&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+<span class="gp">... </span>                    <span class="s2">&quot;item_id&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+<span class="gp">... </span>                    <span class="s2">&quot;rel&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">]}</span>
+<span class="gp">... </span>                   <span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dp</span> <span class="o">=</span> <span class="n">DataPreparator</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">correct_log</span> <span class="o">=</span> <span class="n">dp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">log</span><span class="p">,</span>
+<span class="gp">... </span>                           <span class="n">columns_mapping</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span>
+<span class="gp">... </span>                                          <span class="s2">&quot;item_id&quot;</span><span class="p">:</span> <span class="s2">&quot;item_id&quot;</span><span class="p">,</span>
+<span class="gp">... </span>                                          <span class="s2">&quot;relevance&quot;</span><span class="p">:</span> <span class="s2">&quot;rel&quot;</span><span class="p">}</span>
+<span class="gp">... </span>                            <span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">correct_log</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+<span class="go">+-------+-------+---------+-------------------+</span>
+<span class="go">|user_id|item_id|relevance|          timestamp|</span>
+<span class="go">+-------+-------+---------+-------------------+</span>
+<span class="go">|      2|      1|      5.0|2099-01-01 00:00:00|</span>
+<span class="go">|      2|      2|      5.0|2099-01-01 00:00:00|</span>
+<span class="go">+-------+-------+---------+-------------------+</span>
+<span class="go">only showing top 2 rows</span>
+</pre></div>
+</div>
+<p>Loading user features</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">replay.data_preparator</span> <span class="kn">import</span> <span class="n">DataPreparator</span>
+<span class="go">&gt;&gt;&gt;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">log</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;user&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;user1&quot;</span><span class="p">,</span> <span class="s2">&quot;user1&quot;</span><span class="p">,</span> <span class="s2">&quot;user2&quot;</span><span class="p">],</span>
+<span class="gp">... </span>                    <span class="s2">&quot;f0&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;feature1&quot;</span><span class="p">,</span><span class="s2">&quot;feature2&quot;</span><span class="p">,</span><span class="s2">&quot;feature1&quot;</span><span class="p">],</span>
+<span class="gp">... </span>                    <span class="s2">&quot;f1&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;left&quot;</span><span class="p">,</span><span class="s2">&quot;left&quot;</span><span class="p">,</span><span class="s2">&quot;center&quot;</span><span class="p">],</span>
+<span class="gp">... </span>                    <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;2019-01-01&quot;</span><span class="p">,</span><span class="s2">&quot;2019-01-01&quot;</span><span class="p">,</span><span class="s2">&quot;2019-01-01&quot;</span><span class="p">]}</span>
+<span class="gp">... </span>            <span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dp</span> <span class="o">=</span> <span class="n">DataPreparator</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">correct_log</span> <span class="o">=</span> <span class="n">dp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">log</span><span class="p">,</span>
+<span class="gp">... </span>                           <span class="n">columns_mapping</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;user_id&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">},</span>
+<span class="gp">... </span>                            <span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">correct_log</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+<span class="go">+-------+--------+------+----------+</span>
+<span class="go">|user_id|      f0|    f1|        ts|</span>
+<span class="go">+-------+--------+------+----------+</span>
+<span class="go">|  user1|feature1|  left|2019-01-01|</span>
+<span class="go">|  user1|feature2|  left|2019-01-01|</span>
+<span class="go">|  user2|feature1|center|2019-01-01|</span>
+<span class="go">+-------+--------+------+----------+</span>
+</pre></div>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="replay.data_preparator.DataPreparator.add_absent_log_cols">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">add_absent_log_cols</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dataframe</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">columns_mapping</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">default_relevance</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">default_ts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'2099-01-01'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#replay.data_preparator.DataPreparator.add_absent_log_cols" title="Permalink to this definition"></a></dt>
+<dd><dl class="simple">
+<dt>Add <code class="docutils literal notranslate"><span class="pre">relevance</span></code> and <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> columns with default values if</dt><dd><p><code class="docutils literal notranslate"><span class="pre">relevance</span></code> or <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> is absent among mapping keys.</p>
+</dd>
+</dl>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>dataframe</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>) – interactions log to process</p></li>
+<li><p><strong>columns_mapping</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">Dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>]) – dictionary mapping “key: column name in input DataFrame”.
+Possible keys: <code class="docutils literal notranslate"><span class="pre">[user_id,</span> <span class="pre">user_id,</span> <span class="pre">timestamp,</span> <span class="pre">relevance]</span></code></p></li>
+<li><p><strong>default_relevance</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>) – default value for generated <cite>relevance</cite> column</p></li>
+<li><p><strong>default_ts</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>) – str, default value for generated <cite>timestamp</cite> column</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>spark DataFrame with generated <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> and <code class="docutils literal notranslate"><span class="pre">relevance</span></code> columns
+if absent in original dataframe</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="replay.data_preparator.DataPreparator.check_df">
+<span class="sig-name descname"><span class="pre">check_df</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dataframe</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">columns_mapping</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#replay.data_preparator.DataPreparator.check_df" title="Permalink to this definition"></a></dt>
+<dd><p>Check:
+- if dataframe is not empty,
+- if columns from <code class="docutils literal notranslate"><span class="pre">columns_mapping</span></code> are present in dataframe
+- warn about nulls in columns from <code class="docutils literal notranslate"><span class="pre">columns_mapping</span></code>
+- warn about absent of <code class="docutils literal notranslate"><span class="pre">timestamp/relevance</span></code> columns for interactions log
+- warn about wrong relevance DataType</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>dataframe</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>) – spark DataFrame to process</p></li>
+<li><p><strong>columns_mapping</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">Dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>]) – dictionary mapping “key: column name in input DataFrame”.
+Possible keys: <code class="docutils literal notranslate"><span class="pre">[user_id,</span> <span class="pre">user_id,</span> <span class="pre">timestamp,</span> <span class="pre">relevance]</span></code>
+<code class="docutils literal notranslate"><span class="pre">columns_mapping</span></code> values specifies the nature of the DataFrame:
+- if both <code class="docutils literal notranslate"><span class="pre">[user_id,</span> <span class="pre">item_id]</span></code> are present,
+then the dataframe is a log of interactions.
+Specify <code class="docutils literal notranslate"><span class="pre">timestamp,</span> <span class="pre">relevance</span></code> columns in mapping if available.
+- if ether <code class="docutils literal notranslate"><span class="pre">user_id</span></code> or <code class="docutils literal notranslate"><span class="pre">item_id</span></code> is present,
+then the dataframe is a dataframe of user/item features</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="replay.data_preparator.DataPreparator.logger">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">logger</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">logging.Logger</span></em><a class="headerlink" href="#replay.data_preparator.DataPreparator.logger" title="Permalink to this definition"></a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Logger</span></code></p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>get library logger</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="replay.data_preparator.DataPreparator.read_as_spark_df">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">read_as_spark_df</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format_type</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#replay.data_preparator.DataPreparator.read_as_spark_df" title="Permalink to this definition"></a></dt>
+<dd><p>Read spark dataframe from file of transform pandas dataframe.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Union</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>, <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code>]) – DataFrame to process (<code class="docutils literal notranslate"><span class="pre">pass</span></code> or <code class="docutils literal notranslate"><span class="pre">data</span></code> should be defined)</p></li>
+<li><p><strong>path</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>]) – path to data (<code class="docutils literal notranslate"><span class="pre">pass</span></code> or <code class="docutils literal notranslate"><span class="pre">data</span></code> should be defined)</p></li>
+<li><p><strong>format_type</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>]) – file type, one of <code class="docutils literal notranslate"><span class="pre">[csv</span> <span class="pre">,</span> <span class="pre">parquet</span> <span class="pre">,</span> <span class="pre">json</span> <span class="pre">,</span> <span class="pre">table]</span></code></p></li>
+<li><p><strong>kwargs</strong> – extra arguments passed to
+<code class="docutils literal notranslate"><span class="pre">spark.read.&lt;format&gt;(path,</span> <span class="pre">**reader_kwargs)</span></code></p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></p>
+</dd>
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>spark DataFrame</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="replay.data_preparator.DataPreparator.transform">
+<span class="sig-name descname"><span class="pre">transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">columns_mapping</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format_type</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">date_format</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reader_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#replay.data_preparator.DataPreparator.transform" title="Permalink to this definition"></a></dt>
+<dd><p>Transforms log, user or item features into a Spark DataFrame
+<code class="docutils literal notranslate"><span class="pre">[user_id,</span> <span class="pre">user_id,</span> <span class="pre">timestamp,</span> <span class="pre">relevance]</span></code>,
+<code class="docutils literal notranslate"><span class="pre">[user_id,</span> <span class="pre">*features]</span></code>, or  <code class="docutils literal notranslate"><span class="pre">[item_id,</span> <span class="pre">*features]</span></code>.
+Input is either file of <code class="docutils literal notranslate"><span class="pre">format_type</span></code>
+at <code class="docutils literal notranslate"><span class="pre">path</span></code>, or <code class="docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code> or <code class="docutils literal notranslate"><span class="pre">spark.DataFrame</span></code>.
+Transform performs:
+- dataframe reading/convert to spark DataFrame format
+- check dataframe (nulls, columns_mapping)
+- rename columns from mapping to standard names (user_id, user_id, timestamp, relevance)
+- for interactions log: create absent columns,
+convert <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> column to TimestampType and <code class="docutils literal notranslate"><span class="pre">relevance</span></code> to DoubleType</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>columns_mapping</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">Dict</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>]) – dictionary mapping “key: column name in input DataFrame”.
+Possible keys: <code class="docutils literal notranslate"><span class="pre">[user_id,</span> <span class="pre">user_id,</span> <span class="pre">timestamp,</span> <span class="pre">relevance]</span></code>
+<code class="docutils literal notranslate"><span class="pre">columns_mapping</span></code> values specifies the nature of the DataFrame:
+- if both <code class="docutils literal notranslate"><span class="pre">[user_id,</span> <span class="pre">item_id]</span></code> are present,
+then the dataframe is a log of interactions.
+Specify <code class="docutils literal notranslate"><span class="pre">timestamp,</span> <span class="pre">relevance</span></code> columns in mapping if present.
+- if ether <code class="docutils literal notranslate"><span class="pre">user_id</span></code> or <code class="docutils literal notranslate"><span class="pre">item_id</span></code> is present,
+then the dataframe is a dataframe of user/item features</p></li>
+<li><p><strong>data</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Union</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code>, <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code>]) – DataFrame to process</p></li>
+<li><p><strong>path</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>]) – path to data</p></li>
+<li><p><strong>format_type</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>]) – file type, one of <code class="docutils literal notranslate"><span class="pre">[csv</span> <span class="pre">,</span> <span class="pre">parquet</span> <span class="pre">,</span> <span class="pre">json</span> <span class="pre">,</span> <span class="pre">table]</span></code></p></li>
+<li><p><strong>date_format</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code>]) – format for the <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> column</p></li>
+<li><p><strong>reader_kwargs</strong> (<code class="xref py py-data docutils literal notranslate"><span class="pre">Optional</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">Dict</span></code>]) – extra arguments passed to
+<code class="docutils literal notranslate"><span class="pre">spark.read.&lt;format&gt;(path,</span> <span class="pre">**reader_kwargs)</span></code></p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></p>
+</dd>
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>processed DataFrame</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</div>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="scenarios.html" class="btn btn-neutral float-left" title="Scenarios" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="distributions.html" class="btn btn-neutral float-right" title="Distributions" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2022, Sberbank AI Laboratory.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
