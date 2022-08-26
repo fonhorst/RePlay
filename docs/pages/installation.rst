@@ -77,8 +77,8 @@ For models inherited from *BaseTorchRec*::
     fit->_fit_wrap->_fit->train
     predict[_pairs]->_predict[_pairs]_wrap->_predict[_pairs]->_predict_by_user[_pairs]->_predict_pairs_inner
 
-Currently *AssociationRulesItemRec* currently doesn't have ``predict[_pairs]`` interface.
-*ClusterRec*, *ImplicitWrap* and *RandomRec* doesn't have ``predict_pairs`` interface.
+Currently *AssociationRulesItemRec* doesn't have ``predict[_pairs]`` interface.
+*ClusterRec*, *ImplicitWrap* and *RandomRec* currently doesn't have ``predict_pairs`` interface.
 
 Current model inheritance in RePlay:
 
