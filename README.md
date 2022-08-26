@@ -30,7 +30,7 @@ You can
 <a name="installation"></a>
 ## Installation
 
-Use Linux machine with Python 3.7+, Java 8+ and C++ compiler.
+Use Linux machine with Python 3.7-3.9, Java 8+ and C++ compiler.
 
 ```bash
 pip install replay-rec
