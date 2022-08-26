@@ -13,10 +13,7 @@ You can
 - Combine predictions from different models
 - Create a two-level model
 
-
-- [Documentation](https://sb-ai-lab.github.io/RePlay/)
-- [Framework architecture](https://miro.com/app/board/uXjVOhTSHK0=/?share_link_id=748466292621)
-
+Documentation is available [here](https://sb-ai-lab.github.io/RePlay/).
 
 <a name="toc"></a>
 # Table of Contents
