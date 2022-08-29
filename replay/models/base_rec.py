@@ -466,7 +466,8 @@ class BaseRecommender(ABC):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Predict wrapper to allow for fewer parameters in models
 
@@ -485,8 +486,10 @@ class BaseRecommender(ABC):
         :param item_features: item features
             ``[item_idx , timestamp]`` + feature columns
         :param filter_seen_items: flag to remove seen items from recommendations based on ``log``.
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
         self.logger.debug("Starting predict %s", type(self).__name__)
         user_data = users or log or user_features or self.fit_users
@@ -514,15 +517,20 @@ class BaseRecommender(ABC):
         if filter_seen_items and log:
             recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
 
-        cached_recs = (
-            get_top_k_recs(recs, k=k)
-            .select("user_idx", "item_idx", "relevance")
-            .cache()
+        recs = get_top_k_recs(recs, k=k).select(
+            "user_idx", "item_idx", "relevance"
         )
-        cached_recs.count()
+        output = None
+
+        if recs_file_path is not None:
+            recs.write.parquet(path=recs_file_path, mode="overwrite")
+        else:
+            output = recs.cache()
+            output.count()
+
         self._clear_model_temp_view("filter_seen_users_log")
         self._clear_model_temp_view("filter_seen_num_seen")
-        return cached_recs
+        return output
 
     @staticmethod
     def _get_ids(
@@ -689,7 +697,8 @@ class BaseRecommender(ABC):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         self._fit_wrap(log, user_features, item_features)
         return self._predict_wrap(
             log,
@@ -699,6 +708,7 @@ class BaseRecommender(ABC):
             user_features,
             item_features,
             filter_seen_items,
+            recs_file_path=recs_file_path,
         )
 
     def _clear_cache(self):
@@ -712,20 +722,22 @@ class BaseRecommender(ABC):
         log: Optional[DataFrame] = None,
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         This method
         1) converts data to spark
-        2) converts indexes
+        2) removes cold users and items if model does not predict them
         3) calls inner _predict_pairs method of a model
-        4) converts indexes back
 
         :param pairs: user-item pairs to get relevance for,
             dataframe containing``[user_idx, item_idx]``.
         :param log: train data
             ``[user_idx, item_idx, timestamp, relevance]``.
-        :return: recommendations
-            ``[user_idx, item_idx, relevance]`` for given pairs
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
         log, user_features, item_features, pairs = [
             convert2spark(df)
@@ -745,7 +757,12 @@ class BaseRecommender(ABC):
             item_features=item_features,
         )
 
-        return pred
+        if recs_file_path is None:
+            pred.cache().count()
+            return pred
+
+        pred.write.parquet(path=recs_file_path, mode="overwrite")
+        return None
 
     def _predict_pairs(
         self,
@@ -761,8 +778,6 @@ class BaseRecommender(ABC):
             dataframe containing``[user_idx, item_idx]``.
         :param log: train data
             ``[user_idx, item_idx, timestamp, relevance]``.
-        :return: recommendations
-            ``[user_idx, item_idx, relevance]`` for given pairs
         """
         message = (
             "native predict_pairs is not implemented for this model. "
@@ -1035,7 +1050,8 @@ class HybridRecommender(BaseRecommender, ABC):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Get recommendations
 
@@ -1054,8 +1070,11 @@ class HybridRecommender(BaseRecommender, ABC):
         :param item_features: item features
             ``[item_idx , timestamp]`` + feature columns
         :param filter_seen_items: flag to remove seen items from recommendations based on ``log``.
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
+
         """
         return self._predict_wrap(
             log=log,
@@ -1065,6 +1084,7 @@ class HybridRecommender(BaseRecommender, ABC):
             user_features=user_features,
             item_features=item_features,
             filter_seen_items=filter_seen_items,
+            recs_file_path=recs_file_path,
         )
 
     def fit_predict(
@@ -1076,7 +1096,8 @@ class HybridRecommender(BaseRecommender, ABC):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Fit model and get recommendations
 
@@ -1095,8 +1116,10 @@ class HybridRecommender(BaseRecommender, ABC):
         :param item_features: item features
             ``[item_idx , timestamp]`` + feature columns
         :param filter_seen_items: flag to remove seen items from recommendations based on ``log``.
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
         return self._fit_predict(
             log=log,
@@ -1106,6 +1129,7 @@ class HybridRecommender(BaseRecommender, ABC):
             user_features=user_features,
             item_features=item_features,
             filter_seen_items=filter_seen_items,
+            recs_file_path=recs_file_path,
         )
 
     def predict_pairs(
@@ -1114,7 +1138,8 @@ class HybridRecommender(BaseRecommender, ABC):
         log: Optional[DataFrame] = None,
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Get recommendations for specific user-item ``pairs``.
         If a model can't produce recommendation
@@ -1127,11 +1152,17 @@ class HybridRecommender(BaseRecommender, ABC):
             ``[user_idx , timestamp]`` + feature columns
         :param item_features: item features
             ``[item_idx , timestamp]`` + feature columns
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
         return self._predict_pairs_wrap(
-            pairs, log, user_features, item_features
+            pairs,
+            log,
+            user_features,
+            item_features,
+            recs_file_path=recs_file_path,
         )
 
     def get_features(
@@ -1173,7 +1204,8 @@ class Recommender(BaseRecommender, ABC):
         users: Optional[Union[DataFrame, Iterable]] = None,
         items: Optional[Union[DataFrame, Iterable]] = None,
         filter_seen_items: bool = True,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Get recommendations
 
@@ -1188,8 +1220,10 @@ class Recommender(BaseRecommender, ABC):
             if ``None``, take all items from ``log``.
             If it contains new items, ``relevance`` for them will be ``0``.
         :param filter_seen_items: flag to remove seen items from recommendations based on ``log``.
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
         return self._predict_wrap(
             log=log,
@@ -1199,11 +1233,15 @@ class Recommender(BaseRecommender, ABC):
             user_features=None,
             item_features=None,
             filter_seen_items=filter_seen_items,
+            recs_file_path=recs_file_path,
         )
 
     def predict_pairs(
-        self, pairs: DataFrame, log: Optional[DataFrame] = None
-    ) -> DataFrame:
+        self,
+        pairs: DataFrame,
+        log: Optional[DataFrame] = None,
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Get recommendations for specific user-item ``pairs``.
         If a model can't produce recommendation
@@ -1212,10 +1250,14 @@ class Recommender(BaseRecommender, ABC):
         :param pairs: dataframe with pairs to calculate relevance for, ``[user_idx, item_idx]``.
         :param log: historical log of interactions
             ``[user_idx, item_idx, timestamp, relevance]``
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
-        return self._predict_pairs_wrap(pairs, log, None, None)
+        return self._predict_pairs_wrap(
+            pairs, log, None, None, recs_file_path=recs_file_path
+        )
 
     # pylint: disable=too-many-arguments
     def fit_predict(
@@ -1225,7 +1267,8 @@ class Recommender(BaseRecommender, ABC):
         users: Optional[Union[DataFrame, Iterable]] = None,
         items: Optional[Union[DataFrame, Iterable]] = None,
         filter_seen_items: bool = True,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Fit model and get recommendations
 
@@ -1240,8 +1283,10 @@ class Recommender(BaseRecommender, ABC):
             if ``None``, take all items from ``log``.
             If it contains new items, ``relevance`` for them will be ``0``.
         :param filter_seen_items: flag to remove seen items from recommendations based on ``log``.
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
         return self._fit_predict(
             log=log,
@@ -1251,6 +1296,7 @@ class Recommender(BaseRecommender, ABC):
             user_features=None,
             item_features=None,
             filter_seen_items=filter_seen_items,
+            recs_file_path=recs_file_path,
         )
 
     def get_features(self, ids: DataFrame) -> Optional[Tuple[DataFrame, int]]:
@@ -1293,7 +1339,8 @@ class UserRecommender(BaseRecommender, ABC):
         users: Optional[Union[DataFrame, Iterable]] = None,
         items: Optional[Union[DataFrame, Iterable]] = None,
         filter_seen_items: bool = True,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Get recommendations
 
@@ -1310,8 +1357,10 @@ class UserRecommender(BaseRecommender, ABC):
         :param user_features: user features
             ``[user_idx , timestamp]`` + feature columns
         :param filter_seen_items: flag to remove seen items from recommendations based on ``log``.
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
         return self._predict_wrap(
             log=log,
@@ -1320,6 +1369,7 @@ class UserRecommender(BaseRecommender, ABC):
             filter_seen_items=filter_seen_items,
             users=users,
             items=items,
+            recs_file_path=recs_file_path,
         )
 
     def predict_pairs(
@@ -1327,7 +1377,8 @@ class UserRecommender(BaseRecommender, ABC):
         pairs: DataFrame,
         log: Optional[DataFrame] = None,
         user_features: Optional[DataFrame] = None,
-    ) -> DataFrame:
+        recs_file_path: Optional[str] = None,
+    ) -> Optional[DataFrame]:
         """
         Get recommendations for specific user-item ``pairs``.
         If a model can't produce recommendation
@@ -1338,10 +1389,14 @@ class UserRecommender(BaseRecommender, ABC):
             ``[user_idx, item_idx, timestamp, relevance]``
         :param user_features: user features
             ``[user_idx , timestamp]`` + feature columns
-        :return: recommendation dataframe
-            ``[user_idx, item_idx, relevance]``
+        :param recs_file_path: save recommendations at the given absolute path as parquet file.
+            If None, cached and materialized recommendations dataframe  will be returned
+        :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
+            or None if `file_path` is provided
         """
-        return self._predict_pairs_wrap(pairs, log, user_features, None)
+        return self._predict_pairs_wrap(
+            pairs, log, user_features, None, recs_file_path=recs_file_path
+        )
 
 
 class NeighbourRec(Recommender, ABC):
