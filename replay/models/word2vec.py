@@ -7,7 +7,7 @@ from pyspark.sql import types as st
 from pyspark.ml.stat import Summarizer
 
 from replay.models.base_rec import Recommender, ItemVectorModel
-from replay.utils import vector_dot, vector_mult
+from replay.utils import vector_dot, vector_mult, join_with_col_renaming
 
 
 # pylint: disable=too-many-instance-attributes
@@ -144,15 +144,19 @@ class Word2VecRec(Recommender, ItemVectorModel):
         :return: user embeddings dataframe
             ``[user_idx, user_vector]``
         """
+        res = join_with_col_renaming(
+            log, users, on_col_name="user_idx", how="inner"
+        )
+        res = join_with_col_renaming(
+            res, self.idf, on_col_name="item_idx", how="inner"
+        )
+        res = res.join(
+            self.vectors,
+            how="inner",
+            on=sf.col("item_idx") == sf.col("item"),
+        ).drop("item")
         return (
-            log.join(users, how="inner", on="user_idx")
-            .join(self.idf, how="inner", on="item_idx")
-            .join(
-                self.vectors,
-                how="inner",
-                on=sf.col("item_idx") == sf.col("item"),
-            )
-            .groupby("user_idx")
+            res.groupby("user_idx")
             .agg(
                 Summarizer.mean(
                     vector_mult(sf.col("idf"), sf.col("vector"))
@@ -174,11 +178,12 @@ class Word2VecRec(Recommender, ItemVectorModel):
         user_vectors = self._get_user_vectors(
             pairs.select("user_idx").distinct(), log
         )
-        pairs_with_vectors = pairs.join(
-            user_vectors, on="user_idx", how="inner"
-        ).join(
-            self.vectors, on=sf.col("item_idx") == sf.col("item"), how="inner"
+        pairs_with_vectors = join_with_col_renaming(
+            pairs, user_vectors, on_col_name="user_idx", how="inner"
         )
+        pairs_with_vectors = pairs_with_vectors.join(
+            self.vectors, on=sf.col("item_idx") == sf.col("item"), how="inner"
+        ).drop("item")
         return pairs_with_vectors.select(
             "user_idx",
             sf.col("item_idx"),
