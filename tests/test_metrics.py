@@ -1,6 +1,8 @@
 # pylint: skip-file
 
 import numpy as np
+import pytest
+
 from replay.metrics import *
 
 from replay.distributions import item_distribution
@@ -43,13 +45,17 @@ def recs(spark):
 @pytest.fixture
 def recs2(spark):
     return spark.createDataFrame(
-        data=[[0, 3, 4.0], [0, 4, 5.0]], schema=REC_SCHEMA,
+        data=[[0, 3, 4.0], [0, 4, 5.0]],
+        schema=REC_SCHEMA,
     )
 
 
 @pytest.fixture
 def empty_recs(spark):
-    return spark.createDataFrame(data=[], schema=REC_SCHEMA,)
+    return spark.createDataFrame(
+        data=[],
+        schema=REC_SCHEMA,
+    )
 
 
 @pytest.fixture
@@ -64,6 +70,18 @@ def true(spark):
             [2, 1, datetime(2019, 9, 15), 3.0],
         ],
         schema=LOG_SCHEMA,
+    )
+
+
+@pytest.fixture
+def prev_relevance(spark):
+    return spark.createDataFrame(
+        data=[
+            [0, 0, 100.0],
+            [0, 4, 0.0],
+            [1, 10, -5.0],
+        ],
+        schema=REC_SCHEMA,
     )
 
 
@@ -104,7 +122,8 @@ def test_pred_is_bigger(quality_metrics, one_user, two_users):
 
 def test_hit_rate_at_k(recs, true):
     assertDictAlmostEqual(
-        HitRate()(recs, true, [3, 1]), {3: 2 / 3, 1: 1 / 3},
+        HitRate()(recs, true, [3, 1]),
+        {3: 2 / 3, 1: 1 / 3},
     )
 
 
@@ -115,7 +134,8 @@ def test_user_dist(log, recs, true):
 
 def test_item_dist(log, recs):
     assert_allclose(
-        item_distribution(log, recs, 1)["rec_count"].to_list(), [0, 0, 1, 2],
+        item_distribution(log, recs, 1)["rec_count"].to_list(),
+        [0, 0, 1, 2],
     )
 
 
@@ -138,19 +158,22 @@ def test_ndcg_at_k(recs, true):
 
 def test_precision_at_k(recs, true):
     assertDictAlmostEqual(
-        Precision()(recs, true, [1, 2, 3]), {3: 1 / 3, 1: 1 / 3, 2: 1 / 2},
+        Precision()(recs, true, [1, 2, 3]),
+        {3: 1 / 3, 1: 1 / 3, 2: 1 / 2},
     )
 
 
 def test_map_at_k(recs, true):
     assertDictAlmostEqual(
-        MAP()(recs, true, [1, 3]), {3: 11 / 36, 1: 1 / 3},
+        MAP()(recs, true, [1, 3]),
+        {3: 11 / 36, 1: 1 / 3},
     )
 
 
 def test_recall_at_k(recs, true):
     assertDictAlmostEqual(
-        Recall()(recs, true, [1, 3]), {3: (1 / 2 + 2 / 3) / 3, 1: 1 / 9},
+        Recall()(recs, true, [1, 3]),
+        {3: (1 / 2 + 2 / 3) / 3, 1: 1 / 9},
     )
 
 
@@ -158,7 +181,8 @@ def test_surprisal_at_k(true, recs, recs2):
     assertDictAlmostEqual(Surprisal(true)(recs2, [1, 2]), {1: 1.0, 2: 1.0})
 
     assert_allclose(
-        Surprisal(true)(recs, 3), 5 * (1 - 1 / np.log2(3)) / 9 + 4 / 9,
+        Surprisal(true)(recs, 3),
+        5 * (1 - 1 / np.log2(3)) / 9 + 4 / 9,
     )
 
 
@@ -174,7 +198,8 @@ def test_coverage(true, recs, empty_recs):
         {1: 0.3333333333333333, 3: 0.8333333333333334, 5: 0.8333333333333334},
     )
     assertDictAlmostEqual(
-        coverage(empty_recs, [1, 3, 5]), {1: 0.0, 3: 0.0, 5: 0.0},
+        coverage(empty_recs, [1, 3, 5]),
+        {1: 0.0, 3: 0.0, 5: 0.0},
     )
 
 
@@ -234,3 +259,30 @@ def test_sorter():
 def test_sorter_index():
     result = sorter([(1, 2, 3), (2, 3, 4), (3, 3, 5)], index=2)
     assert result == [5, 3]
+
+
+def test_ncis_raises(recs, prev_relevance, true):
+    with pytest.raises(ValueError):
+        NCISPrecision(prev_policy_weights=prev_relevance, activation="absent")
+
+
+def test_ncis_activations():
+    pass
+
+
+def test_ncis_capping():
+    pass
+
+
+def test_ncis_get_enriched_recommendations():
+    # add user, absent in pred, to gt
+    # add user, absent in gt, to pred
+    # add user-item pair, absent in prev_relevance to gt
+    pass
+
+
+def test_ncis_precision(recs, prev_relevance, true):
+    # use the same data as in test_ncis_get_enriched_recommendations
+    # try different k
+    # test _get_metric_value_by_user and __call__()
+    ncis_precision = NCISPrecision(prev_policy_weights=prev_relevance)
