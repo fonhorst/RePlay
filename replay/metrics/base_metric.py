@@ -300,7 +300,8 @@ class NCISMetric(Metric):
     """
     Normalized capped importance sampling, where each recommendation is being weighted
     by the ratio of current policy score on previous policy score.
-    The weight is also capped by some threshold value
+    The weight is also capped by some threshold value.
+
     Source: arxiv.org/abs/1801.07030
     """
 
