@@ -22,8 +22,8 @@ def sorter(items, index=1):
 
     :param items: tuples ``(relevance, item_id, *args)``.
         Sorting is made using relevance values and unique items
-        are selected using element at ``index``'s position.
-    :param index: index of the element in tuple to be returned
+        are selected using element at ``item_idx_index``'s position.
+    :param index: item_idx_index of the element in tuple to be returned
     :return: unique sorted elements
     """
     res = sorted(items, key=operator.itemgetter(0), reverse=True)
@@ -34,6 +34,27 @@ def sorter(items, index=1):
             set_res.add(item[1])
             list_res.append(item[index])
     return list_res
+
+
+def sorter_ncis(items, item_idx_index=1, weight_index=2):
+    """Sorts a list of tuples and chooses unique objects.
+
+    :param items: tuples ``(relevance, item_id, *args)``.
+        Sorting is made using relevance values and unique items
+        are selected using element at ``index``'s position.
+    :param item_idx_index: index of the element in tuple to be returned
+    :return: unique sorted elements
+    """
+    res = sorted(items, key=operator.itemgetter(0), reverse=True)
+    set_res = set()
+    item_ids = []
+    weights = []
+    for item in res:
+        if item[1] not in set_res:
+            set_res.add(item[1])
+            item_ids.append(item[item_idx_index])
+            weights.append(item[weight_index])
+    return item_ids, weights
 
 
 def get_enriched_recommendations(
@@ -304,6 +325,8 @@ class NCISMetric(Metric):
             self.activation = activation
         else:
             raise ValueError(f"Unexpected `activation` - {activation}")
+        if threshold <= 0:
+            raise ValueError("Threshold should be positive real number")
 
     @staticmethod
     def _softmax_by_user(df: DataFrame, col_name: str) -> DataFrame:
@@ -337,7 +360,7 @@ class NCISMetric(Metric):
         )
 
     @staticmethod
-    def _apply_capping(
+    def _weigh_and_clip(
         df: DataFrame,
         threshold: float,
         target_policy_col: str = "relevance",
@@ -382,7 +405,7 @@ class NCISMetric(Metric):
                 recommendations, col_name="relevance"
             )
 
-        return self._apply_capping(recommendations, self.threshold)
+        return self._weigh_and_clip(recommendations, self.threshold)
 
     def _get_enriched_recommendations(
         self, recommendations: AnyDataFrame, ground_truth: AnyDataFrame
@@ -411,30 +434,38 @@ class NCISMetric(Metric):
         ).na.fill(0.0, subset=["prev_relevance"])
 
         recommendations = self._reweighing(recommendations)
-
-        sort_udf = sf.udf(
-            sorter,
-            returnType=st.ArrayType(ground_truth.schema["item_idx"].dataType),
+        weight_array_type = st.ArrayType(
+            recommendations.schema["weight"].dataType
         )
-        weight_udf = sf.udf(
-            sorter,
-            returnType=st.ArrayType(recommendations.schema["weight"].dataType),
+        item_array_type = st.ArrayType(
+            ground_truth.schema["item_idx"].dataType
+        )
+
+        top_k_items_and_weights_udf = sf.udf(
+            sorter_ncis,
+            returnType=st.StructType(
+                [
+                    st.StructField("pred", item_array_type),
+                    st.StructField("weight", weight_array_type),
+                ]
+            ),
         )
 
         recommendations = (
             recommendations.groupby("user_idx")
             .agg(
-                sf.collect_list(sf.struct("relevance", "item_idx")).alias(
-                    "pred"
-                ),
-                sf.collect_list(sf.struct("relevance", "weight")).alias(
-                    "weight"
-                ),
+                sf.collect_list(
+                    sf.struct("relevance", "item_idx", "weight")
+                ).alias("id_pred_weight")
+            )
+            .withColumn(
+                "pred_weight",
+                top_k_items_and_weights_udf(sf.col("id_pred_weight")),
             )
             .select(
                 "user_idx",
-                sort_udf(sf.col("pred")).alias("pred"),
-                weight_udf(sf.col("weight")).alias("weight"),
+                sf.col("pred_weight.pred"),
+                sf.col("pred_weight.weight"),
             )
             .join(true_items_by_users, how="right", on=["user_idx"])
         )
@@ -443,16 +474,9 @@ class NCISMetric(Metric):
             "pred",
             sf.coalesce(
                 "pred",
-                sf.array().cast(
-                    st.ArrayType(ground_truth.schema["item_idx"].dataType)
-                ),
+                sf.array().cast(item_array_type),
             ),
         ).withColumn(
             "weight",
-            sf.coalesce(
-                "weight",
-                sf.array().cast(
-                    st.ArrayType(recommendations.schema["weight"].dataType)
-                ),
-            ),
+            sf.coalesce("weight", sf.array().cast(weight_array_type)),
         )

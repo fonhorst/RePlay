@@ -1,12 +1,16 @@
 # pylint: skip-file
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from replay.metrics import *
+import math
+import pyspark.sql.functions as sf
 
+from replay.metrics import *
 from replay.distributions import item_distribution
 from replay.metrics.base_metric import sorter
+
 from tests.utils import *
 
 
@@ -80,6 +84,7 @@ def prev_relevance(spark):
             [0, 0, 100.0],
             [0, 4, 0.0],
             [1, 10, -5.0],
+            [4, 6, 11.5],
         ],
         schema=REC_SCHEMA,
     )
@@ -266,23 +271,84 @@ def test_ncis_raises(recs, prev_relevance, true):
         NCISPrecision(prev_policy_weights=prev_relevance, activation="absent")
 
 
-def test_ncis_activations():
-    pass
+def test_ncis_activations_softmax(spark, prev_relevance):
+    res = NCISPrecision._softmax_by_user(prev_relevance, "relevance")
+    gt = spark.createDataFrame(
+        data=[
+            [0, 0, math.e**100 / (math.e**100 + math.e**0)],
+            [0, 4, math.e**0 / (math.e**100 + math.e**0)],
+            [1, 10, math.e**0 / (math.e**0)],
+            [4, 6, math.e**0 / (math.e**0)],
+        ],
+        schema=REC_SCHEMA,
+    )
+    sparkDataFrameEqual(res, gt)
 
 
-def test_ncis_capping():
-    pass
+def test_ncis_activations_sigmoid(spark, prev_relevance):
+    res = NCISPrecision._sigmoid(prev_relevance, "relevance")
+    gt = spark.createDataFrame(
+        data=[
+            [0, 0, 1 / (1 + math.e ** (-100))],
+            [0, 4, 1 / (1 + math.e**0)],
+            [1, 10, 1 / (1 + math.e**5)],
+            [4, 6, 1 / (1 + math.e ** (-11.5))],
+        ],
+        schema=REC_SCHEMA,
+    )
+    sparkDataFrameEqual(res, gt)
 
 
-def test_ncis_get_enriched_recommendations():
-    # add user, absent in pred, to gt
-    # add user, absent in gt, to pred
-    # add user-item pair, absent in prev_relevance to gt
-    pass
+def test_ncis_weigh_and_clip(spark, prev_relevance):
+    res = NCISPrecision._weigh_and_clip(
+        df=(
+            prev_relevance.withColumn(
+                "prev_relevance",
+                sf.when(sf.col("user_idx") == 1, sf.lit(0)).otherwise(
+                    sf.lit(20)
+                ),
+            )
+        ),
+        threshold=10,
+    )
+    gt = spark.createDataFrame(
+        data=[[0, 0, 5.0], [0, 4, 0.1], [1, 10, 10.0], [4, 6, 11.5 / 20]],
+        schema=REC_SCHEMA,
+    ).withColumnRenamed("relevance", "weight")
+    sparkDataFrameEqual(res.select("user_idx", "item_idx", "weight"), gt)
+
+
+def test_ncis_get_enriched_recommendations(spark, recs, prev_relevance, true):
+    ncis_precision = NCISPrecision(prev_policy_weights=prev_relevance)
+    enriched = ncis_precision._get_enriched_recommendations(recs, true)
+    gt = spark.createDataFrame(
+        data=[
+            [0, ([0, 1, 2]), ([0.1, 10.0, 10.0]), ([0, 1, 4])],
+            [1, ([1, 0, 4]), ([10.0, 10.0, 10.0]), ([0, 5])],
+            [2, ([0, 3, 2]), ([10.0, 10.0, 10.0]), ([1])],
+        ],
+        schema="user_idx int, pred array<int>, weight array<double>, ground_truth array<int>",
+    ).withColumnRenamed("relevance", "weight")
+    sparkDataFrameEqual(enriched, gt)
 
 
 def test_ncis_precision(recs, prev_relevance, true):
-    # use the same data as in test_ncis_get_enriched_recommendations
-    # try different k
-    # test _get_metric_value_by_user and __call__()
     ncis_precision = NCISPrecision(prev_policy_weights=prev_relevance)
+    assert (
+        ncis_precision._get_metric_value_by_user(
+            4, [1, 0, 4], [0, 5, 4], [20.0, 5.0, 15.0]
+        )
+        == 0.5
+    )
+    assert ncis_precision._get_metric_value_by_user(4, [], [0, 5, 4], []) == 0
+    assert (
+        ncis_precision._get_metric_value_by_user(4, [1], [0, 5, 4], [100]) == 0
+    )
+    assert (
+        ncis_precision._get_metric_value_by_user(4, [1], [1, 5, 4], [100]) == 1
+    )
+
+
+def test_precision(recs, true):
+    precision = Precision()
+    assert precision._get_metric_value_by_user(4, [1], [1, 5, 4]) == 1

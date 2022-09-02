@@ -27,4 +27,4 @@ class NCISPrecision(NCISMetric):
         if len(pred) == 0:
             return 0
         mask = np.isin(pred[:k], ground_truth)
-        return sum(pred_weights[mask]) / sum(pred_weights[:k])
+        return sum(np.array(pred_weights)[mask]) / sum(pred_weights[:k])
