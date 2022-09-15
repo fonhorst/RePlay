@@ -442,7 +442,7 @@ class NCISMetric(Metric):
             ground_truth.schema["item_idx"].dataType
         )
 
-        top_k_items_and_weights_udf = sf.udf(
+        sort_ids_weights_udf = sf.udf(
             sorter_ncis,
             returnType=st.StructType(
                 [
@@ -461,7 +461,7 @@ class NCISMetric(Metric):
             )
             .withColumn(
                 "pred_weight",
-                top_k_items_and_weights_udf(sf.col("id_pred_weight")),
+                sort_ids_weights_udf(sf.col("id_pred_weight")),
             )
             .select(
                 "user_idx",
