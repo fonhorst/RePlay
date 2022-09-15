@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Tuple
+from typing import Optional, Tuple
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
@@ -18,23 +18,36 @@ class Splitter(ABC):
         "drop_cold_users",
         "drop_cold_items",
         "drop_zero_rel_in_test",
+        "date_col",
+        "user_col",
+        "item_col"
     ]
 
+    # pylint: disable=too-many-arguments
     def __init__(
         self,
         drop_cold_items: bool,
         drop_cold_users: bool,
         drop_zero_rel_in_test: bool,
+        date_col: str = "timestamp",
+        user_col: str = "user_idx",
+        item_col: Optional[str] = "item_idx"
     ):
         """
         :param drop_cold_items: flag to remove items that are not in train data
         :param drop_cold_users: flag to remove users that are not in train data
         :param drop_zero_rel_in_test: flag to remove entries with relevance <= 0
             from the test part of the dataset
+        :param date_col: timestamp column name
+        :param user_col: user id column name
+        :param item_col: item id column name
         """
         self.drop_cold_users = drop_cold_users
         self.drop_cold_items = drop_cold_items
         self.drop_zero_rel_in_test = drop_zero_rel_in_test
+        self.date_col = date_col
+        self.user_col = user_col
+        self.item_col = item_col
 
     @property
     def _init_args(self):
@@ -55,12 +68,15 @@ class Splitter(ABC):
             return dataframe.filter("relevance > 0.0")
         return dataframe
 
+    # pylint: disable=too-many-arguments
     @staticmethod
     def _drop_cold_items_and_users(
         train: DataFrame,
         test: DataFrame,
         drop_cold_items: bool,
         drop_cold_users: bool,
+        user_col: str = "user_idx",
+        item_col: Optional[str] = "item_idx"
     ) -> DataFrame:
         """
         Removes cold users and items from the test data
@@ -69,21 +85,23 @@ class Splitter(ABC):
         :param test: DataFrame like train
         :param drop_cold_items: flag to remove cold items
         :param drop_cold_users: flag to remove cold users
+        :param user_col: user id column name
+        :param item_col: item id column name
         :return: filtered DataFrame
         """
         if drop_cold_items:
             train_tmp = train.select(
-                sf.col("item_idx").alias("item")
+                sf.col(item_col).alias("item")
             ).distinct()
-            test = test.join(train_tmp, train_tmp.item == test.item_idx).drop(
+            test = test.join(train_tmp, train_tmp.item == test[item_col]).drop(
                 "item"
             )
 
         if drop_cold_users:
             train_tmp = train.select(
-                sf.col("user_idx").alias("user")
+                sf.col(user_col).alias("user")
             ).distinct()
-            test = test.join(train_tmp, train_tmp.user == test.user_idx).drop(
+            test = test.join(train_tmp, train_tmp.user == test[user_col]).drop(
                 "user"
             )
         return test
@@ -108,7 +126,7 @@ class Splitter(ABC):
         train.cache()
         train.count()
         test = self._drop_cold_items_and_users(
-            train, test, self.drop_cold_items, self.drop_cold_users
+            train, test, self.drop_cold_items, self.drop_cold_users, self.user_col, self.item_col
         )
         test = self._filter_zero_relevance(test).cache()
         test.count()
