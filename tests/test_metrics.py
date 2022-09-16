@@ -262,8 +262,9 @@ def test_sorter():
 
 
 def test_sorter_index():
-    result = sorter([(1, 2, 3), (2, 3, 4), (3, 3, 5)], index=2)
-    assert result == [5, 3]
+    ids, weights = sorter(((1, 2, 3), (2, 3, 4), (3, 3, 5)), extra_position=2)
+    assert ids == [3, 2]
+    assert weights == [5, 3]
 
 
 def test_ncis_raises(recs, prev_relevance, true):

@@ -3,7 +3,7 @@ Base classes for quality and diversity metrics.
 """
 import operator
 from abc import ABC, abstractmethod
-from typing import Dict, Union, Optional
+from typing import Dict, List, Tuple, Union, Optional
 
 import pandas as pd
 from pyspark.sql import DataFrame
@@ -17,44 +17,36 @@ from replay.utils import convert2spark
 
 
 # pylint: disable=no-member
-def sorter(items, index=1):
-    """Sorts a list of tuples and chooses unique objects.
-
-    :param items: tuples ``(relevance, item_id, *args)``.
-        Sorting is made using relevance values and unique items
-        are selected using element at ``item_idx_index``'s position.
-    :param index: item_idx_index of the element in tuple to be returned
-    :return: unique sorted elements
+def sorter(
+    items: Tuple[Tuple], extra_position=None
+) -> Union[List, Tuple[List, List]]:
     """
-    res = sorted(items, key=operator.itemgetter(0), reverse=True)
-    set_res = set()
-    list_res = []
-    for item in res:
-        if item[1] not in set_res:
-            set_res.add(item[1])
-            list_res.append(item[index])
-    return list_res
-
-
-def sorter_ncis(items, item_idx_index=1, weight_index=2):
-    """Sorts a list of tuples and chooses unique objects.
+    Sorts a list of tuples and chooses unique objects.
+    Sorting is made using relevance values (descending).
+    Unique items from `item_id` column are selected.
+    If `extra_position` is None, only list with ordered items is returned.
+    Otherwise two lists are returned, the first is with item_ids
+    and the second is with the tuples' elements on 'extra_position', e.g item weight.
 
     :param items: tuples ``(relevance, item_id, *args)``.
-        Sorting is made using relevance values and unique items
-        are selected using element at ``index``'s position.
-    :param item_idx_index: index of the element in tuple to be returned
-    :return: unique sorted elements
+    :param extra_position: index of the element in tuple to be returned in addition to item_id,
+        if None, only item_ids are returned
+    :return: list of unique item_ids sorted by relevance is descending order
+        and additional list of corresponding values on `extra_position` if not None
     """
     res = sorted(items, key=operator.itemgetter(0), reverse=True)
     set_res = set()
     item_ids = []
-    weights = []
+    extra_values = []
     for item in res:
         if item[1] not in set_res:
             set_res.add(item[1])
-            item_ids.append(item[item_idx_index])
-            weights.append(item[weight_index])
-    return item_ids, weights
+            item_ids.append(item[1])
+            if extra_position is not None:
+                extra_values.append(item[extra_position])
+    if extra_position is None:
+        return item_ids
+    return item_ids, extra_values
 
 
 def get_enriched_recommendations(
@@ -443,7 +435,7 @@ class NCISMetric(Metric):
         )
 
         sort_ids_weights_udf = sf.udf(
-            sorter_ncis,
+            lambda x: sorter(items=x, extra_position=2),
             returnType=st.StructType(
                 [
                     st.StructField("pred", item_array_type),
@@ -457,11 +449,11 @@ class NCISMetric(Metric):
             .agg(
                 sf.collect_list(
                     sf.struct("relevance", "item_idx", "weight")
-                ).alias("id_pred_weight")
+                ).alias("rel_id_weight")
             )
             .withColumn(
                 "pred_weight",
-                sort_ids_weights_udf(sf.col("id_pred_weight")),
+                sort_ids_weights_udf(sf.col("rel_id_weight")),
             )
             .select(
                 "user_idx",
