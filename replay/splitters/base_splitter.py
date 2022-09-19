@@ -18,9 +18,9 @@ class Splitter(ABC):
         "drop_cold_users",
         "drop_cold_items",
         "drop_zero_rel_in_test",
-        "date_col",
         "user_col",
-        "item_col"
+        "item_col",
+        "date_col",
     ]
 
     # pylint: disable=too-many-arguments
@@ -29,25 +29,25 @@ class Splitter(ABC):
         drop_cold_items: bool,
         drop_cold_users: bool,
         drop_zero_rel_in_test: bool,
-        date_col: str = "timestamp",
         user_col: str = "user_idx",
-        item_col: Optional[str] = "item_idx"
+        item_col: Optional[str] = "item_idx",
+        date_col: Optional[str] = "timestamp",
     ):
         """
         :param drop_cold_items: flag to remove items that are not in train data
         :param drop_cold_users: flag to remove users that are not in train data
         :param drop_zero_rel_in_test: flag to remove entries with relevance <= 0
             from the test part of the dataset
-        :param date_col: timestamp column name
         :param user_col: user id column name
         :param item_col: item id column name
+        :param date_col: timestamp column name
         """
         self.drop_cold_users = drop_cold_users
         self.drop_cold_items = drop_cold_items
         self.drop_zero_rel_in_test = drop_zero_rel_in_test
-        self.date_col = date_col
         self.user_col = user_col
         self.item_col = item_col
+        self.date_col = date_col
 
     @property
     def _init_args(self):
@@ -91,18 +91,18 @@ class Splitter(ABC):
         """
         if drop_cold_items:
             train_tmp = train.select(
-                sf.col(item_col).alias("item")
+                sf.col(item_col).alias("_item_id_inner")
             ).distinct()
-            test = test.join(train_tmp, train_tmp.item == test[item_col]).drop(
-                "item"
+            test = test.join(train_tmp, train_tmp._item_id_inner == test[item_col]).drop(
+                "_item_id_inner"
             )
 
         if drop_cold_users:
             train_tmp = train.select(
-                sf.col(user_col).alias("user")
+                sf.col(user_col).alias("_user_id_inner")
             ).distinct()
-            test = test.join(train_tmp, train_tmp.user == test[user_col]).drop(
-                "user"
+            test = test.join(train_tmp, train_tmp._user_id_inner == test[user_col]).drop(
+                "_user_id_inner"
             )
         return test
 
