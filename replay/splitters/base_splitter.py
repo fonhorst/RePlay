@@ -93,7 +93,7 @@ class Splitter(ABC):
             train_tmp = train.select(
                 sf.col(item_col).alias("_item_id_inner")
             ).distinct()
-            test = test.join(train_tmp, train_tmp._item_id_inner == test[item_col]).drop(
+            test = test.join(train_tmp, sf.col(item_col) == sf.col("_item_id_inner")).drop(
                 "_item_id_inner"
             )
 
@@ -101,7 +101,7 @@ class Splitter(ABC):
             train_tmp = train.select(
                 sf.col(user_col).alias("_user_id_inner")
             ).distinct()
-            test = test.join(train_tmp, train_tmp._user_id_inner == test[user_col]).drop(
+            test = test.join(train_tmp, sf.col(user_col) == sf.col("_user_id_inner")).drop(
                 "_user_id_inner"
             )
         return test
