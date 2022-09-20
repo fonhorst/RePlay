@@ -257,10 +257,10 @@ class NewUsersSplitter(Splitter):
         train = log.filter(sf.col(self.date_col) < test_start_date)
 
         test = log.join(
-            start_date_by_user.filter(sf.col("start_dt") >= test_start_date),
+            start_date_by_user.filter(sf.col("_start_dt_by_user") >= test_start_date),
             how="inner",
             on=self.user_col,
-        ).drop("start_dt")
+        ).drop("_start_dt_by_user")
         return train, test
 
 
