@@ -321,7 +321,7 @@ def test_ncis_weigh_and_clip(spark, prev_relevance):
 
 def test_ncis_get_enriched_recommendations(spark, recs, prev_relevance, true):
     ncis_precision = NCISPrecision(prev_policy_weights=prev_relevance)
-    enriched = ncis_precision._get_enriched_recommendations(recs, true)
+    enriched = ncis_precision._get_enriched_recommendations(recs, true, 3)
     gt = spark.createDataFrame(
         data=[
             [0, ([0, 1, 2]), ([0.1, 10.0, 10.0]), ([0, 1, 4])],

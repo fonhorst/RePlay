@@ -6,7 +6,7 @@ from pyspark.sql import functions as sf
 from pyspark.sql import types as st
 
 from replay.constants import AnyDataFrame
-from replay.utils import convert2spark
+from replay.utils import convert2spark, get_top_k_recs
 from replay.metrics.base_metric import RecOnlyMetric, sorter
 
 
@@ -63,9 +63,10 @@ class Surprisal(RecOnlyMetric):
         return sum(weigths[:k]) / k
 
     def _get_enriched_recommendations(
-        self, recommendations: DataFrame, ground_truth: DataFrame
+        self, recommendations: DataFrame, ground_truth: DataFrame, max_k: int
     ) -> DataFrame:
         recommendations = convert2spark(recommendations)
+        recommendations = get_top_k_recs(recommendations, max_k)
         sort_udf = sf.udf(
             partial(sorter, extra_position=2),
             returnType=st.StructType(

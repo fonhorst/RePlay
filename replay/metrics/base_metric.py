@@ -1,6 +1,7 @@
 """
 Base classes for quality and diversity metrics.
 """
+import logging
 import operator
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Union, Optional
@@ -13,7 +14,7 @@ from pyspark.sql import Window
 from scipy.stats import norm
 
 from replay.constants import AnyDataFrame, IntOrList, NumType
-from replay.utils import convert2spark
+from replay.utils import convert2spark, get_top_k_recs
 
 
 # pylint: disable=no-member
@@ -50,14 +51,17 @@ def sorter(
 
 
 def get_enriched_recommendations(
-    recommendations: AnyDataFrame, ground_truth: AnyDataFrame
+    recommendations: AnyDataFrame, ground_truth: AnyDataFrame, max_k: int
 ) -> DataFrame:
     """
-    Merge recommendations and ground truth into a single DataFrame
+    Leave max_k recommendations for each user,
+    merge recommendations and ground truth into a single DataFrame
     and aggregate items into lists so that each user has only one record.
 
     :param recommendations: recommendation list
     :param ground_truth: test data
+    :param max_k: maximal k value to calculate the metric for.
+        `max_k` most relevant predictions are left for each user
     :return:  ``[user_id, pred, ground_truth]``
     """
     recommendations = convert2spark(recommendations)
@@ -69,6 +73,8 @@ def get_enriched_recommendations(
         sorter,
         returnType=st.ArrayType(ground_truth.schema["item_idx"].dataType),
     )
+
+    recommendations = get_top_k_recs(recommendations, k=max_k)
     recommendations = (
         recommendations.groupby("user_idx")
         .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))
@@ -108,6 +114,17 @@ def process_k(func):
 class Metric(ABC):
     """Base metric class"""
 
+    _logger: Optional[logging.Logger] = None
+
+    @property
+    def logger(self) -> logging.Logger:
+        """
+        :returns: get library logger
+        """
+        if self._logger is None:
+            self._logger = logging.getLogger("replay")
+        return self._logger
+
     def __str__(self):
         return type(self).__name__
 
@@ -125,7 +142,11 @@ class Metric(ABC):
         :param k: depth cut-off. Truncates recommendation lists to top-k items.
         :return: metric value
         """
-        recs = get_enriched_recommendations(recommendations, ground_truth)
+        recs = get_enriched_recommendations(
+            recommendations,
+            ground_truth,
+            max_k=k if isinstance(k, int) else max(k),
+        )
         return self._mean(recs, k)
 
     @process_k
@@ -225,10 +246,16 @@ class Metric(ABC):
         count = log.groupBy("user_idx").count()
         if hasattr(self, "_get_enriched_recommendations"):
             recs = self._get_enriched_recommendations(
-                recommendations, ground_truth
+                recommendations,
+                ground_truth,
+                max_k=k if isinstance(k, int) else max(k),
             )
         else:
-            recs = get_enriched_recommendations(recommendations, ground_truth)
+            recs = get_enriched_recommendations(
+                recommendations,
+                ground_truth,
+                max_k=k if isinstance(k, int) else max(k),
+            )
         if isinstance(k, int):
             k_list = [k]
         else:
@@ -259,7 +286,10 @@ class RecOnlyMetric(Metric):
     # pylint: disable=no-self-use
     @abstractmethod
     def _get_enriched_recommendations(
-        self, recommendations: AnyDataFrame, ground_truth: AnyDataFrame
+        self,
+        recommendations: AnyDataFrame,
+        ground_truth: Optional[AnyDataFrame],
+        max_k: int,
     ) -> DataFrame:
         pass
 
@@ -272,7 +302,9 @@ class RecOnlyMetric(Metric):
         :param k: depth cut-off
         :return: metric value
         """
-        recs = self._get_enriched_recommendations(recommendations, None)
+        recs = self._get_enriched_recommendations(
+            recommendations, None, max_k=k if isinstance(k, int) else max(k)
+        )
         return self._mean(recs, k)
 
     @staticmethod
@@ -316,6 +348,11 @@ class NCISMetric(Metric):
         self.threshold = threshold
         if activation is None or activation in ("logit", "sigmoid", "softmax"):
             self.activation = activation
+            if activation == "softmax":
+                self.logger.info(
+                    "For accurate softmax calculation pass only one `k` value "
+                    "in the NCISMetric metrics `call`"
+                )
         else:
             raise ValueError(f"Unexpected `activation` - {activation}")
         if threshold <= 0:
@@ -401,7 +438,10 @@ class NCISMetric(Metric):
         return self._weigh_and_clip(recommendations, self.threshold)
 
     def _get_enriched_recommendations(
-        self, recommendations: AnyDataFrame, ground_truth: AnyDataFrame
+        self,
+        recommendations: AnyDataFrame,
+        ground_truth: AnyDataFrame,
+        max_k: int,
     ) -> DataFrame:
         """
         Merge recommendations and ground truth into a single DataFrame
@@ -409,6 +449,8 @@ class NCISMetric(Metric):
 
         :param recommendations: recommendation list
         :param ground_truth: test data
+        :param max_k: maximal k value to calculate the metric for.
+        `max_k` most relevant predictions are left for each user
         :return:  ``[user_id, pred, ground_truth]``
         """
         recommendations = convert2spark(recommendations)
@@ -421,7 +463,7 @@ class NCISMetric(Metric):
         group_on = ["item_idx"]
         if "user_idx" in self.prev_policy_weights.columns:
             group_on.append("user_idx")
-
+        recommendations = get_top_k_recs(recommendations, k=max_k)
         recommendations = recommendations.join(
             self.prev_policy_weights, on=group_on, how="left"
         ).na.fill(0.0, subset=["prev_relevance"])
