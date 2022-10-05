@@ -25,5 +25,5 @@ def test_predict(model, log):
         users=[1],
         filter_seen_items=False
     )
-    assert len(pred.toPandas()["user_idx"].unique()) == 1
+    assert pred.select("user_idx").distinct().count() == 1
     assert pred.count() == 2
