@@ -80,8 +80,7 @@ class ClusterRec(UserRecommender):
         vec = VectorAssembler(inputCols=feature_columns, outputCol="features")
         return vec.transform(user_features).select("user_idx", "features")
 
-
-    def make_user_clusters(self, users, user_features):
+    def _make_user_clusters(self, users, user_features):
         user_features_vector = self._transform_features(
             user_features.join(users, on="user_idx")
         )
@@ -103,7 +102,7 @@ class ClusterRec(UserRecommender):
         filter_seen_items: bool = True,
     ) -> DataFrame:
 
-        user_clusters = self.make_user_clusters(users, user_features)
+        user_clusters = self._make_user_clusters(users, user_features)
 
         filtered_items = self.item_rel_in_cluster.join(items, on="item_idx")
         pred = user_clusters.join(filtered_items, on="cluster").drop("cluster")
@@ -115,12 +114,15 @@ class ClusterRec(UserRecommender):
         log: Optional[DataFrame] = None,
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
-    ) -> DataFrame:s
+    ) -> DataFrame:
+
+        if not user_features:
+            raise ValueError("User features are missing for predict")
 
         users = pairs.select("user_idx").distinct()
         items = pairs.select("item_idx").distinct()
 
-        user_clusters = self.make_user_clusters(users, user_features)
+        user_clusters = self._make_user_clusters(users, user_features)
 
         pairs_with_clusters = pairs.join(user_clusters, on="user_idx")
 
