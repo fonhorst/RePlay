@@ -80,6 +80,17 @@ class ClusterRec(UserRecommender):
         vec = VectorAssembler(inputCols=feature_columns, outputCol="features")
         return vec.transform(user_features).select("user_idx", "features")
 
+
+    def make_user_clusters(self, users, user_features):
+        user_features_vector = self._transform_features(
+            user_features.join(users, on="user_idx")
+        )
+        return (
+            self.model.transform(user_features_vector)
+            .select("user_idx", "prediction")
+            .withColumnRenamed("prediction", "cluster")
+        )
+
     # pylint: disable=too-many-arguments
     def _predict(
         self,
@@ -92,14 +103,8 @@ class ClusterRec(UserRecommender):
         filter_seen_items: bool = True,
     ) -> DataFrame:
 
-        user_features_vector = self._transform_features(
-            user_features.join(users, on="user_idx")
-        )
-        user_clusters = (
-            self.model.transform(user_features_vector)
-            .select("user_idx", "prediction")
-            .withColumnRenamed("prediction", "cluster")
-        )
+        user_clusters = self.make_user_clusters(users, user_features)
+
         filtered_items = self.item_rel_in_cluster.join(items, on="item_idx")
         pred = user_clusters.join(filtered_items, on="cluster").drop("cluster")
         return pred
@@ -110,20 +115,12 @@ class ClusterRec(UserRecommender):
         log: Optional[DataFrame] = None,
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
-    ) -> DataFrame:
+    ) -> DataFrame:s
 
-        users = pairs.select("user_idx")
-        items = pairs.select("item_idx")
+        users = pairs.select("user_idx").distinct()
+        items = pairs.select("item_idx").distinct()
 
-        user_features_vector = self._transform_features(
-            user_features.join(users, on="user_idx")
-        )
-
-        user_clusters = (
-            self.model.transform(user_features_vector)
-            .select("user_idx", "prediction")
-            .withColumnRenamed("prediction", "cluster")
-        )
+        user_clusters = self.make_user_clusters(users, user_features)
 
         pairs_with_clusters = pairs.join(user_clusters, on="user_idx")
 
