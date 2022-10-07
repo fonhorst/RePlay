@@ -450,7 +450,7 @@ class NCISMetric(Metric):
         :param recommendations: recommendation list
         :param ground_truth: test data
         :param max_k: maximal k value to calculate the metric for.
-        `max_k` most relevant predictions are left for each user
+            `max_k` most relevant predictions are left for each user
         :return:  ``[user_id, pred, ground_truth]``
         """
         recommendations = convert2spark(recommendations)
