@@ -562,6 +562,12 @@ class TwoStagesScenario(HybridRecommender):
             self.first_level_user_features_transformer.transform(user_features)
         )
 
+        first_level_user_features = first_level_user_features.filter(sf.col("user_idx") < self.first_level_user_len) \
+            if first_level_user_features is not None else None
+
+        first_level_item_features = first_level_item_features.filter(sf.col("item_idx") < self.first_level_item_len) \
+            if first_level_item_features is not None else None
+
         for base_model in [
             *self.first_level_models,
             self.random_model,
@@ -569,12 +575,8 @@ class TwoStagesScenario(HybridRecommender):
         ]:
             base_model._fit_wrap(
                 log=first_level_train,
-                user_features=first_level_user_features.filter(
-                    sf.col("user_idx") < self.first_level_user_len
-                ),
-                item_features=first_level_item_features.filter(
-                    sf.col("item_idx") < self.first_level_item_len
-                ),
+                user_features=first_level_user_features,
+                item_features=first_level_item_features,
             )
 
         self.logger.info("Generate negative examples")
