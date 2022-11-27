@@ -1,6 +1,5 @@
 from typing import Optional, Dict
 
-from lightautoml.tasks import Task
 from pyspark.sql import DataFrame
 from sparklightautoml.automl.presets.tabular_presets import SparkTabularAutoML
 from sparklightautoml.tasks.base import SparkTask

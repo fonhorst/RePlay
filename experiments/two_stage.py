@@ -3,6 +3,8 @@ from rs_datasets import MovieLens
 
 from replay.data_preparator import DataPreparator
 from replay.scenarios import TwoStagesScenario
+from replay.scenarios.two_stages.reranker import LamaWrap
+from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import get_log_info
 
@@ -12,6 +14,7 @@ def main():
     PARTS_NUM = CORES * 3
     K = 5
     SEED = 22
+    SECOND_MODEL_TYPE = "slama"
 
     spark = (
         SparkSession
@@ -61,9 +64,14 @@ def main():
     train.write.mode('overwrite').format('noop').save()
     test.write.mode('overwrite').format('noop').save()
 
+    if SECOND_MODEL_TYPE == "slama":
+        second_model = SlamaWrap(second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}})
+    else:
+        second_model = LamaWrap(second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}})
+
     scenario = TwoStagesScenario(
         train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
-        second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
+        second_model=second_model
     )
                                  # first_level_models=ALSWrap(),
                                  # fallback_model=PopRec(),
