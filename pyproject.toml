@@ -28,15 +28,15 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.7, <3.10"
+python = ">=3.8, <3.10"
 pytorch-ignite = "*"
 lightfm = "*"
-lightautoml = ">=0.3.1, <0.3.7"
+lightautoml = ">=0.3.1, <=0.3.7.1"
 numpy = ">=1.20.0"
 optuna = "*"
 pandas = "*"
 psutil = "*"
-pyspark = ">=3.0, < 3.2"
+pyspark = ">=3.0, <= 3.2"
 scipy = "*"
 scikit-learn = "*"
 torch = "*"
@@ -47,6 +47,7 @@ pyarrow = "*"
 implicit = ">=0.5"
 pyspark-hnsw = "*"
 nmslib = "*"
+sparklightautoml-dev = { version = "0.3.2", optional = true }
 
 [tool.poetry.dev-dependencies]
 # dev only
@@ -78,6 +79,9 @@ virtualenv = "*"
 data-science-types = "*"
 pyspark-stubs = "*"
 autopep8 = "^1.7.0"
+
+[tool.poetry.extras]
+slama = ["sparklightautoml-dev"]
 
 [tool.black]
 line-length = 79
