@@ -48,8 +48,7 @@ class SlamaWrap(ReRanker):
             "verbose": 1,
             **({} if fit_params is None else fit_params)
         }
-        # TODO: add service columns to the dataframe
-        # data = data.drop("user_idx", "item_idx")
+        data = data.drop("user_idx", "item_idx")
         self.model.fit_predict(data, **params)
 
     def predict(self, data: DataFrame, k: int) -> DataFrame:
@@ -64,7 +63,8 @@ class SlamaWrap(ReRanker):
         """
         self.logger.info("Starting re-ranking")
 
-        # TODO: add service columns to the dataframe
+        # TODO: "user_idx", "item_idx" should not be removed fron the base dataframe
+        # TODO: need to test SLAMA on this subject
         candidates_pred = self.model.predict(data)
         candidates_pred_sdf = candidates_pred.data.select('user_idx', 'item_idx', 'relevance')
 
