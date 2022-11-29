@@ -7,7 +7,7 @@ from typing import Dict, cast, Optional, List, Union, Tuple
 import mlflow
 import pendulum
 from airflow.decorators import task, dag
-from airflow.utils.helpers import chain
+from airflow.utils.helpers import chain, cross_downstream
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 from rs_datasets import MovieLens
 
@@ -403,9 +403,10 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
     catchup=False,
     tags=['example'],
 )
-def build_dag():
+def build_full_dag():
     cores = 6
     k = 10
+    base_path = ""
     log_path = ""
     train_path = ""
     test_path = ""
@@ -484,6 +485,8 @@ def build_dag():
         full_dataset_path=full_first_level_predictions_path
     )
 
+    combine_first_level_partials = [*combine_first_level_partial_trains, *combine_first_level_partial_tests]
+
     fit_second_level_models = [second_level_fitting(
         model_name=model_name,
         train_path=train_path,
@@ -497,15 +500,9 @@ def build_dag():
         **model_kwargs
     ) for model_name, model_kwargs in second_level_models]
 
-    chain(
-        splitting,
-        fit_initial_first_level_model,
-        fit_first_level_models,
-        [*combine_first_level_partial_trains, *combine_first_level_partial_tests],
-        fit_second_level_models
-    )
-
-    pass
+    chain(splitting, fit_initial_first_level_model, fit_first_level_models)
+    cross_downstream(fit_first_level_models, combine_first_level_partials)
+    cross_downstream(combine_first_level_partials, fit_second_level_models)
 
 
-dag = build_dag()
+dag = build_full_dag()
