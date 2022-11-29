@@ -221,7 +221,9 @@ def first_level_fitting(first_level_train_path: str,
                         model_class_name: str,
                         model_kwargs: Dict,
                         model_path: str,
-                        k: int):
+                        k: int,
+                        item_features_path: str,
+                        user_features_path: str):
     # get session and read data
     spark = _get_spark_session()
     first_level_train = spark.read.parquet(first_level_train_path)
