@@ -1,18 +1,17 @@
 import importlib
 import logging
 import os
-from typing import Dict, cast
+from typing import Dict, cast, Optional
 
 from pyspark.sql import functions as sf, SparkSession
 from rs_datasets import MovieLens
 
 from replay.data_preparator import DataPreparator
-from replay.model_handler import save
+from replay.model_handler import save, RandomRec
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info
-
+from replay.utils import get_log_info, join_with_col_renaming, get_top_k_recs
 
 logger = logging.getLogger(__name__)
 
@@ -103,21 +102,21 @@ def dataset_splitting(log_path: str, split_base_path: str):
     # TODO: add splitting on train and test
 
     train_splitter = UserSplitter(item_test_size=0.5, shuffle=True, seed=42)
-    first_level_train, second_level_train = train_splitter.split(log)
+    first_level_train, second_level_positives = train_splitter.split(log)
     logger.debug("Log info: %s", get_log_info(log))
     logger.debug(
         "first_level_train info: %s", get_log_info(first_level_train)
     )
     logger.debug(
-        "second_level_train info: %s", get_log_info(second_level_train)
+        "second_level_train info: %s", get_log_info(second_level_positives)
     )
 
     os.makedirs(split_base_path, exist_ok=True)
     first_level_train_path = os.path.join(split_base_path, "first_level_train.parquet")
-    second_level_train_path = os.path.join(split_base_path, "second_level_train.parquet")
+    second_level_positives_path = os.path.join(split_base_path, "second_level_train.parquet")
 
     first_level_train.write.parquet(first_level_train_path)
-    second_level_train.write.parquet(second_level_train_path)
+    second_level_positives.write.parquet(second_level_positives_path)
 
 
 def first_level_fitting(first_level_train_path: str, model_class_name: str, model_kwargs: Dict, model_path: str):
@@ -153,24 +152,91 @@ def first_level_fitting(first_level_train_path: str, model_class_name: str, mode
     save(base_model, path=model_path, overwrite=True)
 
 
-def negative_sampling():
+def negative_sampling(
+        num_negatives: int,
+        first_level_train_path: str,
+        second_level_positives_path: str,
+        seconld_level_train_path: str,
+        first_level_model_path: Optional[str] = None
+):
     logger.info("Generate negative examples")
-    negatives_source = (
-        self.first_level_models[0]
-        if self.negatives_type == "first_level"
-        else self.random_model
+
+    spark = get_spark_session()
+
+    log = spark.read.parquet(first_level_train_path)
+    second_level_positive = spark.read.parquet(second_level_positives_path)
+    k = num_negatives
+
+    model = (
+        spark.read.parquet(first_level_model_path)
+        if first_level_model_path is not None
+        else RandomRec(seed=42)
     )
 
-    first_level_candidates = self._get_first_level_candidates(
-        model=negatives_source,
-        log=first_level_train,
-        k=self.num_negatives,
-        users=log.select("user_idx").distinct(),
-        items=log.select("item_idx").distinct(),
-        user_features=first_level_user_features,
-        item_features=first_level_item_features,
-        log_to_filter=first_level_train,
-    ).select("user_idx", "item_idx")
+    # first_level_candidates = self._get_first_level_candidates(
+    #     model=negatives_source,
+    #     log=first_level_train,
+    #     k=self.num_negatives,
+    #     users=log.select("user_idx").distinct(),
+    #     items=log.select("item_idx").distinct(),
+    #     user_features=first_level_user_features,
+    #     item_features=first_level_item_features,
+    #     log_to_filter=first_level_train,
+    # )
+
+    if not model.can_predict_cold_items:
+        log, items, item_features = [
+            self._filter_or_return(
+                dataframe=df,
+                condition=sf.col("item_idx") < self.first_level_item_len,
+            )
+            for df in [log, items, item_features]
+        ]
+    if not model.can_predict_cold_users:
+        log, users, user_features = [
+            self._filter_or_return(
+                dataframe=df,
+                condition=sf.col("user_idx") < self.first_level_user_len,
+            )
+            for df in [log, users, user_features]
+        ]
+
+    log_to_filter_cached = join_with_col_renaming(
+        left=log,
+        right=users,
+        on_col_name="user_idx",
+    ).cache()
+    max_positives_to_filter = 0
+
+    if log_to_filter_cached.count() > 0:
+        max_positives_to_filter = (
+            log_to_filter_cached.groupBy("user_idx")
+                .agg(sf.count("item_idx").alias("num_positives"))
+                .select(sf.max("num_positives"))
+                .collect()[0][0]
+        )
+
+    pred = model._predict(
+        log,
+        k=k + max_positives_to_filter,
+        users=users,
+        items=items,
+        user_features=user_features,
+        item_features=item_features,
+        filter_seen_items=False,
+    )
+
+    pred = pred.join(
+        log_to_filter_cached.select("user_idx", "item_idx"),
+        on=["user_idx", "item_idx"],
+        how="anti",
+    ).drop("user", "item")
+
+    log_to_filter_cached.unpersist()
+
+    first_level_candidates = get_top_k_recs(pred, k).select("user_idx", "item_idx")
+
+    # here we generate full second_level_train
 
     second_level_train = (
         first_level_candidates.join(
@@ -182,7 +248,7 @@ def negative_sampling():
         ).fillna(0.0, subset="target")
     ).cache()
 
-    self.logger.info(
+    logger.info(
         "Distribution of classes in second-level train dataset:/n %s",
         (
             second_level_train.groupBy("target")
@@ -191,19 +257,98 @@ def negative_sampling():
         ),
     )
 
-    # TODO; save feature processor
-    pass
+    second_level_train.write.parquet(seconld_level_train_path)
 
 
 def predict_for_second_level_train():
-    self.logger.info("Adding features to second-level train dataset")
+    logger.info("Adding features to second-level train dataset")
     # TODO: only partially
-    second_level_train_to_convert = self._add_features_for_second_level(
-        log_to_add_features=second_level_train,
-        log_for_first_level_models=first_level_train,
-        user_features=user_features,
-        item_features=item_features,
+    # second_level_train_to_convert = self._add_features_for_second_level(
+    #     log_to_add_features=second_level_train,
+    #     log_for_first_level_models=first_level_train,
+    #     user_features=user_features,
+    #     item_features=item_features,
+    # ).cache()
+
+    full_second_level_train = log_to_add_features
+    first_level_item_features_cached = cache_if_exists(
+        self.first_level_item_features_transformer.transform(item_features)
+    )
+    first_level_user_features_cached = cache_if_exists(
+        self.first_level_user_features_transformer.transform(user_features)
+    )
+
+    pairs = log_to_add_features.select("user_idx", "item_idx")
+    for idx, model in enumerate(self.first_level_models):
+        current_pred = self._predict_pairs_with_first_level_model(
+            model=model,
+            log=log_for_first_level_models,
+            pairs=pairs,
+            user_features=first_level_user_features_cached,
+            item_features=first_level_item_features_cached,
+        ).withColumnRenamed("relevance", f"rel_{idx}_{model}")
+        full_second_level_train = full_second_level_train.join(
+            sf.broadcast(current_pred),
+            on=["user_idx", "item_idx"],
+            how="left",
+        )
+
+        if self.use_first_level_models_feat[idx]:
+            features = get_first_level_model_features(
+                model=model,
+                pairs=full_second_level_train.select(
+                    "user_idx", "item_idx"
+                ),
+                user_features=first_level_user_features_cached,
+                item_features=first_level_item_features_cached,
+                prefix=f"m_{idx}",
+            )
+            full_second_level_train = join_with_col_renaming(
+                left=full_second_level_train,
+                right=features,
+                on_col_name=["user_idx", "item_idx"],
+                how="left",
+            )
+
+    unpersist_if_exists(first_level_user_features_cached)
+    unpersist_if_exists(first_level_item_features_cached)
+
+    full_second_level_train_cached = full_second_level_train.fillna(
+        0
     ).cache()
+
+    self.logger.info("Adding features from the dataset")
+    full_second_level_train = join_or_return(
+        full_second_level_train_cached,
+        user_features,
+        on="user_idx",
+        how="left",
+    )
+    full_second_level_train = join_or_return(
+        full_second_level_train,
+        item_features,
+        on="item_idx",
+        how="left",
+    )
+
+    if self.use_generated_features:
+        if not self.features_processor.fitted:
+            self.features_processor.fit(
+                log=log_for_first_level_models,
+                user_features=user_features,
+                item_features=item_features,
+            )
+        self.logger.info("Adding generated features")
+        full_second_level_train = self.features_processor.transform(
+            log=full_second_level_train
+        )
+
+    self.logger.info(
+        "Columns at second level: %s",
+        " ".join(full_second_level_train.columns),
+    )
+    full_second_level_train_cached.unpersist()
+    return full_second_level_train
     pass
 
 
