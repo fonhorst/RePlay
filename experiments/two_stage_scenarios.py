@@ -1,7 +1,9 @@
+import functools
 import importlib
+import itertools
 import logging
 import os
-from typing import Dict, cast, Optional
+from typing import Dict, cast, Optional, List, Union
 
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 from rs_datasets import MovieLens
@@ -11,6 +13,7 @@ from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.model_handler import save, RandomRec, load
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
+from replay.scenarios.two_stages.reranker import LamaWrap
 from replay.scenarios.two_stages.two_stages_scenario import get_first_level_model_features
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import get_log_info, join_with_col_renaming, get_top_k_recs, join_or_return, unpersist_if_exists, \
@@ -129,17 +132,43 @@ def _predict_pairs_with_first_level_model(
         )
 
 
-def get_spark_session() -> SparkSession:
+def _get_spark_session() -> SparkSession:
     return SparkSession.builder.master("local[6]").getOrCreate()
 
 
-def dataset_splitting(log_path: str, split_base_path: str):
-    spark = get_spark_session()
+def dataset_splitting(log_path: str, split_base_path: str, cores: int):
+    spark = _get_spark_session()
 
-    log = spark.read.parquet(log_path)
+    data = spark.read.parquet(log_path)
 
-    # TODO: add splitting on train and test
+    # splitting on train and test
+    preparator = DataPreparator()
 
+    log = preparator.transform(
+        columns_mapping={"user_id": "user_id", "item_id": "item_id", "relevance": "rating", "timestamp": "timestamp"},
+        data=data.ratings
+    ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
+
+    print(get_log_info(log))
+
+    log = log.repartition(cores).cache()
+    log.write.mode('overwrite').format('noop').save()
+
+    only_positives_log = log.filter(sf.col('relevance') >= 3).withColumn('relevance', sf.lit(1))
+    print(get_log_info(only_positives_log))
+
+    # train/test split ml
+    train_spl = DateSplitter(
+        test_start=0.2,
+        drop_cold_items=True,
+        drop_cold_users=True,
+    )
+
+    train, test = train_spl.split(only_positives_log)
+    print('train info:\n', get_log_info(train))
+    print('test info:\n', get_log_info(test))
+
+    # splitting on first and second level
     train_splitter = UserSplitter(item_test_size=0.5, shuffle=True, seed=42)
     first_level_train, second_level_positives = train_splitter.split(log)
     logger.debug("Log info: %s", get_log_info(log))
@@ -160,7 +189,7 @@ def dataset_splitting(log_path: str, split_base_path: str):
 
 def first_level_fitting(first_level_train_path: str, model_class_name: str, model_kwargs: Dict, model_path: str):
     # get session and read data
-    spark = get_spark_session()
+    spark = _get_spark_session()
     first_level_train = spark.read.parquet(first_level_train_path)
 
     # instantiate a model
@@ -190,6 +219,8 @@ def first_level_fitting(first_level_train_path: str, model_class_name: str, mode
     logger.info(f"Saving model to: {model_path}")
     save(base_model, path=model_path, overwrite=True)
 
+    # TODO: predict and report metrics
+
 
 def negative_sampling(
         num_negatives: int,
@@ -200,7 +231,7 @@ def negative_sampling(
 ):
     logger.info("Generate negative examples")
 
-    spark = get_spark_session()
+    spark = _get_spark_session()
 
     log = spark.read.parquet(first_level_train_path)
     second_level_positive = spark.read.parquet(second_level_positives_path)
@@ -308,7 +339,7 @@ def predict_for_second_level_train(
 ):
     logger.info("Adding features to second-level train dataset")
 
-    spark = get_spark_session()
+    spark = _get_spark_session()
 
 
     # TODO: only partially
@@ -409,13 +440,37 @@ def predict_for_second_level_train(
     full_second_level_train_cached.unpersist()
 
 
-def combine_datasets_for_second_level():
-    # TODO: join individual dataframes together into one second_level_trains
-    pass
+def combine_datasets_for_second_level(second_level_trains_paths: List[str], final_second_level_train: str):
+    assert len(second_level_trains_paths) > 0, "Cannot work with empty sequence of paths"
+
+    spark = _get_spark_session()
+
+    dfs = [spark.read.parquet(path) for path in second_level_trains_paths]
+    df = functools.reduce(lambda acc, x: acc.join(x, on=["user_idx", "item_idx"]), dfs)
+
+    # TODO: check the resulting dataframe for correctness (no nones in any field)
+
+    df.write.parquet(final_second_level_train)
 
 
-def second_level_fitting():
-    self.second_stage_model.fit(second_level_train_to_convert)
+def second_level_fitting(final_second_level_train: str,
+                         second_model_type: str = "lama",
+                         second_model_params: Optional[Union[Dict, str]] = None,
+                         second_model_config_path: Optional[str] = None):
+    spark = _get_spark_session()
+
+    if second_model_type == "lama":
+        second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
+    else:
+        raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
+
+    second_level_train = spark.read.parquet(final_second_level_train)
+    second_stage_model.fit(second_level_train)
+
+    save(second_stage_model)
+
+    # TODO: predict and report metrics
+
     pass
 
 
