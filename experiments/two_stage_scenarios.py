@@ -7,11 +7,12 @@ from pyspark.sql import functions as sf, SparkSession
 from rs_datasets import MovieLens
 
 from replay.data_preparator import DataPreparator
-from replay.model_handler import save, RandomRec
+from replay.model_handler import save, RandomRec, load
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
+from replay.scenarios.two_stages.two_stages_scenario import get_first_level_model_features
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info, join_with_col_renaming, get_top_k_recs
+from replay.utils import get_log_info, join_with_col_renaming, get_top_k_recs, join_or_return
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ def negative_sampling(
         num_negatives: int,
         first_level_train_path: str,
         second_level_positives_path: str,
-        seconld_level_train_path: str,
+        second_level_train_path: str,
         first_level_model_path: Optional[str] = None
 ):
     logger.info("Generate negative examples")
@@ -168,7 +169,7 @@ def negative_sampling(
     k = num_negatives
 
     model = (
-        spark.read.parquet(first_level_model_path)
+        load(first_level_model_path)
         if first_level_model_path is not None
         else RandomRec(seed=42)
     )
@@ -257,11 +258,20 @@ def negative_sampling(
         ),
     )
 
-    second_level_train.write.parquet(seconld_level_train_path)
+    second_level_train.write.parquet(second_level_train_path)
 
 
-def predict_for_second_level_train():
+def predict_for_second_level_train(
+        model_path: str,
+        first_level_train_path: str,
+        second_level_train_path: str,
+        second_level_train_with_features_path: str
+):
     logger.info("Adding features to second-level train dataset")
+
+    spark = get_spark_session()
+
+
     # TODO: only partially
     # second_level_train_to_convert = self._add_features_for_second_level(
     #     log_to_add_features=second_level_train,
@@ -270,7 +280,10 @@ def predict_for_second_level_train():
     #     item_features=item_features,
     # ).cache()
 
-    full_second_level_train = log_to_add_features
+    full_second_level_train = spark.read.parquet(second_level_train_path)
+    log_for_first_level_models = spark.read.parquet(first_level_train_path)
+    model = load(model_path)
+
     first_level_item_features_cached = cache_if_exists(
         self.first_level_item_features_transformer.transform(item_features)
     )
@@ -278,37 +291,36 @@ def predict_for_second_level_train():
         self.first_level_user_features_transformer.transform(user_features)
     )
 
-    pairs = log_to_add_features.select("user_idx", "item_idx")
-    for idx, model in enumerate(self.first_level_models):
-        current_pred = self._predict_pairs_with_first_level_model(
-            model=model,
-            log=log_for_first_level_models,
-            pairs=pairs,
-            user_features=first_level_user_features_cached,
-            item_features=first_level_item_features_cached,
-        ).withColumnRenamed("relevance", f"rel_{idx}_{model}")
-        full_second_level_train = full_second_level_train.join(
-            sf.broadcast(current_pred),
-            on=["user_idx", "item_idx"],
-            how="left",
-        )
+    pairs = full_second_level_train.select("user_idx", "item_idx")
 
-        if self.use_first_level_models_feat[idx]:
-            features = get_first_level_model_features(
-                model=model,
-                pairs=full_second_level_train.select(
-                    "user_idx", "item_idx"
-                ),
-                user_features=first_level_user_features_cached,
-                item_features=first_level_item_features_cached,
-                prefix=f"m_{idx}",
-            )
-            full_second_level_train = join_with_col_renaming(
-                left=full_second_level_train,
-                right=features,
-                on_col_name=["user_idx", "item_idx"],
-                how="left",
-            )
+    current_pred = self._predict_pairs_with_first_level_model(
+        model=model,
+        log=log_for_first_level_models,
+        pairs=pairs,
+        user_features=first_level_user_features_cached,
+        item_features=first_level_item_features_cached,
+    ).withColumnRenamed("relevance", f"rel_{idx}_{model}")
+    full_second_level_train = full_second_level_train.join(
+        sf.broadcast(current_pred),
+        on=["user_idx", "item_idx"],
+        how="left",
+    )
+
+    features = get_first_level_model_features(
+        model=model,
+        pairs=full_second_level_train.select(
+            "user_idx", "item_idx"
+        ),
+        user_features=first_level_user_features_cached,
+        item_features=first_level_item_features_cached,
+        prefix=f"m_{idx}",
+    )
+    full_second_level_train = join_with_col_renaming(
+        left=full_second_level_train,
+        right=features,
+        on_col_name=["user_idx", "item_idx"],
+        how="left",
+    )
 
     unpersist_if_exists(first_level_user_features_cached)
     unpersist_if_exists(first_level_item_features_cached)
@@ -317,7 +329,7 @@ def predict_for_second_level_train():
         0
     ).cache()
 
-    self.logger.info("Adding features from the dataset")
+    logger.info("Adding features from the dataset")
     full_second_level_train = join_or_return(
         full_second_level_train_cached,
         user_features,
@@ -331,25 +343,27 @@ def predict_for_second_level_train():
         how="left",
     )
 
-    if self.use_generated_features:
-        if not self.features_processor.fitted:
-            self.features_processor.fit(
-                log=log_for_first_level_models,
-                user_features=user_features,
-                item_features=item_features,
-            )
-        self.logger.info("Adding generated features")
-        full_second_level_train = self.features_processor.transform(
-            log=full_second_level_train
+    # if self.use_generated_features:
+    if not self.features_processor.fitted:
+        self.features_processor.fit(
+            log=log_for_first_level_models,
+            user_features=user_features,
+            item_features=item_features,
         )
 
-    self.logger.info(
+    logger.info("Adding generated features")
+    full_second_level_train = self.features_processor.transform(
+        log=full_second_level_train
+    )
+
+    logger.info(
         "Columns at second level: %s",
         " ".join(full_second_level_train.columns),
     )
+
+    full_second_level_train.write.parquet(second_level_train_with_features_path)
+
     full_second_level_train_cached.unpersist()
-    return full_second_level_train
-    pass
 
 
 def combine_datasets_for_second_level():
