@@ -1,6 +1,5 @@
 import functools
 import importlib
-import itertools
 import logging
 import os
 from typing import Dict, cast, Optional, List, Union, Tuple
@@ -11,16 +10,13 @@ from rs_datasets import MovieLens
 
 from replay.data_preparator import DataPreparator
 from replay.experiment import Experiment
-from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import MAP, NDCG, HitRate
-from replay.model_handler import save, RandomRec, load
+from replay.model_handler import save
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
-from replay.scenarios.two_stages.two_stages_scenario import get_first_level_model_features
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info, join_with_col_renaming, get_top_k_recs, join_or_return, unpersist_if_exists, \
-    cache_if_exists
+from replay.utils import get_log_info
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +111,13 @@ class CustomTwoStageScenario(TwoStagesScenario):
     def __init__(self,
                  predefined_train_and_positives: Optional[Union[Tuple[DataFrame, DataFrame], Tuple[str, str]]] = None,
                  predefined_negatives: Optional[Union[DataFrame, str]] = None,
+                 predefined_test_candidate_features: Optional[DataFrame] = None,
                  empty_second_stage_params: Optional[Dict] = None,
                  **kwargs):
         super().__init__(**kwargs)
         self.predefined_train_and_positives = predefined_train_and_positives
         self.predefined_negatives = predefined_negatives
+        self.predefined_test_candidate_features = predefined_test_candidate_features
 
         if empty_second_stage_params is not None:
             self.second_stage_model = EmptyWrap(**empty_second_stage_params)
@@ -160,6 +158,15 @@ class CustomTwoStageScenario(TwoStagesScenario):
             negative_candidates.write.parquet(self.predefined_negatives)
 
         return negative_candidates
+
+    def _predict(self, log: DataFrame, k: int, users: DataFrame, items: DataFrame,
+                 user_features: Optional[DataFrame] = None, item_features: Optional[DataFrame] = None,
+                 filter_seen_items: bool = True) -> DataFrame:
+
+        if self.predefined_test_candidate_features is not None:
+            return self.second_stage_model.predict(data=self.predefined_test_candidate_features, k=k)
+
+        return super()._predict(log, k, users, items, user_features, item_features, filter_seen_items)
 
 
 def _get_scenario(
@@ -214,42 +221,6 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
         mlflow.log_metric(
             "HitRate.{}".format(k),
             e.results.at[model_name, "HitRate@{}".format(k)],
-        )
-
-
-def _predict_pairs_with_first_level_model(
-        self,
-        model: BaseRecommender,
-        log: DataFrame,
-        pairs: DataFrame,
-        user_features: DataFrame,
-        item_features: DataFrame,
-    ):
-        """
-        Get relevance for selected user-item pairs.
-        """
-        if not model.can_predict_cold_items:
-            log, pairs, item_features = [
-                self._filter_or_return(
-                    dataframe=df,
-                    condition=sf.col("item_idx") < self.first_level_item_len,
-                )
-                for df in [log, pairs, item_features]
-            ]
-        if not model.can_predict_cold_users:
-            log, pairs, user_features = [
-                self._filter_or_return(
-                    dataframe=df,
-                    condition=sf.col("user_idx") < self.first_level_user_len,
-                )
-                for df in [log, pairs, user_features]
-            ]
-
-        return model._predict_pairs(
-            pairs=pairs,
-            log=log,
-            user_features=user_features,
-            item_features=item_features,
         )
 
 
@@ -366,6 +337,56 @@ def first_level_fitting(split_base_path: str,
     # TODO: add metrics reporting
 
 
+def second_level_fitting(
+        model_name: str,
+        train_path: str,
+        test_path: str,
+        split_base_path: str,
+        final_second_level_train_path: str,
+        test_candidate_features_path: str,
+        second_model_path: str,
+        k: int,
+        second_model_type: str = "lama",
+        second_model_params: Optional[Union[Dict, str]] = None,
+        second_model_config_path: Optional[str] = None):
+    spark = _get_spark_session()
+
+    scenario = CustomTwoStageScenario(
+        train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
+        second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
+    )
+
+    if second_model_type == "lama":
+        second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
+    else:
+        raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
+
+    train = spark.read.parquet(train_path)
+    test = spark.read.parquet(test_path)
+    second_level_train = spark.read.parquet(final_second_level_train_path)
+    test_candidate_features = spark.read.parquet(test_candidate_features_path)
+
+    second_stage_model.fit(second_level_train)
+    scenario.second_stage_model = second_stage_model
+
+    # TODO: saved second_model
+
+    recs = scenario.predict(
+        log=train,
+        k=k,
+        users=test_candidate_features.select('user_idx').distinct(),
+        filter_seen_items=True,
+        user_features=None,
+        item_features=None
+    )
+
+    recs.write.parquet(
+        os.path.join(split_base_path, f"final_recs_{model_name}.parquet")
+    )
+
+    _estimate_and_report_metrics(model_name, test, recs)
+
+
 def combine_datasets_for_second_level(second_level_trains_paths: List[str], final_second_level_train: str):
     assert len(second_level_trains_paths) > 0, "Cannot work with empty sequence of paths"
 
@@ -377,41 +398,6 @@ def combine_datasets_for_second_level(second_level_trains_paths: List[str], fina
     # TODO: check the resulting dataframe for correctness (no NONEs in any field)
 
     df.write.parquet(final_second_level_train)
-
-
-def second_level_fitting(final_second_level_train: str,
-                         second_model_type: str = "lama",
-                         second_model_params: Optional[Union[Dict, str]] = None,
-                         second_model_config_path: Optional[str] = None):
-    spark = _get_spark_session()
-
-    if second_model_type == "lama":
-        second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
-    else:
-        raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
-
-    second_level_train = spark.read.parquet(final_second_level_train)
-    second_stage_model.fit(second_level_train)
-
-    save(second_stage_model)
-
-    # predict and report metrics
-    recs = second_stage_model.predict(
-        log=first_level_train,
-        k=k,
-        users=test.select("user_idx").distinct(),
-        user_features=first_level_user_features,
-        item_features=first_level_item_features,
-        filter_seen_items=True
-    )
-    _estimate_and_report_metrics(model_class_name, test, recs)
-
-    pass
-
-
-def combine_second_level_results():
-    # TODO: combine all results (test prediction quality) into a single table
-    pass
 
 
 if __name__ == "__main__":
