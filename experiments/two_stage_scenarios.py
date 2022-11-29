@@ -5,11 +5,14 @@ import logging
 import os
 from typing import Dict, cast, Optional, List, Union
 
+import mlflow
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 from rs_datasets import MovieLens
 
 from replay.data_preparator import DataPreparator
+from replay.experiment import Experiment
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
+from replay.metrics import MAP, NDCG, HitRate
 from replay.model_handler import save, RandomRec, load
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
@@ -94,6 +97,32 @@ def main():
                                  # seed=SEED)
 
     scenario.fit(log=train, user_features=None, item_features=None)
+
+
+def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFrame):
+    K_list_metrics = [5, 10]
+
+    e = Experiment(
+        test,
+        {
+            MAP(): K_list_metrics,
+            NDCG(): K_list_metrics,
+            HitRate(): K_list_metrics,
+        },
+    )
+    e.add_result(model_name, recs)
+
+    for k in K_list_metrics:
+        mlflow.log_metric(
+            "NDCG.{}".format(k), e.results.at[model_name, "NDCG@{}".format(k)]
+        )
+        mlflow.log_metric(
+            "MAP.{}".format(k), e.results.at[model_name, "MAP@{}".format(k)]
+        )
+        mlflow.log_metric(
+            "HitRate.{}".format(k),
+            e.results.at[model_name, "HitRate@{}".format(k)],
+        )
 
 
 def _predict_pairs_with_first_level_model(
@@ -187,10 +216,16 @@ def dataset_splitting(log_path: str, split_base_path: str, cores: int):
     second_level_positives.write.parquet(second_level_positives_path)
 
 
-def first_level_fitting(first_level_train_path: str, model_class_name: str, model_kwargs: Dict, model_path: str):
+def first_level_fitting(first_level_train_path: str,
+                        test_path: str,
+                        model_class_name: str,
+                        model_kwargs: Dict,
+                        model_path: str,
+                        k: int):
     # get session and read data
     spark = _get_spark_session()
     first_level_train = spark.read.parquet(first_level_train_path)
+    test = spark.read.parquet(test_path)
 
     # instantiate a model
     module_name = ".".join(model_class_name.split('.')[:-1])
@@ -219,7 +254,16 @@ def first_level_fitting(first_level_train_path: str, model_class_name: str, mode
     logger.info(f"Saving model to: {model_path}")
     save(base_model, path=model_path, overwrite=True)
 
-    # TODO: predict and report metrics
+    # predict and report metrics
+    recs = base_model._predict(
+        log=first_level_train,
+        k=k,
+        users=test.select("user_idx").distinct(),
+        user_features=first_level_user_features,
+        item_features=first_level_item_features,
+        filter_seen_items=True
+    )
+    _estimate_and_report_metrics(model_class_name, test, recs)
 
 
 def negative_sampling(
@@ -469,7 +513,16 @@ def second_level_fitting(final_second_level_train: str,
 
     save(second_stage_model)
 
-    # TODO: predict and report metrics
+    # predict and report metrics
+    recs = second_stage_model.predict(
+        log=first_level_train,
+        k=k,
+        users=test.select("user_idx").distinct(),
+        user_features=first_level_user_features,
+        item_features=first_level_item_features,
+        filter_seen_items=True
+    )
+    _estimate_and_report_metrics(model_class_name, test, recs)
 
     pass
 
