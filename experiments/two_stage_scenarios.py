@@ -5,6 +5,8 @@ import os
 from typing import Dict, cast, Optional, List, Union, Tuple
 
 import mlflow
+import pendulum
+from airflow.decorators import task, dag
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 from rs_datasets import MovieLens
 
@@ -224,10 +226,10 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
         )
 
 
-def dataset_splitting(log_path: str, split_base_path: str, cores: int):
+@task
+def dataset_splitting(log_path: str, train_path: str, test_path: str, cores: int):
     spark = _get_spark_session()
     data = spark.read.parquet(log_path)
-    scenario = _get_scenario()
 
     # splitting on train and test
     preparator = DataPreparator()
@@ -256,32 +258,33 @@ def dataset_splitting(log_path: str, split_base_path: str, cores: int):
     logger.info('train info:\n', get_log_info(train))
     logger.info('test info:\n', get_log_info(test))
 
-    # split on first and second levels
-    first_level_train, second_level_positives = scenario._split_data(train)
-
     # writing data
-    os.makedirs(split_base_path, exist_ok=True)
+    # os.makedirs(train_path, exist_ok=True)
+    # os.makedirs(test_path, exist_ok=True)
 
-    train.write.parquet(os.path.join(split_base_path, "train.parquet"))
-    test.write.parquet(os.path.join(split_base_path, "test.parquet"))
-    first_level_train.write.parquet(os.path.join(split_base_path, "first_level_train.parquet"))
-    second_level_positives.write.parquet(os.path.join(split_base_path, "second_level_positives.parquet"))
+    train.write.parquet(train_path)
+    test.write.parquet(test_path)
 
 
-def first_level_fitting(split_base_path: str,
-                          model_class_name: str,
-                          model_kwargs: Dict,
-                          model_path: str,
-                          k: int,
-                          intermediate_datasets_mode: str = "use",
-                          predefined_train_and_positives_path: Optional[Tuple[str, str]] = None,
-                          predefined_negatives_path: Optional[str] = None,
-                          item_features_path: Optional[str] = None,
-                          user_features_path: Optional[str] = None):
+@task
+def first_level_fitting(
+        train_path: str,
+        test_path: str,
+        model_class_name: str,
+        model_kwargs: Dict,
+        model_path: str,
+        second_level_partial_train_path: str,
+        first_level_model_predictions_path: str,
+        k: int,
+        intermediate_datasets_mode: str = "use",
+        predefined_train_and_positives_path: Optional[Tuple[str, str]] = None,
+        predefined_negatives_path: Optional[str] = None,
+        item_features_path: Optional[str] = None,
+        user_features_path: Optional[str] = None):
     spark = _get_spark_session()
 
-    train = spark.read.parquet(os.path.join(split_base_path, "train.parquet"))
-    test = spark.read.parquet(os.path.join(split_base_path, "test.parquet"))
+    train = spark.read.parquet(train_path)
+    test = spark.read.parquet(test_path)
 
     if intermediate_datasets_mode == "use":
         first_level_train_path, second_level_positives_path = predefined_train_and_positives_path
@@ -306,10 +309,7 @@ def first_level_fitting(split_base_path: str,
         predefined_train_and_positives=predefined_train_and_positives,
         predefined_negatives=predefined_negatives,
         empty_second_stage_params={
-            "second_level_train_path": os.path.join(
-                split_base_path,
-                f"second_level_train_{model_class_name.replace('.', '__')}.parquet"
-            )
+            "second_level_train_path": second_level_partial_train_path
         }
     )
 
@@ -330,13 +330,10 @@ def first_level_fitting(split_base_path: str,
         item_features=item_features
     )
 
-    recs.write.parquet(
-        os.path.join(split_base_path, f"second_level_train_{model_class_name.replace('.', '__')}.parquet")
-    )
-
-    # TODO: add metrics reporting
+    recs.write.parquet(first_level_model_predictions_path)
 
 
+@task
 def second_level_fitting(
         model_name: str,
         train_path: str,
@@ -387,6 +384,7 @@ def second_level_fitting(
     _estimate_and_report_metrics(model_name, test, recs)
 
 
+@task
 def combine_datasets_for_second_level(second_level_trains_paths: List[str], final_second_level_train: str):
     assert len(second_level_trains_paths) > 0, "Cannot work with empty sequence of paths"
 
@@ -398,6 +396,87 @@ def combine_datasets_for_second_level(second_level_trains_paths: List[str], fina
     # TODO: check the resulting dataframe for correctness (no NONEs in any field)
 
     df.write.parquet(final_second_level_train)
+
+
+@dag(
+    schedule=None,
+    start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
+    catchup=False,
+    tags=['example'],
+)
+def build_dag():
+
+    cores = 6
+    k = 10
+    log_path = ""
+    train_path = ""
+    test_path = ""
+    first_level_train_path = ""
+    second_level_positives_path = ""
+    negatives_path = ""
+    item_features_path = ""
+    user_features_path = ""
+
+    first_model_class_name = "model_class"
+    models = {
+        "model_class": dict()
+    }
+
+    def model_path(model_cls_name: str) -> str:
+        return f"model_{model_cls_name.replace('.', '__')}"
+
+
+    splitting = dataset_splitting(log_path, train_path, test_path, cores)
+
+    fit_initial_first_level_model = first_level_fitting(
+        train_path=train_path,
+        test_path=test_path,
+        model_class_name=first_model_class_name,
+        model_kwargs=models[first_model_class_name],
+        model_path=model_path(first_model_class_name),
+        k=k,
+        intermediate_datasets_mode="dump",
+        predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
+        predefined_negatives_path=negatives_path,
+        item_features_path=item_features_path,
+        user_features_path=user_features_path
+    )
+
+    fit_first_level_models = [
+        first_level_fitting(
+            train_path=train_path,
+            test_path=test_path,
+            model_class_name=model_class_name,
+            model_kwargs=model_kwargs,
+            model_path=model_path(model_class_name),
+            second_level_positives_path=
+            k=k,
+            intermediate_datasets_mode="use",
+            predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
+            predefined_negatives_path=negatives_path,
+            item_features_path=item_features_path,
+            user_features_path=user_features_path
+        )
+        for model_class_name, model_kwargs in models.items()
+    ]
+
+    combine_first_level = combine_datasets_for_second_level(second_level_trains_paths: List[str], final_second_level_train: str):
+
+    fit_second_level_model = second_level_fitting(
+        model_name: str,
+        train_path: str,
+        test_path: str,
+        split_base_path: str,
+        final_second_level_train_path: str,
+        test_candidate_features_path: str,
+        second_model_path: str,
+        k: int,
+        second_model_type: str = "lama",
+        second_model_params: Optional[Union[Dict, str]] = None,
+        second_model_config_path: Optional[str] = None):
+
+    pass
+
 
 
 if __name__ == "__main__":
