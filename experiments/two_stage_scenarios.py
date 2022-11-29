@@ -7,6 +7,7 @@ from typing import Dict, cast, Optional, List, Union, Tuple
 import mlflow
 import pendulum
 from airflow.decorators import task, dag
+from airflow.utils.helpers import chain
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 from rs_datasets import MovieLens
 
@@ -338,10 +339,10 @@ def second_level_fitting(
         model_name: str,
         train_path: str,
         test_path: str,
-        split_base_path: str,
         final_second_level_train_path: str,
         test_candidate_features_path: str,
-        second_model_path: str,
+        second_level_model_path: str,
+        second_level_predictions_path: str,
         k: int,
         second_model_type: str = "lama",
         second_model_params: Optional[Union[Dict, str]] = None,
@@ -366,7 +367,7 @@ def second_level_fitting(
     second_stage_model.fit(second_level_train)
     scenario.second_stage_model = second_stage_model
 
-    # TODO: saved second_model
+    # TODO: save the second_model
 
     recs = scenario.predict(
         log=train,
@@ -377,25 +378,23 @@ def second_level_fitting(
         item_features=None
     )
 
-    recs.write.parquet(
-        os.path.join(split_base_path, f"final_recs_{model_name}.parquet")
-    )
+    recs.write.parquet(second_level_predictions_path)
 
     _estimate_and_report_metrics(model_name, test, recs)
 
 
 @task
-def combine_datasets_for_second_level(second_level_trains_paths: List[str], final_second_level_train: str):
-    assert len(second_level_trains_paths) > 0, "Cannot work with empty sequence of paths"
+def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_dataset_path: str):
+    assert len(partial_datasets_paths) > 0, "Cannot work with empty sequence of paths"
 
     spark = _get_spark_session()
 
-    dfs = [spark.read.parquet(path) for path in second_level_trains_paths]
+    dfs = [spark.read.parquet(path) for path in partial_datasets_paths]
     df = functools.reduce(lambda acc, x: acc.join(x, on=["user_idx", "item_idx"]), dfs)
 
     # TODO: check the resulting dataframe for correctness (no NONEs in any field)
 
-    df.write.parquet(final_second_level_train)
+    df.write.parquet(full_dataset_path)
 
 
 @dag(
@@ -405,7 +404,6 @@ def combine_datasets_for_second_level(second_level_trains_paths: List[str], fina
     tags=['example'],
 )
 def build_dag():
-
     cores = 6
     k = 10
     log_path = ""
@@ -416,15 +414,28 @@ def build_dag():
     negatives_path = ""
     item_features_path = ""
     user_features_path = ""
+    full_first_level_train_path = ""
+    full_first_level_predictions_path = ""
+    second_level_model_path = ""
+    second_level_predictions_path = ""
 
     first_model_class_name = "model_class"
     models = {
         "model_class": dict()
     }
 
+    second_level_models = {
+        "some_model_name": dict()
+    }
+
     def model_path(model_cls_name: str) -> str:
         return f"model_{model_cls_name.replace('.', '__')}"
 
+    def partial_train_path(model_cls_name: str) -> str:
+        return f"partial_train_{model_cls_name.replace('.', '__')}.parquet"
+
+    def predictions_path(model_cls_name: str) -> str:
+        return f"predictions_{model_cls_name.replace('.', '__')}.parquet"
 
     splitting = dataset_splitting(log_path, train_path, test_path, cores)
 
@@ -434,6 +445,8 @@ def build_dag():
         model_class_name=first_model_class_name,
         model_kwargs=models[first_model_class_name],
         model_path=model_path(first_model_class_name),
+        second_level_partial_train_path=partial_train_path(first_model_class_name),
+        first_level_model_predictions_path=predictions_path(first_model_class_name),
         k=k,
         intermediate_datasets_mode="dump",
         predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
@@ -449,7 +462,8 @@ def build_dag():
             model_class_name=model_class_name,
             model_kwargs=model_kwargs,
             model_path=model_path(model_class_name),
-            second_level_positives_path=
+            second_level_partial_train_path=partial_train_path(model_class_name),
+            first_level_model_predictions_path=predictions_path(model_class_name),
             k=k,
             intermediate_datasets_mode="use",
             predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
@@ -460,24 +474,38 @@ def build_dag():
         for model_class_name, model_kwargs in models.items()
     ]
 
-    combine_first_level = combine_datasets_for_second_level(second_level_trains_paths: List[str], final_second_level_train: str):
+    combine_first_level_partial_trains = combine_datasets_for_second_level(
+        partial_datasets_paths=[partial_train_path(model_class_name) for model_class_name in models],
+        full_dataset_path=full_first_level_train_path
+    )
 
-    fit_second_level_model = second_level_fitting(
-        model_name: str,
-        train_path: str,
-        test_path: str,
-        split_base_path: str,
-        final_second_level_train_path: str,
-        test_candidate_features_path: str,
-        second_model_path: str,
-        k: int,
-        second_model_type: str = "lama",
-        second_model_params: Optional[Union[Dict, str]] = None,
-        second_model_config_path: Optional[str] = None):
+    combine_first_level_partial_tests = combine_datasets_for_second_level(
+        partial_datasets_paths=[predictions_path(model_class_name) for model_class_name in models],
+        full_dataset_path=full_first_level_predictions_path
+    )
+
+    fit_second_level_models = [second_level_fitting(
+        model_name=model_name,
+        train_path=train_path,
+        test_path=test_path,
+        final_second_level_train_path=full_first_level_train_path,
+        test_candidate_features_path=full_first_level_predictions_path,
+        second_level_model_path=second_level_model_path,
+        second_level_predictions_path=second_level_predictions_path,
+        k=k,
+        second_model_type="lama",
+        **model_kwargs
+    ) for model_name, model_kwargs in second_level_models]
+
+    chain(
+        splitting,
+        fit_initial_first_level_model,
+        fit_first_level_models,
+        [*combine_first_level_partial_trains, *combine_first_level_partial_tests],
+        fit_second_level_models
+    )
 
     pass
 
 
-
-if __name__ == "__main__":
-    main()
+dag = build_dag()
