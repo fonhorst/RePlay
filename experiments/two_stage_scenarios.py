@@ -3,7 +3,7 @@ import importlib
 import itertools
 import logging
 import os
-from typing import Dict, cast, Optional, List, Union
+from typing import Dict, cast, Optional, List, Union, Tuple
 
 import mlflow
 from pyspark.sql import functions as sf, SparkSession, DataFrame
@@ -99,6 +99,21 @@ def main():
     scenario.fit(log=train, user_features=None, item_features=None)
 
 
+class CustomTwoStageScenario(TwoStagesScenario):
+    def __init__(self,
+                 predefined_first_level_train: Optional[DataFrame] = None,
+                 predefined_second_level_positives: Optional[DataFrame] = None,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.predefined_first_level_train = predefined_first_level_train
+        self.predefined_second_level_positives = predefined_second_level_positives
+
+    def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
+        if self.predefined_first_level_train is not None and self.predefined_second_level_positives is not None:
+            return self.predefined_first_level_train, self.predefined_second_level_positives
+        return super()._split_data(log)
+
+
 def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFrame):
     K_list_metrics = [5, 10]
 
@@ -165,10 +180,31 @@ def _get_spark_session() -> SparkSession:
     return SparkSession.builder.master("local[6]").getOrCreate()
 
 
+def _get_scenario(model_class_name: str,
+                  model_kwargs: Dict,
+                  first_level_train: DataFrame,
+                  second_level_positives: DataFrame) -> TwoStagesScenario:
+    module_name = ".".join(model_class_name.split('.')[:-1])
+    class_name = model_class_name.split('.')[-1]
+    module = importlib.import_module(module_name)
+    clazz = getattr(module, class_name)
+    base_model = cast(BaseRecommender, clazz(**model_kwargs))
+
+    scenario = CustomTwoStageScenario(
+        predefined_first_level_train=first_level_train,
+        predefined_second_level_positives=second_level_positives,
+        train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
+        first_level_models=base_model,
+        second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
+    )
+
+    return scenario
+
+
 def dataset_splitting(log_path: str, split_base_path: str, cores: int):
     spark = _get_spark_session()
-
     data = spark.read.parquet(log_path)
+    scenario = _get_scenario()
 
     # splitting on train and test
     preparator = DataPreparator()
@@ -184,7 +220,7 @@ def dataset_splitting(log_path: str, split_base_path: str, cores: int):
     log.write.mode('overwrite').format('noop').save()
 
     only_positives_log = log.filter(sf.col('relevance') >= 3).withColumn('relevance', sf.lit(1))
-    print(get_log_info(only_positives_log))
+    logger.info(get_log_info(only_positives_log))
 
     # train/test split ml
     train_spl = DateSplitter(
@@ -194,26 +230,54 @@ def dataset_splitting(log_path: str, split_base_path: str, cores: int):
     )
 
     train, test = train_spl.split(only_positives_log)
-    print('train info:\n', get_log_info(train))
-    print('test info:\n', get_log_info(test))
+    logger.info('train info:\n', get_log_info(train))
+    logger.info('test info:\n', get_log_info(test))
 
-    # splitting on first and second level
-    train_splitter = UserSplitter(item_test_size=0.5, shuffle=True, seed=42)
-    first_level_train, second_level_positives = train_splitter.split(log)
-    logger.debug("Log info: %s", get_log_info(log))
-    logger.debug(
-        "first_level_train info: %s", get_log_info(first_level_train)
-    )
-    logger.debug(
-        "second_level_train info: %s", get_log_info(second_level_positives)
-    )
+    # split on first and second levels
+    first_level_train, second_level_positives = scenario._split_data(train)
 
+    # writing data
     os.makedirs(split_base_path, exist_ok=True)
-    first_level_train_path = os.path.join(split_base_path, "first_level_train.parquet")
-    second_level_positives_path = os.path.join(split_base_path, "second_level_train.parquet")
 
-    first_level_train.write.parquet(first_level_train_path)
-    second_level_positives.write.parquet(second_level_positives_path)
+    train.write.parquet(os.path.join(split_base_path, "train.parquet"))
+    test.write.parquet(os.path.join(split_base_path, "test.parquet"))
+    first_level_train.write.parquet(os.path.join(split_base_path, "first_level_train.parquet"))
+    second_level_positives.write.parquet(os.path.join(split_base_path, "second_level_positives.parquet"))
+
+
+def first_level_fitting_2(split_base_path: str,
+                          model_class_name: str,
+                          model_kwargs: Dict,
+                          model_path: str,
+                          k: int,
+                          item_features_path: Optional[str] = None,
+                          user_features_path: Optional[str] = None):
+    spark = _get_spark_session()
+
+    train = spark.read.parquet(os.path.join(split_base_path, "train.parquet"))
+    test = spark.read.parquet(os.path.join(split_base_path, "test.parquet"))
+    first_level_train = spark.read.parquet(os.path.join(split_base_path, "first_level_train.parquet"))
+    second_level_positives = spark.read.parquet(os.path.join(split_base_path, "second_level_positives.parquet"))
+
+    item_features = spark.read.parquet(item_features_path) if item_features_path is not None else None
+    user_features = spark.read.parquet(user_features_path) if user_features_path is not None else None
+
+    # TODO: add empty second model
+    scenario = _get_scenario(
+        model_class_name=model_class_name,
+        model_kwargs=model_kwargs,
+        first_level_train=first_level_train,
+        second_level_positives=second_level_positives
+    )
+
+    scenario.fit(log=train, user_features=user_features, item_features=item_features)
+
+    model = scenario.first_level_models[0]
+    save(model, model_path)
+
+    # TODO: predict quality
+
+    pass
 
 
 def first_level_fitting(first_level_train_path: str,
