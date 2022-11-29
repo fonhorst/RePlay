@@ -30,7 +30,7 @@ from replay.utils import (
 
 # pylint: disable=too-many-locals, too-many-arguments
 def get_first_level_model_features(
-    model: DataFrame,
+    model: BaseRecommender,
     pairs: DataFrame,
     user_features: Optional[DataFrame] = None,
     item_features: Optional[DataFrame] = None,
