@@ -16,7 +16,7 @@ from replay.metrics import MAP, NDCG, HitRate
 from replay.model_handler import save, RandomRec, load
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
-from replay.scenarios.two_stages.reranker import LamaWrap
+from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.scenarios.two_stages.two_stages_scenario import get_first_level_model_features
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import get_log_info, join_with_col_renaming, get_top_k_recs, join_or_return, unpersist_if_exists, \
@@ -99,19 +99,62 @@ def main():
     scenario.fit(log=train, user_features=None, item_features=None)
 
 
+class EmptyWrap(ReRanker):
+    def __init__(self, second_level_train_path: Optional[str] = None):
+        self.second_level_train_path = second_level_train_path
+
+    def fit(self, data: DataFrame, fit_params: Optional[Dict] = None) -> None:
+        if self.second_level_train_path is not None:
+            data.write.parquet(self.second_level_train_path)
+
+    def predict(self, data, k) -> DataFrame:
+        return data
+
+
 class CustomTwoStageScenario(TwoStagesScenario):
     def __init__(self,
                  predefined_first_level_train: Optional[DataFrame] = None,
                  predefined_second_level_positives: Optional[DataFrame] = None,
+                 empty_second_stage_params: Optional[Dict] = None,
                  **kwargs):
         super().__init__(**kwargs)
         self.predefined_first_level_train = predefined_first_level_train
         self.predefined_second_level_positives = predefined_second_level_positives
 
+        if empty_second_stage_params is not None:
+            self.second_stage_model = EmptyWrap(**empty_second_stage_params)
+
     def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
         if self.predefined_first_level_train is not None and self.predefined_second_level_positives is not None:
             return self.predefined_first_level_train, self.predefined_second_level_positives
         return super()._split_data(log)
+
+
+def _get_spark_session() -> SparkSession:
+    return SparkSession.builder.master("local[6]").getOrCreate()
+
+
+def _get_scenario(model_class_name: str,
+                  model_kwargs: Dict,
+                  first_level_train: DataFrame,
+                  second_level_positives: DataFrame,
+                  empty_second_stage_params: Optional[Dict] = None,) -> TwoStagesScenario:
+    module_name = ".".join(model_class_name.split('.')[:-1])
+    class_name = model_class_name.split('.')[-1]
+    module = importlib.import_module(module_name)
+    clazz = getattr(module, class_name)
+    base_model = cast(BaseRecommender, clazz(**model_kwargs))
+
+    scenario = CustomTwoStageScenario(
+        predefined_first_level_train=first_level_train,
+        predefined_second_level_positives=second_level_positives,
+        empty_second_stage_params=empty_second_stage_params,
+        train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
+        first_level_models=base_model,
+        second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
+    )
+
+    return scenario
 
 
 def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFrame):
@@ -176,31 +219,6 @@ def _predict_pairs_with_first_level_model(
         )
 
 
-def _get_spark_session() -> SparkSession:
-    return SparkSession.builder.master("local[6]").getOrCreate()
-
-
-def _get_scenario(model_class_name: str,
-                  model_kwargs: Dict,
-                  first_level_train: DataFrame,
-                  second_level_positives: DataFrame) -> TwoStagesScenario:
-    module_name = ".".join(model_class_name.split('.')[:-1])
-    class_name = model_class_name.split('.')[-1]
-    module = importlib.import_module(module_name)
-    clazz = getattr(module, class_name)
-    base_model = cast(BaseRecommender, clazz(**model_kwargs))
-
-    scenario = CustomTwoStageScenario(
-        predefined_first_level_train=first_level_train,
-        predefined_second_level_positives=second_level_positives,
-        train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
-        first_level_models=base_model,
-        second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
-    )
-
-    return scenario
-
-
 def dataset_splitting(log_path: str, split_base_path: str, cores: int):
     spark = _get_spark_session()
     data = spark.read.parquet(log_path)
@@ -262,22 +280,41 @@ def first_level_fitting_2(split_base_path: str,
     item_features = spark.read.parquet(item_features_path) if item_features_path is not None else None
     user_features = spark.read.parquet(user_features_path) if user_features_path is not None else None
 
-    # TODO: add empty second model
+    # 1. replaces train splitting with pre-splitted data
+    # 2. dumps the second level train dataset
     scenario = _get_scenario(
         model_class_name=model_class_name,
         model_kwargs=model_kwargs,
         first_level_train=first_level_train,
-        second_level_positives=second_level_positives
+        second_level_positives=second_level_positives,
+        empty_second_stage_params={
+            "second_level_train_path": os.path.join(
+                split_base_path,
+                f"second_level_train_{model_class_name.replace('.', '__')}.parquet"
+            )
+        }
     )
 
     scenario.fit(log=train, user_features=user_features, item_features=item_features)
 
+    # saving the trained first-level model
     model = scenario.first_level_models[0]
     save(model, model_path)
 
-    # TODO: predict quality
+    # because of EmptyWrap this is still predictions from the first level
+    # (though with all prepared features required on the second level)
+    recs = scenario.predict(
+        log=train,
+        k=k,
+        users=test.select('user_idx').distinct(),
+        filter_seen_items=True,
+        user_features=user_features,
+        item_features=item_features
+    )
 
-    pass
+    recs.write.parquet(
+        os.path.join(split_base_path, f"second_level_train_{model_class_name.replace('.', '__')}.parquet")
+    )
 
 
 def first_level_fitting(first_level_train_path: str,
