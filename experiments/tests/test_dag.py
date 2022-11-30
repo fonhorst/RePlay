@@ -7,18 +7,23 @@ from experiments.two_stage_scenarios import dataset_splitting, first_level_fitti
 
 
 @pytest.fixture
-def log_path() -> str:
-    return "/opt/data/ml100k_ratings.csv"
+def resources_path() -> str:
+    return "/opt/data/"
 
 
 @pytest.fixture
-def user_features_path() -> str:
-    return "/opt/data/ml100k_users.csv"
+def log_path(resources_path: str) -> str:
+    return os.path.join(resources_path, "ml100k_ratings.csv")
 
 
 @pytest.fixture
-def item_features_path() -> str:
-    return "/opt/data/ml100k_items.csv"
+def user_features_path(resources_path: str) -> str:
+    return os.path.join(resources_path, "ml100k_users.csv")
+
+
+@pytest.fixture
+def item_features_path(resources_path: str) -> str:
+    return os.path.join(resources_path, "ml100k_items.csv")
 
 
 @pytest.fixture(scope="function")
@@ -52,9 +57,12 @@ def test_data_splitting(log_path: str, artifacts: ArtifactPaths):
     # TODO: they are not empty, no crossing by ids
 
 
-def test_first_level_fitting(base_path: str, user_features_path: str, item_features_path: str, artifacts: ArtifactPaths):
+def test_first_level_fitting(resources_path: str, user_features_path: str, item_features_path: str, artifacts: ArtifactPaths):
     # first model (dump)
-    assert len(os.listdir(base_path)) == 0
+    assert len(os.listdir(artifacts.base_path)) == 0
+
+    shutil.copytree(os.path.join(resources_path, "train.parquet"), artifacts.train_path)
+    shutil.copytree(os.path.join(resources_path, "test.parquet"), artifacts.test_path)
 
     model_class_name = "replay.models.als.ALSWrap"
     first_level_fitting(

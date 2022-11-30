@@ -298,8 +298,8 @@ def first_level_fitting(
         predefined_train_and_positives = predefined_train_and_positives_path
         predefined_negatives = predefined_negatives_path
 
-    item_features = spark.read.parquet(item_features_path) if item_features_path is not None else None
-    user_features = spark.read.parquet(user_features_path) if user_features_path is not None else None
+    item_features = spark.read.csv(item_features_path, header=True) if item_features_path is not None else None
+    user_features = spark.read.csv(user_features_path, header=True) if user_features_path is not None else None
 
     # 1. replaces train splitting with pre-splitted data
     # 2. dumps the second level train dataset
