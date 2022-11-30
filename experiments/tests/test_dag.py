@@ -6,23 +6,39 @@ import pytest
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths
 
 
+@pytest.fixture
+def log_path() -> str:
+    return "/opt/data/ml100k_ratings.csv"
+
+
+@pytest.fixture
+def user_features_path() -> str:
+    return "/opt/data/ml100k_users.csv"
+
+
+@pytest.fixture
+def item_features_path() -> str:
+    return "/opt/data/ml100k_items.csv"
+
+
 @pytest.fixture(scope="function")
 def artifacts() -> ArtifactPaths:
     path = "/opt/experiments/test_exp"
 
     shutil.rmtree(path, ignore_errors=True)
+    os.makedirs(path)
 
     yield ArtifactPaths(base_path=path)
 
     shutil.rmtree(path, ignore_errors=True)
 
 
-def test_data_splitting(artifacts: ArtifactPaths):
+def test_data_splitting(log_path: str, artifacts: ArtifactPaths):
 
     assert not os.path.exists(artifacts.base_path)
 
     dataset_splitting.function(
-        log_path="/opt/data/ml100k_ratings.csv",
+        log_path=log_path,
         base_path=artifacts.base_path,
         train_path=artifacts.train_path,
         test_path=artifacts.test_path,
@@ -36,34 +52,68 @@ def test_data_splitting(artifacts: ArtifactPaths):
     # TODO: they are not empty, no crossing by ids
 
 
-# def test_first_level_fitting(artifacts, train_path: str, test_path: str):
-#     # first model (dump)
-#     first_level_fitting(
-#         train_path=train_path,
-#         test_path=test_path,
-#         model_class_name="replay.models.als.ALSWrap",
-#         model_kwargs={"rank": 128},
-#         model_path=os.path.join(artifacts, "initial_model"),
-#         second_level_partial_train_path=os.path.join(artifacts, "first_lvl_partial_model_1_train.parquet"),
-#         first_level_model_predictions_path=os.path.join(artifacts, "first_lvl_partial_model_1_preds.parquet"),
-#         k=10,
-#         intermediate_datasets_mode="dump",
-#         predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
-#         predefined_negatives_path=negatives_path,
-#         item_features_path=item_features_path,
-#         user_features_path=user_features_path
-#     )
-#     # TODO: test_exp exists
-#     # TODO: model exists
-#     # TODO: dataset exists
-#
-#     # second model (use)
-#     # TODO: model exists
-#     # TODO: dataset exists
-#
-#     # TODO: both datasets can be combined
-#     pass
-#
+def test_first_level_fitting(base_path: str, user_features_path: str, item_features_path: str, artifacts: ArtifactPaths):
+    # first model (dump)
+    assert len(os.listdir(base_path)) == 0
+
+    model_class_name = "replay.models.als.ALSWrap"
+    first_level_fitting(
+        train_path=artifacts.train_path,
+        test_path=artifacts.test_path,
+        model_class_name=model_class_name,
+        model_kwargs={"rank": 128},
+        model_path=artifacts.model_path(model_class_name),
+        second_level_partial_train_path=artifacts.partial_train_path(model_class_name),
+        first_level_model_predictions_path=artifacts.predictions_path(model_class_name),
+        k=10,
+        intermediate_datasets_mode="dump",
+        predefined_train_and_positives_path=(
+            artifacts.first_level_train_path,
+            artifacts.second_level_positives_path
+        ),
+        predefined_negatives_path=artifacts.negatives_path,
+        item_features_path=item_features_path,
+        user_features_path=user_features_path
+    )
+
+    assert os.path.exists(artifacts.model_path(model_class_name))
+    assert os.path.exists(artifacts.partial_train_path(model_class_name))
+    assert os.path.exists(artifacts.predictions_path(model_class_name))
+    assert os.path.exists(artifacts.first_level_train_path)
+    assert os.path.exists(artifacts.second_level_positives_path)
+    assert os.path.exists(artifacts.negatives_path)
+
+    # second model (use)
+    # TODO: model exists
+    # TODO: dataset exists
+
+    next_model_class_name = "replay.models.knn.ItemKNN"
+
+    first_level_fitting(
+        train_path=artifacts.train_path,
+        test_path=artifacts.test_path,
+        model_class_name=next_model_class_name,
+        model_kwargs={"num_neighbours": 10},
+        model_path=artifacts.model_path(next_model_class_name),
+        second_level_partial_train_path=artifacts.partial_train_path(next_model_class_name),
+        first_level_model_predictions_path=artifacts.predictions_path(next_model_class_name),
+        k=10,
+        intermediate_datasets_mode="use",
+        predefined_train_and_positives_path=(
+            artifacts.first_level_train_path,
+            artifacts.second_level_positives_path
+        ),
+        predefined_negatives_path=artifacts.negatives_path,
+        item_features_path=item_features_path,
+        user_features_path=user_features_path
+    )
+
+    assert os.path.exists(artifacts.model_path(next_model_class_name))
+    assert os.path.exists(artifacts.partial_train_path(next_model_class_name))
+    assert os.path.exists(artifacts.predictions_path(next_model_class_name))
+
+    # TODO: both datasets can be combined
+
 #
 # def test_combine_datasets():
 #     # TODO: dataset exists
