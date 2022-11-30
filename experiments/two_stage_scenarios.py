@@ -267,7 +267,7 @@ def dataset_splitting(log_path: str, train_path: str, test_path: str, cores: int
     test.write.parquet(test_path)
 
 
-@task
+# this is @task
 def first_level_fitting(
         train_path: str,
         test_path: str,
@@ -334,7 +334,7 @@ def first_level_fitting(
     recs.write.parquet(first_level_model_predictions_path)
 
 
-@task
+# this is @task
 def second_level_fitting(
         model_name: str,
         train_path: str,
@@ -383,7 +383,7 @@ def second_level_fitting(
     _estimate_and_report_metrics(model_name, test, recs)
 
 
-@task
+# this is @task
 def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_dataset_path: str):
     assert len(partial_datasets_paths) > 0, "Cannot work with empty sequence of paths"
 
@@ -438,7 +438,7 @@ def build_full_dag():
 
     first_model_class_name = "replay.models.als.ALSWrap"
     models = {
-        "replay.models.als.ALSWrap": { "rank": 128 }
+        first_model_class_name: { "rank": 128 }
     }
 
     second_level_models = {
@@ -449,24 +449,25 @@ def build_full_dag():
 
     splitting = dataset_splitting(log_path, train_path, test_path, cores)
 
-    fit_initial_first_level_model = first_level_fitting(
-        train_path=train_path,
-        test_path=test_path,
-        model_class_name=first_model_class_name,
-        model_kwargs=models[first_model_class_name],
-        model_path=model_path(first_model_class_name),
-        second_level_partial_train_path=partial_train_path(first_model_class_name),
-        first_level_model_predictions_path=predictions_path(first_model_class_name),
-        k=k,
-        intermediate_datasets_mode="dump",
-        predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
-        predefined_negatives_path=negatives_path,
-        item_features_path=item_features_path,
-        user_features_path=user_features_path
-    )
+    fit_initial_first_level_model = \
+        task(task_id=f"initial_level_model_{first_model_class_name.split('.')[-1]}")(first_level_fitting)(
+            train_path=train_path,
+            test_path=test_path,
+            model_class_name=first_model_class_name,
+            model_kwargs=models[first_model_class_name],
+            model_path=model_path(first_model_class_name),
+            second_level_partial_train_path=partial_train_path(first_model_class_name),
+            first_level_model_predictions_path=predictions_path(first_model_class_name),
+            k=k,
+            intermediate_datasets_mode="dump",
+            predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
+            predefined_negatives_path=negatives_path,
+            item_features_path=item_features_path,
+            user_features_path=user_features_path
+        )
 
     fit_first_level_models = [
-        first_level_fitting(
+        task(task_id=f"first_level_{model_class_name.split('.')[-1]}")(first_level_fitting)(
             train_path=train_path,
             test_path=test_path,
             model_class_name=model_class_name,
@@ -481,15 +482,15 @@ def build_full_dag():
             item_features_path=item_features_path,
             user_features_path=user_features_path
         )
-        for model_class_name, model_kwargs in models.items() if model_class_name != fit_initial_first_level_model
+        for model_class_name, model_kwargs in models.items() if model_class_name != first_model_class_name
     ]
 
-    combine_first_level_partial_trains = combine_datasets_for_second_level(
+    combine_first_level_partial_trains = task(task_id="combine_partial_trains")(combine_datasets_for_second_level)(
         partial_datasets_paths=[partial_train_path(model_class_name) for model_class_name in models],
         full_dataset_path=full_first_level_train_path
     )
 
-    combine_first_level_partial_tests = combine_datasets_for_second_level(
+    combine_first_level_partial_tests = task(task_id="combine_partial_tests")(combine_datasets_for_second_level)(
         partial_datasets_paths=[predictions_path(model_class_name) for model_class_name in models],
         full_dataset_path=full_first_level_predictions_path
     )
@@ -497,7 +498,7 @@ def build_full_dag():
     combine_first_level_partials = [combine_first_level_partial_trains, combine_first_level_partial_tests]
 
     fit_second_level_models = [
-        second_level_fitting(
+        task(task_id=f"second_level_{model_name}")(second_level_fitting)(
             model_name=model_name,
             train_path=train_path,
             test_path=test_path,
@@ -513,13 +514,11 @@ def build_full_dag():
     ]
 
     chain(splitting, fit_initial_first_level_model, fit_first_level_models)
-    cross_downstream(fit_first_level_models, combine_first_level_partials)
+    cross_downstream([fit_initial_first_level_model, *fit_first_level_models], combine_first_level_partials)
     cross_downstream(combine_first_level_partials, fit_second_level_models)
 
 
 dag = build_full_dag()
-
-k = 0
 
 
 # if __name__ == "__main__":
