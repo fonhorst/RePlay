@@ -228,7 +228,7 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
 
 
 @task
-def dataset_splitting(log_path: str, train_path: str, test_path: str, cores: int):
+def dataset_splitting(log_path: str, base_path: str, train_path: str, test_path: str, cores: int):
     spark = _get_spark_session()
     data = spark.read.parquet(log_path)
 
@@ -260,8 +260,7 @@ def dataset_splitting(log_path: str, train_path: str, test_path: str, cores: int
     logger.info('test info:\n', get_log_info(test))
 
     # writing data
-    # os.makedirs(train_path, exist_ok=True)
-    # os.makedirs(test_path, exist_ok=True)
+    os.makedirs(base_path, exist_ok=True)
 
     train.write.parquet(train_path)
     test.write.parquet(test_path)
@@ -447,7 +446,7 @@ def build_full_dag():
         }
     }
 
-    splitting = dataset_splitting(log_path, train_path, test_path, cores)
+    splitting = dataset_splitting(log_path, base_path, train_path, test_path, cores)
 
     fit_initial_first_level_model = \
         task(task_id=f"initial_level_model_{first_model_class_name.split('.')[-1]}")(first_level_fitting)(
@@ -520,6 +519,6 @@ def build_full_dag():
 
 dag = build_full_dag()
 
-
+k = 0
 # if __name__ == "__main__":
 #     main()
