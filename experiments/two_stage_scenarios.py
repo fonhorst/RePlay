@@ -494,7 +494,7 @@ def build_full_dag():
         full_dataset_path=full_first_level_predictions_path
     )
 
-    combine_first_level_partials = [*combine_first_level_partial_trains, *combine_first_level_partial_tests]
+    combine_first_level_partials = [combine_first_level_partial_trains, combine_first_level_partial_tests]
 
     fit_second_level_models = [
         second_level_fitting(
@@ -509,7 +509,7 @@ def build_full_dag():
             second_model_type="lama",
             **model_kwargs
         )
-        for model_name, model_kwargs in second_level_models
+        for model_name, model_kwargs in second_level_models.items()
     ]
 
     chain(splitting, fit_initial_first_level_model, fit_first_level_models)
