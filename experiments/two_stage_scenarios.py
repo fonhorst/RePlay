@@ -406,28 +406,21 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
 def build_full_dag():
     cores = 6
     k = 10
-    base_path = ""
+
+    # external paths
     log_path = ""
-    train_path = ""
-    test_path = ""
-    first_level_train_path = ""
-    second_level_positives_path = ""
-    negatives_path = ""
     item_features_path = ""
     user_features_path = ""
-    full_first_level_train_path = ""
-    full_first_level_predictions_path = ""
-    second_level_model_path = ""
-    second_level_predictions_path = ""
 
-    first_model_class_name = "model_class"
-    models = {
-        "model_class": dict()
-    }
+    # the base path for all intermeidate and final datasets
+    base_path = "/opt/experiments/two_stage_{{ ds }}_{{ run_id }}"
 
-    second_level_models = {
-        "some_model_name": dict()
-    }
+    # intermediate and final datasets
+    train_path = os.path.join(base_path, "train.parquet")
+    test_path = os.path.join(base_path, "test.parquet")
+    first_level_train_path = os.path.join(base_path, "first_level_train.parquet")
+    second_level_positives_path = "second_level_positives.parquet"
+    negatives_path = "second_level_negatives.parquet"
 
     def model_path(model_cls_name: str) -> str:
         return f"model_{model_cls_name.replace('.', '__')}"
@@ -437,6 +430,22 @@ def build_full_dag():
 
     def predictions_path(model_cls_name: str) -> str:
         return f"predictions_{model_cls_name.replace('.', '__')}.parquet"
+
+    full_first_level_train_path = "full_first_to_second_train.parquet"
+    full_first_level_predictions_path = "full_first_to_second_predictions.parquet"
+    second_level_model_path = "second_level_model"
+    second_level_predictions_path = "second_level_predictions.parquet"
+
+    first_model_class_name = "replay.models.als.ALSWrap"
+    models = {
+        "replay.models.als.ALSWrap": { "rank": 128 }
+    }
+
+    second_level_models = {
+        "default_lama": {
+            "second_model_params": {"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
+        }
+    }
 
     splitting = dataset_splitting(log_path, train_path, test_path, cores)
 
@@ -487,18 +496,21 @@ def build_full_dag():
 
     combine_first_level_partials = [*combine_first_level_partial_trains, *combine_first_level_partial_tests]
 
-    fit_second_level_models = [second_level_fitting(
-        model_name=model_name,
-        train_path=train_path,
-        test_path=test_path,
-        final_second_level_train_path=full_first_level_train_path,
-        test_candidate_features_path=full_first_level_predictions_path,
-        second_level_model_path=second_level_model_path,
-        second_level_predictions_path=second_level_predictions_path,
-        k=k,
-        second_model_type="lama",
-        **model_kwargs
-    ) for model_name, model_kwargs in second_level_models]
+    fit_second_level_models = [
+        second_level_fitting(
+            model_name=model_name,
+            train_path=train_path,
+            test_path=test_path,
+            final_second_level_train_path=full_first_level_train_path,
+            test_candidate_features_path=full_first_level_predictions_path,
+            second_level_model_path=second_level_model_path,
+            second_level_predictions_path=second_level_predictions_path,
+            k=k,
+            second_model_type="lama",
+            **model_kwargs
+        )
+        for model_name, model_kwargs in second_level_models
+    ]
 
     chain(splitting, fit_initial_first_level_model, fit_first_level_models)
     cross_downstream(fit_first_level_models, combine_first_level_partials)
