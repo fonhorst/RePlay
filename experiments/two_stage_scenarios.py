@@ -408,9 +408,9 @@ def build_full_dag():
     k = 10
 
     # external paths
-    log_path = ""
-    item_features_path = ""
-    user_features_path = ""
+    log_path = "/opt/data/ml100k_ratings.parquet"
+    item_features_path = "/opt/data/ml100k_items.parquet"
+    user_features_path = "/opt/data/ml100k_users.parquet"
 
     # the base path for all intermeidate and final datasets
     base_path = "/opt/experiments/two_stage_{{ ds }}_{{ run_id }}"
@@ -518,3 +518,7 @@ def build_full_dag():
 
 
 dag = build_full_dag()
+
+
+# if __name__ == "__main__":
+#     main()
