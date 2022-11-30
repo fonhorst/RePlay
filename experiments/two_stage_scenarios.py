@@ -481,7 +481,7 @@ def build_full_dag():
             item_features_path=item_features_path,
             user_features_path=user_features_path
         )
-        for model_class_name, model_kwargs in models.items()
+        for model_class_name, model_kwargs in models.items() if model_class_name != fit_initial_first_level_model
     ]
 
     combine_first_level_partial_trains = combine_datasets_for_second_level(
@@ -518,6 +518,8 @@ def build_full_dag():
 
 
 dag = build_full_dag()
+
+k = 0
 
 
 # if __name__ == "__main__":
