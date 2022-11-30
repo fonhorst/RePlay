@@ -2,6 +2,7 @@ import functools
 import importlib
 import logging
 import os
+from dataclasses import dataclass
 from typing import Dict, cast, Optional, List, Union, Tuple
 
 import mlflow
@@ -396,6 +397,40 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
     df.write.parquet(full_dataset_path)
 
 
+@dataclass(frozen=True)
+class ArtifactPaths:
+    base_path: str
+
+    @property
+    def train_path(self):
+        return os.path.join(self.base_path, "train.parquet")
+
+    @property
+    def test_path(self):
+        return os.path.join(self.base_path, "test.parquet")
+
+    @property
+    def first_level_train_path(self):
+        return os.path.join(self.base_path, "first_level_train.parquet")
+
+    second_level_positives_path: str = "second_level_positives.parquet"
+    negatives_path: str = "second_level_negatives.parquet"
+
+    def model_path(self, model_cls_name: str) -> str:
+        return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}")
+
+    def partial_train_path(self, model_cls_name: str) -> str:
+        return os.path.join(self.base_path, f"partial_train_{model_cls_name.replace('.', '__')}.parquet")
+
+    def predictions_path(self, model_cls_name: str) -> str:
+        return os.path.join(self.base_path, f"predictions_{model_cls_name.replace('.', '__')}.parquet")
+
+    full_first_level_train_path = "full_first_to_second_train.parquet"
+    full_first_level_predictions_path = "full_first_to_second_predictions.parquet"
+    second_level_model_path = "second_level_model"
+    second_level_predictions_path = "second_level_predictions.parquet"
+
+
 @dag(
     schedule=None,
     start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
@@ -415,29 +450,11 @@ def build_full_dag():
     base_path = "/opt/experiments/two_stage_{{ ds }}_{{ run_id }}"
 
     # intermediate and final datasets
-    train_path = os.path.join(base_path, "train.parquet")
-    test_path = os.path.join(base_path, "test.parquet")
-    first_level_train_path = os.path.join(base_path, "first_level_train.parquet")
-    second_level_positives_path = "second_level_positives.parquet"
-    negatives_path = "second_level_negatives.parquet"
-
-    def model_path(model_cls_name: str) -> str:
-        return f"model_{model_cls_name.replace('.', '__')}"
-
-    def partial_train_path(model_cls_name: str) -> str:
-        return f"partial_train_{model_cls_name.replace('.', '__')}.parquet"
-
-    def predictions_path(model_cls_name: str) -> str:
-        return f"predictions_{model_cls_name.replace('.', '__')}.parquet"
-
-    full_first_level_train_path = "full_first_to_second_train.parquet"
-    full_first_level_predictions_path = "full_first_to_second_predictions.parquet"
-    second_level_model_path = "second_level_model"
-    second_level_predictions_path = "second_level_predictions.parquet"
+    artifacts = ArtifactPaths(base_path)
 
     first_model_class_name = "replay.models.als.ALSWrap"
     models = {
-        first_model_class_name: { "rank": 128 }
+        first_model_class_name: {"rank": 128}
     }
 
     second_level_models = {
@@ -446,38 +463,44 @@ def build_full_dag():
         }
     }
 
-    splitting = dataset_splitting(log_path, base_path, train_path, test_path, cores)
+    splitting = dataset_splitting(log_path, base_path, artifacts.train_path, artifacts.test_path, cores)
 
     fit_initial_first_level_model = \
         task(task_id=f"initial_level_model_{first_model_class_name.split('.')[-1]}")(first_level_fitting)(
-            train_path=train_path,
-            test_path=test_path,
+            train_path=artifacts.train_path,
+            test_path=artifacts.test_path,
             model_class_name=first_model_class_name,
             model_kwargs=models[first_model_class_name],
-            model_path=model_path(first_model_class_name),
-            second_level_partial_train_path=partial_train_path(first_model_class_name),
-            first_level_model_predictions_path=predictions_path(first_model_class_name),
+            model_path=artifacts.model_path(first_model_class_name),
+            second_level_partial_train_path=artifacts.partial_train_path(first_model_class_name),
+            first_level_model_predictions_path=artifacts.predictions_path(first_model_class_name),
             k=k,
             intermediate_datasets_mode="dump",
-            predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
-            predefined_negatives_path=negatives_path,
+            predefined_train_and_positives_path=(
+                artifacts.first_level_train_path,
+                artifacts.second_level_positives_path
+            ),
+            predefined_negatives_path=artifacts.negatives_path,
             item_features_path=item_features_path,
             user_features_path=user_features_path
         )
 
     fit_first_level_models = [
         task(task_id=f"first_level_{model_class_name.split('.')[-1]}")(first_level_fitting)(
-            train_path=train_path,
-            test_path=test_path,
+            train_path=artifacts.train_path,
+            test_path=artifacts.test_path,
             model_class_name=model_class_name,
             model_kwargs=model_kwargs,
-            model_path=model_path(model_class_name),
-            second_level_partial_train_path=partial_train_path(model_class_name),
-            first_level_model_predictions_path=predictions_path(model_class_name),
+            model_path=artifacts.model_path(model_class_name),
+            second_level_partial_train_path=artifacts.partial_train_path(model_class_name),
+            first_level_model_predictions_path=artifacts.predictions_path(model_class_name),
             k=k,
             intermediate_datasets_mode="use",
-            predefined_train_and_positives_path=(first_level_train_path, second_level_positives_path),
-            predefined_negatives_path=negatives_path,
+            predefined_train_and_positives_path=(
+                artifacts.first_level_train_path,
+                artifacts.second_level_positives_path
+            ),
+            predefined_negatives_path=artifacts.negatives_path,
             item_features_path=item_features_path,
             user_features_path=user_features_path
         )
@@ -485,13 +508,13 @@ def build_full_dag():
     ]
 
     combine_first_level_partial_trains = task(task_id="combine_partial_trains")(combine_datasets_for_second_level)(
-        partial_datasets_paths=[partial_train_path(model_class_name) for model_class_name in models],
-        full_dataset_path=full_first_level_train_path
+        partial_datasets_paths=[artifacts.partial_train_path(model_class_name) for model_class_name in models],
+        full_dataset_path=artifacts.full_first_level_train_path
     )
 
     combine_first_level_partial_tests = task(task_id="combine_partial_tests")(combine_datasets_for_second_level)(
-        partial_datasets_paths=[predictions_path(model_class_name) for model_class_name in models],
-        full_dataset_path=full_first_level_predictions_path
+        partial_datasets_paths=[artifacts.predictions_path(model_class_name) for model_class_name in models],
+        full_dataset_path=artifacts.full_first_level_predictions_path
     )
 
     combine_first_level_partials = [combine_first_level_partial_trains, combine_first_level_partial_tests]
@@ -499,12 +522,12 @@ def build_full_dag():
     fit_second_level_models = [
         task(task_id=f"second_level_{model_name}")(second_level_fitting)(
             model_name=model_name,
-            train_path=train_path,
-            test_path=test_path,
-            final_second_level_train_path=full_first_level_train_path,
-            test_candidate_features_path=full_first_level_predictions_path,
-            second_level_model_path=second_level_model_path,
-            second_level_predictions_path=second_level_predictions_path,
+            train_path=artifacts.train_path,
+            test_path=artifacts.test_path,
+            final_second_level_train_path=artifacts.full_first_level_train_path,
+            test_candidate_features_path=artifacts.full_first_level_predictions_path,
+            second_level_model_path=artifacts.second_level_model_path,
+            second_level_predictions_path=artifacts.second_level_predictions_path,
             k=k,
             second_model_type="lama",
             **model_kwargs
