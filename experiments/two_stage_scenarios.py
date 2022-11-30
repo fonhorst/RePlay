@@ -230,14 +230,14 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
 @task
 def dataset_splitting(log_path: str, base_path: str, train_path: str, test_path: str, cores: int):
     spark = _get_spark_session()
-    data = spark.read.parquet(log_path)
+    data = spark.read.csv(log_path, header=True)
 
     # splitting on train and test
     preparator = DataPreparator()
 
     log = preparator.transform(
         columns_mapping={"user_id": "user_id", "item_id": "item_id", "relevance": "rating", "timestamp": "timestamp"},
-        data=data.ratings
+        data=data
     ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
 
     print(get_log_info(log))
@@ -256,8 +256,8 @@ def dataset_splitting(log_path: str, base_path: str, train_path: str, test_path:
     )
 
     train, test = train_spl.split(only_positives_log)
-    logger.info('train info:\n', get_log_info(train))
-    logger.info('test info:\n', get_log_info(test))
+    logger.info(f'train info: \n{get_log_info(train)}')
+    logger.info(f'test info:\n{get_log_info(test)}')
 
     # writing data
     os.makedirs(base_path, exist_ok=True)
@@ -519,6 +519,6 @@ def build_full_dag():
 
 dag = build_full_dag()
 
-k = 0
-# if __name__ == "__main__":
-#     main()
+
+if __name__ == "__main__":
+    main()
