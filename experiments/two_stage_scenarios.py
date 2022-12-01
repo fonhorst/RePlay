@@ -369,6 +369,9 @@ def second_level_fitting(
         second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
     )
 
+    # TODO: scenario.fit is necessary, needs PredefinedWrap as a reccomender? and emptyFeatureProcessor?
+    # TODO: or may be just apply LamaWrap to the preprocessed predicts?
+
     if second_model_type == "lama":
         second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
     else:
@@ -406,9 +409,10 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
 
     dfs = [spark.read.parquet(path) for path in partial_datasets_paths]
 
+    # TODO: restore this check later
     # check that all dataframes have the same size
-    lengths = set(df.count() for df in dfs)
-    assert len(lengths) == 1 and next(iter(lengths)) > 0, f"Invalid lengths of datasets: {lengths}"
+    # lengths = set(df.count() for df in dfs)
+    # assert len(lengths) == 1 and next(iter(lengths)) > 0, f"Invalid lengths of datasets: {lengths}"
 
     # strip all duplicate columns
     no_duplicate_columns_dfs = [
@@ -424,10 +428,11 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
     df = functools.reduce(lambda acc, x: acc.join(x, on=["user_idx", "item_idx"]), no_duplicate_columns_dfs)
     df = df.cache()
 
-    full_size = df.count()
-    partial_size = dfs[0].count()
-    assert full_size == partial_size, \
-        f"The resulting dataset's length differs from the input datasets length: {full_size} != {partial_size}"
+    # TODO: restore it later
+    # full_size = df.count()
+    # partial_size = dfs[0].count()
+    # assert full_size == partial_size, \
+    #     f"The resulting dataset's length differs from the input datasets length: {full_size} != {partial_size}"
 
     # check the resulting dataframe for correctness (no NONEs in any field)
     invalid_values = df.select(*[

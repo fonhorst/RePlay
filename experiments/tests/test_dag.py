@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
-    combine_datasets_for_second_level
+    combine_datasets_for_second_level, _get_spark_session, second_level_fitting
 
 
 @pytest.fixture
@@ -106,32 +106,49 @@ def test_first_level_fitting(resources_path: str, user_features_path: str, item_
     # TODO: model exists
     # TODO: dataset exists
 
-    artifacts = dataclasses.replace(artifacts, uid=str(uuid.uuid4()).replace('-', ''))
+    new_artifacts = dataclasses.replace(artifacts, uid=str(uuid.uuid4()).replace('-', ''))
     next_model_class_name = "replay.models.knn.ItemKNN"
 
     first_level_fitting(
-        train_path=artifacts.train_path,
-        test_path=artifacts.test_path,
+        train_path=new_artifacts.train_path,
+        test_path=new_artifacts.test_path,
         model_class_name=next_model_class_name,
         model_kwargs={"num_neighbours": 10},
-        model_path=artifacts.model_path(next_model_class_name),
-        second_level_partial_train_path=artifacts.partial_train_path(next_model_class_name),
-        first_level_model_predictions_path=artifacts.predictions_path(next_model_class_name),
+        model_path=new_artifacts.model_path(next_model_class_name),
+        second_level_partial_train_path=new_artifacts.partial_train_path(next_model_class_name),
+        first_level_model_predictions_path=new_artifacts.predictions_path(next_model_class_name),
         k=10,
         intermediate_datasets_mode="use",
         predefined_train_and_positives_path=(
-            artifacts.first_level_train_path,
-            artifacts.second_level_positives_path
+            new_artifacts.first_level_train_path,
+            new_artifacts.second_level_positives_path
         ),
-        predefined_negatives_path=artifacts.negatives_path,
+        predefined_negatives_path=new_artifacts.negatives_path,
         item_features_path=item_features_path,
         user_features_path=user_features_path
     )
 
-    assert os.path.exists(artifacts.model_path(next_model_class_name))
-    assert os.path.exists(artifacts.partial_train_path(next_model_class_name))
-    assert os.path.exists(artifacts.predictions_path(next_model_class_name))
+    assert os.path.exists(new_artifacts.model_path(next_model_class_name))
+    assert os.path.exists(new_artifacts.partial_train_path(next_model_class_name))
+    assert os.path.exists(new_artifacts.predictions_path(next_model_class_name))
 
+    # TODO: restore this checking later
+    # spark = _get_spark_session()
+    #
+    # ptrain_1_df = spark.read.parquet(artifacts.partial_train_path(model_class_name))
+    # ppreds_1_df = spark.read.parquet(artifacts.predictions_path(model_class_name))
+    # ptrain_2_df = spark.read.parquet(new_artifacts.partial_train_path(next_model_class_name))
+    # ppreds_2_df = spark.read.parquet(new_artifacts.predictions_path(next_model_class_name))
+    #
+    # assert ptrain_1_df.count() == ptrain_2_df.count()
+    # assert ppreds_1_df.count() == ppreds_2_df.count()
+    #
+    # pt_uniques_1_df = ptrain_1_df.select("user_idx", "item_idx").distinct()
+    # pt_uniques_2_df = ptrain_2_df.select("user_idx", "item_idx").distinct()
+    #
+    # assert ptrain_1_df.count() == pt_uniques_1_df.join(pt_uniques_2_df, on=["user_idx", "item_idx"]).count()
+    #
+    # spark.stop()
     # TODO: both datasets can be combined
 
 
@@ -174,14 +191,30 @@ def test_combine_datasets(artifacts: ArtifactPaths):
     assert os.path.exists(artifacts.full_first_level_predictions_path)
 
 
-# def second_level_fitting():
-#     # first run
-#     # TODO: model exists
-#     # TODO: dataset exists
-#
-#     # second run
-#     # TODO: model exists
-#     # TODO: dataset exists
-#
-#     # TODO: both datasets can be combined
-#     pass
+def test_second_level_fitting(artifacts: ArtifactPaths):
+    shutil.rmtree(artifacts.base_path, ignore_errors=True)
+    shutil.copytree("/opt/data/test_exp_folder_second_model", artifacts.base_path)
+
+    second_level_fitting(
+        model_name="test_lama_model",
+        train_path=artifacts.train_path,
+        test_path=artifacts.test_path,
+        final_second_level_train_path=artifacts.full_first_level_train_path,
+        test_candidate_features_path=artifacts.full_first_level_predictions_path,
+        second_level_model_path=artifacts.second_level_model_path,
+        second_level_predictions_path=artifacts.second_level_predictions_path,
+        k=10,
+        second_model_type="lama",
+        second_model_params={
+            "general_params": {"use_algos": [["lgb"]]},
+            # "lgb_params": {
+            #     'default_params': {'numIteration': 10}
+            # },
+            "reader_params": {"cv": 3, "advanced_roles": False}
+        },
+        second_model_config_path=None
+    )
+
+    # TODO: restore this test later
+    # assert os.path.exists(artifacts.second_level_model_path)
+    assert os.path.exists(artifacts.second_level_predictions_path)
