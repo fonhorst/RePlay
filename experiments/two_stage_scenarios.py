@@ -153,10 +153,8 @@ class CustomTwoStageScenario(TwoStagesScenario):
         if self.predefined_negatives is not None and isinstance(self.predefined_negatives, DataFrame):
             return self.predefined_negatives
 
-        kwargs = locals()
-        kwargs.pop("self")
-
-        negative_candidates = super()._get_first_level_candidates(**kwargs)
+        negative_candidates = super()._get_first_level_candidates(model, log, k, users,
+                                                                  items, user_features, item_features, log_to_filter)
 
         if self.predefined_negatives is not None and isinstance(self.predefined_negatives, str):
             negative_candidates.write.parquet(self.predefined_negatives)
@@ -232,6 +230,12 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
 def dataset_splitting(log_path: str, base_path: str, train_path: str, test_path: str, cores: int):
     spark = _get_spark_session()
     data = spark.read.csv(log_path, header=True)
+    data = (
+        data
+        .withColumn('user_id', sf.col('user_id').cast('int'))
+        .withColumn('item_id', sf.col('item_id').cast('int'))
+        .withColumn('timestamp', sf.col('timestamp').cast('int'))
+    )
 
     # splitting on train and test
     preparator = DataPreparator()
@@ -262,6 +266,9 @@ def dataset_splitting(log_path: str, base_path: str, train_path: str, test_path:
 
     # writing data
     os.makedirs(base_path, exist_ok=True)
+
+    assert train.count() > 0
+    assert test.count() > 0
 
     train.write.parquet(train_path)
     test.write.parquet(test_path)
@@ -298,8 +305,11 @@ def first_level_fitting(
         predefined_train_and_positives = predefined_train_and_positives_path
         predefined_negatives = predefined_negatives_path
 
-    item_features = spark.read.csv(item_features_path, header=True) if item_features_path is not None else None
-    user_features = spark.read.csv(user_features_path, header=True) if user_features_path is not None else None
+    item_features = spark.read.csv(item_features_path, header=True).withColumnRenamed('item_id', 'item_idx') if item_features_path is not None else None
+    user_features = spark.read.csv(user_features_path, header=True).withColumnRenamed('user_id', 'user_idx') if user_features_path is not None else None
+
+    item_features = item_features.withColumn('item_idx', sf.col('item_idx').cast('int'))
+    user_features = user_features.withColumn('user_idx', sf.col('user_idx').cast('int'))
 
     # 1. replaces train splitting with pre-splitted data
     # 2. dumps the second level train dataset
@@ -402,19 +412,24 @@ class ArtifactPaths:
     base_path: str
 
     @property
-    def train_path(self):
+    def train_path(self) -> str:
         return os.path.join(self.base_path, "train.parquet")
 
     @property
-    def test_path(self):
+    def test_path(self) -> str:
         return os.path.join(self.base_path, "test.parquet")
 
     @property
-    def first_level_train_path(self):
+    def first_level_train_path(self) -> str:
         return os.path.join(self.base_path, "first_level_train.parquet")
 
-    second_level_positives_path: str = "second_level_positives.parquet"
-    negatives_path: str = "second_level_negatives.parquet"
+    @property
+    def second_level_positives_path(self) -> str:
+        return os.path.join(self.base_path, "second_level_positives.parquet")
+
+    @property
+    def negatives_path(self) -> str:
+        return os.path.join(self.base_path, "second_level_negatives.parquet")
 
     def model_path(self, model_cls_name: str) -> str:
         return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}")
@@ -425,10 +440,21 @@ class ArtifactPaths:
     def predictions_path(self, model_cls_name: str) -> str:
         return os.path.join(self.base_path, f"predictions_{model_cls_name.replace('.', '__')}.parquet")
 
-    full_first_level_train_path = "full_first_to_second_train.parquet"
-    full_first_level_predictions_path = "full_first_to_second_predictions.parquet"
-    second_level_model_path = "second_level_model"
-    second_level_predictions_path = "second_level_predictions.parquet"
+    @property
+    def full_first_level_train_path(self) -> str:
+        return os.path.join(self.base_path, "full_first_to_second_train.parquet")
+
+    @property
+    def full_first_level_predictions_path(self) -> str:
+        return os.path.join(self.base_path, "full_first_to_second_predictions.parquet")
+
+    @property
+    def second_level_model_path(self) -> str:
+        return os.path.join(self.base_path, "second_level_model")
+
+    @property
+    def second_level_predictions_path(self) -> str:
+        return os.path.join(self.base_path, "second_level_predictions.parquet")
 
 
 @dag(
