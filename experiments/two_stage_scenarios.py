@@ -15,8 +15,9 @@ from rs_datasets import MovieLens
 
 from replay.data_preparator import DataPreparator
 from replay.experiment import Experiment
+from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import MAP, NDCG, HitRate
-from replay.model_handler import save
+from replay.model_handler import save, PopRec, Splitter, load
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
@@ -101,45 +102,92 @@ def main():
 
 
 class EmptyWrap(ReRanker):
-    def __init__(self, second_level_train_path: Optional[str] = None):
-        self.second_level_train_path = second_level_train_path
-
     def fit(self, data: DataFrame, fit_params: Optional[Dict] = None) -> None:
-        if self.second_level_train_path is not None:
-            data.write.parquet(self.second_level_train_path)
+        pass
 
     def predict(self, data, k) -> DataFrame:
         return data
 
 
-class CustomTwoStageScenario(TwoStagesScenario):
-    def __init__(self,
-                 predefined_train_and_positives: Optional[Union[Tuple[DataFrame, DataFrame], Tuple[str, str]]] = None,
-                 predefined_negatives: Optional[Union[DataFrame, str]] = None,
-                 predefined_test_candidate_features: Optional[DataFrame] = None,
-                 empty_second_stage_params: Optional[Dict] = None,
-                 **kwargs):
-        super().__init__(**kwargs)
-        self.predefined_train_and_positives = predefined_train_and_positives
-        self.predefined_negatives = predefined_negatives
-        self.predefined_test_candidate_features = predefined_test_candidate_features
-        self._is_already_dumped = False
+class EmptyRecommender(BaseRecommender):
+    @property
+    def _init_args(self):
+        return dict()
 
-        if empty_second_stage_params is not None:
-            self.second_stage_model = EmptyWrap(**empty_second_stage_params)
+    def _fit(self, log: DataFrame, user_features: Optional[DataFrame] = None,
+             item_features: Optional[DataFrame] = None) -> None:
+        pass
+
+    def _predict(self, log: DataFrame, k: int, users: DataFrame, items: DataFrame,
+                 user_features: Optional[DataFrame] = None, item_features: Optional[DataFrame] = None,
+                 filter_seen_items: bool = True) -> DataFrame:
+        return log.select("user_idx", "item_idx", sf.lit(0.0).alias("relevance"))
+
+    def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
+                           candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:
+        return None
+
+
+class RefitableTwoStageScenario(TwoStagesScenario):
+    def __init__(self,
+                 base_path: str,
+                 train_splitter: Splitter = UserSplitter(
+                     item_test_size=0.5, shuffle=True, seed=42
+                 ),
+                 fallback_model: Optional[BaseRecommender] = PopRec(),
+                 use_first_level_models_feat: Union[List[bool], bool] = True,
+                 num_negatives: int = 100,
+                 negatives_type: str = "first_level",
+                 use_generated_features: bool = True,
+                 user_cat_features_list: Optional[List] = None,
+                 item_cat_features_list: Optional[List] = None,
+                 custom_features_processor: HistoryBasedFeaturesProcessor = None,
+                 seed: int = 123,
+                 ):
+        super().__init__(
+            train_splitter=train_splitter,
+            first_level_models=[EmptyRecommender()],
+            fallback_model=fallback_model,
+            use_first_level_models_feat=use_first_level_models_feat,
+            second_model_params=None,
+            second_model_config_path=None,
+            num_negatives=num_negatives,
+            negatives_type=negatives_type,
+            use_generated_features=use_generated_features,
+            user_cat_features_list=user_cat_features_list,
+            item_cat_features_list=item_cat_features_list,
+            custom_features_processor=custom_features_processor,
+            seed=seed
+        )
+        self._first_level_train_path = os.path.join(base_path, "first_level_train.parquet")
+        self._second_level_positive_path = os.path.join(base_path, "second_level_positive.parquet")
+        self._first_level_candidates_path = os.path.join(base_path, "first_level_candidates.parquet")
+
+        self._are_split_data_dumped = False
+        self._are_candidates_dumped = False
+
+        self._return_candidates_with_positives = False
+
+    @property
+    def candidates_with_positives(self) -> bool:
+        return self._return_candidates_with_positives
+
+    @candidates_with_positives.setter
+    def candidates_with_positives(self, val: bool):
+        self._return_candidates_with_positives = val
 
     def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
-        if self.predefined_train_and_positives is not None and isinstance(self.predefined_train_and_positives[0], DataFrame):
-            return self.predefined_train_and_positives
+        if self._are_split_data_dumped:
+            spark = log.sql_ctx.sparkSession
+            return spark.read.parquet(self._first_level_train_path), \
+                   spark.read.parquet(self._second_level_positive_path)
 
-        first_level_train, second_level_positives = super()._split_data(log)
+        first_level_train, second_level_positive = super()._split_data(log)
 
-        if self.predefined_train_and_positives is not None and isinstance(self.predefined_train_and_positives[0], str):
-            first_level_train_path, second_level_positives_path = self.predefined_train_and_positives
-            first_level_train.write.parquet(first_level_train_path)
-            second_level_positives.write.parquet(second_level_positives_path)
+        first_level_train.write.parquet(self._first_level_train_path)
+        second_level_positive.write.parquet(self._second_level_positive_path)
 
-        return first_level_train, second_level_positives
+        return first_level_train, second_level_positive
 
     def _get_first_level_candidates(
         self,
@@ -152,57 +200,156 @@ class CustomTwoStageScenario(TwoStagesScenario):
         item_features: DataFrame,
         log_to_filter: DataFrame,
     ) -> DataFrame:
-        if self.predefined_negatives is not None and isinstance(self.predefined_negatives, DataFrame):
-            return self.predefined_negatives
+        if self._are_candidates_dumped:
+            spark = log.sql_ctx.sparkSession
+            first_level_candidates = spark.read.parquet(self._first_level_candidates_path)
 
-        negative_candidates = super()._get_first_level_candidates(model, log, k, users,
+            if self.candidates_with_positives:
+                assert self._are_split_data_dumped, "Cannot do that without dumped second level positives"
+                second_level_positive = spark.read.parquet(self._second_level_positive_path)
+                first_level_candidates = (
+                    first_level_candidates.join(
+                        second_level_positive.select(
+                            "user_idx", "item_idx"
+                        ).withColumn("target", sf.lit(1.0)),
+                        on=["user_idx", "item_idx"],
+                        how="left",
+                    ).fillna(0.0, subset="target")
+                )
+
+            return first_level_candidates
+
+        first_level_candidates = super()._get_first_level_candidates(model, log, k, users,
                                                                   items, user_features, item_features, log_to_filter)
 
-        if self.predefined_negatives is not None \
-                and isinstance(self.predefined_negatives, str) \
-                and not self._is_already_dumped:
-            negative_candidates.write.parquet(self.predefined_negatives)
-            self._is_already_dumped = True
+        first_level_candidates.write.parquet(self._first_level_candidates_path)
 
-        return negative_candidates
-
-    def _predict(self, log: DataFrame, k: int, users: DataFrame, items: DataFrame,
-                 user_features: Optional[DataFrame] = None, item_features: Optional[DataFrame] = None,
-                 filter_seen_items: bool = True) -> DataFrame:
-
-        if self.predefined_test_candidate_features is not None:
-            return self.second_stage_model.predict(data=self.predefined_test_candidate_features, k=k)
-
-        return super()._predict(log, k, users, items, user_features, item_features, filter_seen_items)
+        return first_level_candidates
 
 
-def _get_scenario(
-        model_class_name: str,
-        model_kwargs: Dict,
-        predefined_train_and_positives: Optional[Union[Tuple[DataFrame, DataFrame], Tuple[str, str]]] = None,
-        predefined_negatives: Optional[Union[DataFrame, str]] = None,
-        empty_second_stage_params: Optional[Dict] = None,
-) -> TwoStagesScenario:
+# def _get_scenario(
+#         model_class_name: str,
+#         model_kwargs: Dict,
+#         predefined_train_and_positives: Optional[Union[Tuple[DataFrame, DataFrame], Tuple[str, str]]] = None,
+#         predefined_negatives: Optional[Union[DataFrame, str]] = None,
+#         empty_second_stage_params: Optional[Dict] = None,
+# ) -> TwoStagesScenario:
+#     module_name = ".".join(model_class_name.split('.')[:-1])
+#     class_name = model_class_name.split('.')[-1]
+#     module = importlib.import_module(module_name)
+#     clazz = getattr(module, class_name)
+#     base_model = cast(BaseRecommender, clazz(**model_kwargs))
+#
+#     scenario = CustomTwoStageScenario(
+#         predefined_train_and_positives=predefined_train_and_positives,
+#         predefined_negatives=predefined_negatives,
+#         empty_second_stage_params=empty_second_stage_params,
+#         train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
+#         first_level_models=base_model,
+#         second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
+#     )
+#
+#     return scenario
+@dataclass(frozen=True)
+class ArtifactPaths:
+    base_path: str
+    log_path: str
+    user_features_path: Optional[str] = None
+    item_features_path: Optional[str] = None
+    uid: str = f"{uuid.uuid4()}".replace('-', '')
+    partial_train_prefix: str = "partial_train"
+    partial_predict_prefix: str = "partial_predict"
+
+    @property
+    def train_path(self) -> str:
+        return os.path.join(self.base_path, "train.parquet")
+
+    @property
+    def test_path(self) -> str:
+        return os.path.join(self.base_path, "test.parquet")
+
+    @property
+    def two_stage_scenario_path(self) -> str:
+        return os.path.join(self.base_path, "two_stage_scenario")
+
+    @property
+    def partial_train_paths(self) -> List[str]:
+        return [path for path in os.listdir(self.base_path) if path.startswith(self.partial_train_prefix)]
+
+    @property
+    def partial_predicts_paths(self) -> List[str]:
+        return [path for path in os.listdir(self.base_path) if path.startswith(self.partial_predict_prefix)]
+
+    @property
+    def full_second_level_train_path(self) -> str:
+        return os.path.join(self.base_path, "full_first_to_second_train.parquet")
+
+    @property
+    def log(self) -> DataFrame:
+        return (
+            self._get_session().read.csv(self.log_path, header=True)
+        )
+
+    @property
+    def user_features(self) -> Optional[DataFrame]:
+        return (
+            self._get_session().read.csv(self.user_features_path, header=True)
+            .withColumnRenamed('user_id', 'user_idx')
+            .withColumn('user_idx', sf.col('user_idx').cast('int'))
+            .drop('_c0')
+        )
+
+    @property
+    def item_features(self) -> Optional[DataFrame]:
+        return (
+            self._get_session().read.csv(self.user_features_path, header=True)
+            .withColumnRenamed('item_id', 'item_idx')
+            .withColumn('item_idx', sf.col('item_idx').cast('int'))
+            .drop('_c0')
+        )
+
+    @property
+    def train(self) -> DataFrame:
+        return self._get_session().read.parquet(self.train_path)
+
+    @property
+    def test(self) -> DataFrame:
+        return self._get_session().read.parquet(self.test_path)
+
+    @property
+    def full_second_level_train(self) -> DataFrame:
+        return self._get_session().read.parquet(self.full_second_level_train_path)
+
+    def model_path(self, model_cls_name: str) -> str:
+        return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
+
+    def partial_train_path(self, model_cls_name: str) -> str:
+        return os.path.join(self.base_path,
+                            f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
+
+    def partial_predicts_path(self, model_cls_name: str):
+        return os.path.join(self.base_path,
+                            f"{self.partial_predict_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
+
+    def second_level_model_path(self, model_name: str) -> str:
+        return os.path.join(self.base_path, f"second_level_model_{model_name}")
+
+    def _get_session(self) -> SparkSession:
+        return SparkSession.getActiveSession()
+
+
+def _get_spark_session() -> SparkSession:
+    return SparkSession.builder.master("local[6]").getOrCreate()
+
+
+def _get_model(model_class_name: str, model_kwargs: Dict) -> BaseRecommender:
     module_name = ".".join(model_class_name.split('.')[:-1])
     class_name = model_class_name.split('.')[-1]
     module = importlib.import_module(module_name)
     clazz = getattr(module, class_name)
     base_model = cast(BaseRecommender, clazz(**model_kwargs))
 
-    scenario = CustomTwoStageScenario(
-        predefined_train_and_positives=predefined_train_and_positives,
-        predefined_negatives=predefined_negatives,
-        empty_second_stage_params=empty_second_stage_params,
-        train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
-        first_level_models=base_model,
-        second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
-    )
-
-    return scenario
-
-
-def _get_spark_session() -> SparkSession:
-    return SparkSession.builder.master("local[6]").getOrCreate()
+    return base_model
 
 
 def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFrame):
@@ -232,11 +379,11 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
 
 
 @task
-def dataset_splitting(log_path: str, base_path: str, train_path: str, test_path: str, cores: int):
-    spark = _get_spark_session()
-    data = spark.read.csv(log_path, header=True)
+def dataset_splitting(artifacts: ArtifactPaths, cores: int):
+    _ = _get_spark_session()
+
     data = (
-        data
+        artifacts.log
         .withColumn('user_id', sf.col('user_id').cast('int'))
         .withColumn('item_id', sf.col('item_id').cast('int'))
         .withColumn('timestamp', sf.col('timestamp').cast('int'))
@@ -270,147 +417,68 @@ def dataset_splitting(log_path: str, base_path: str, train_path: str, test_path:
     logger.info(f'test info:\n{get_log_info(test)}')
 
     # writing data
-    os.makedirs(base_path, exist_ok=True)
+    os.makedirs(artifacts.base_path, exist_ok=True)
 
     assert train.count() > 0
     assert test.count() > 0
 
-    train.write.parquet(train_path)
-    test.write.parquet(test_path)
+    train.drop('_c0').write.parquet(artifacts.train_path)
+    test.drop('_c0').write.parquet(artifacts.test_path)
+
+
+def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
+    scenario = RefitableTwoStageScenario(base_path=artifacts.base_path)
+
+    scenario.fit(log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features)
+
+    save(scenario, artifacts.two_stage_scenario_path)
 
 
 # this is @task
 def first_level_fitting(
-        train_path: str,
-        test_path: str,
+        artifacts: ArtifactPaths,
         model_class_name: str,
         model_kwargs: Dict,
-        model_path: str,
-        second_level_partial_train_path: str,
-        first_level_model_predictions_path: str,
-        k: int,
-        intermediate_datasets_mode: str = "use",
-        predefined_train_and_positives_path: Optional[Tuple[str, str]] = None,
-        predefined_negatives_path: Optional[str] = None,
-        item_features_path: Optional[str] = None,
-        user_features_path: Optional[str] = None):
-    spark = _get_spark_session()
+        k: int):
 
-    train = spark.read.parquet(train_path).drop('_c0')
-    test = spark.read.parquet(test_path).drop('_c0')
+    _ = _get_spark_session()
 
-    if intermediate_datasets_mode == "use":
-        first_level_train_path, second_level_positives_path = predefined_train_and_positives_path
-        first_level_train = spark.read.parquet(first_level_train_path)
-        second_level_positives = spark.read.parquet(second_level_positives_path)
+    scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
+    scenario.first_level_models = [_get_model(model_class_name, model_kwargs)]
 
-        predefined_train_and_positives = first_level_train, second_level_positives
-        predefined_negatives = spark.read.parquet(predefined_negatives_path)
-    else:
-        predefined_train_and_positives = predefined_train_and_positives_path
-        predefined_negatives = predefined_negatives_path
-
-    item_features = spark.read.csv(item_features_path, header=True).withColumnRenamed('item_id', 'item_idx') if item_features_path is not None else None
-    user_features = spark.read.csv(user_features_path, header=True).withColumnRenamed('user_id', 'user_idx') if user_features_path is not None else None
-
-    item_features = item_features.withColumn('item_idx', sf.col('item_idx').cast('int')).drop('_c0')
-    user_features = user_features.withColumn('user_idx', sf.col('user_idx').cast('int')).drop('_c0')
-
-    # 1. replaces train splitting with pre-splitted data
-    # 2. dumps the second level train dataset
-    # 3. dumps or uses negative_samples
-    scenario = _get_scenario(
-        model_class_name=model_class_name,
-        model_kwargs=model_kwargs,
-        predefined_train_and_positives=predefined_train_and_positives,
-        predefined_negatives=predefined_negatives,
-        empty_second_stage_params={
-            "second_level_train_path": second_level_partial_train_path
-        }
-    )
+    train = artifacts.train.cache()
+    user_features = artifacts.user_features.cache()
+    item_features = artifacts.item_features.cache()
 
     scenario.fit(log=train, user_features=user_features, item_features=item_features)
 
-    # saving the trained first-level model
-    model = scenario.first_level_models[0]
-    save(model, model_path)
+    save(scenario.first_level_models[0], artifacts.model_path(model_class_name))
 
     # because of EmptyWrap this is still predictions from the first level
     # (though with all prepared features required on the second level)
-    recs = scenario.predict(
-        log=train,
-        k=k,
-        users=test.select('user_idx').distinct(),
-        filter_seen_items=True,
-        user_features=user_features,
-        item_features=item_features
-    )
+    scenario.candidates_with_positives = True
+    recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
+                            filter_seen_items=True, user_features=user_features, item_features=item_features)
+    recs.write.parquet(artifacts.partial_train_path(model_class_name))
 
-    # recs = scenario._predict(
-    #     log=train,
-    #     k=k,
-    #     users=test.select('user_idx').distinct(),
-    #     user_features=user_features,
-    #     item_features=item_features,
-    #     filter_seen_items = True,
-    # )
+    # getting first level predictions that can be re-evaluated by the second model
+    scenario.candidates_with_positives = False
+    recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
+                            filter_seen_items=True, user_features=user_features, item_features=item_features)
+    recs.write.parquet(artifacts.partial_predicts_path(model_class_name))
 
-    recs.write.parquet(first_level_model_predictions_path)
+    train.unpersist()
+    user_features.unpersist()
+    item_features.unpersist()
 
 
 # this is @task
-def second_level_fitting(
-        model_name: str,
-        train_path: str,
-        test_path: str,
-        user_features_path: str,
-        final_second_level_train_path: str,
-        test_candidate_features_path: str,
-        second_level_model_path: str,
-        second_level_predictions_path: str,
-        k: int,
-        second_model_type: str = "lama",
-        second_model_params: Optional[Union[Dict, str]] = None,
-        second_model_config_path: Optional[str] = None):
-    spark = _get_spark_session()
-
-    scenario = CustomTwoStageScenario(
-        train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
-        second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
-    )
-
-    # TODO: scenario.fit is necessary, needs PredefinedWrap as a reccomender? and emptyFeatureProcessor?
-    # TODO: or may be just apply LamaWrap to the preprocessed predicts?
-
-    if second_model_type == "lama":
-        second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
-    else:
-        raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
-
-    train = spark.read.parquet(train_path)
-    test = spark.read.parquet(test_path)
-    second_level_train = spark.read.parquet(final_second_level_train_path)
-    test_candidate_features = spark.read.parquet(test_candidate_features_path)
-    user_features = spark.read.csv(user_features_path, header=True).withColumn('user_idx', sf.col('user_id').cast('int'))
-
-    second_stage_model.fit(second_level_train)
-
-    # TODO: save the second_model
-
-    recs = second_stage_model.predict(test_candidate_features, k=k)
-    recs = scenario._filter_seen(recs, train, k, test_candidate_features.select('user_idx').distinct())
-    recs.write.parquet(second_level_predictions_path)
-
-    _estimate_and_report_metrics(model_name, test, recs)
-
-
-# this is @task
-def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_dataset_path: str):
-    assert len(partial_datasets_paths) > 0, "Cannot work with empty sequence of paths"
+def combine_datasets_for_second_level(artifacts: ArtifactPaths):
+    assert len(artifacts.partial_train_paths) > 0, "Cannot work with empty sequence of paths"
 
     spark = _get_spark_session()
 
-    dfs = [spark.read.parquet(path) for path in partial_datasets_paths]
+    dfs = [spark.read.parquet(path) for path in artifacts.partial_train_paths]
 
     # TODO: restore this check later
     # check that all dataframes have the same size
@@ -451,61 +519,42 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
     assert not has_invalid_values, \
         f"Found records with invalid values in feature columns: {invalid_values}"
 
-    df.write.parquet(full_dataset_path)
+    df.write.parquet(artifacts.full_second_level_train_path)
     df.unpersist()
 
 
-@dataclass(frozen=True)
-class ArtifactPaths:
-    base_path: str
-    uid: str = f"{uuid.uuid4()}".replace('-', '')
-    partial_train_prefix: str = "partial_train"
-    partial_predictions_prefix: str = "predictions"
+# this is @task
+def second_level_fitting(
+        artifacts: ArtifactPaths,
+        model_name: str,
+        k: int,
+        second_model_type: str = "lama",
+        second_model_params: Optional[Union[Dict, str]] = None,
+        second_model_config_path: Optional[str] = None):
+    spark = _get_spark_session()
 
-    @property
-    def train_path(self) -> str:
-        return os.path.join(self.base_path, "train.parquet")
+    # scenario = RefitableTwoStageScenario(
+    #     train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
+    #     second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
+    # )
 
-    @property
-    def test_path(self) -> str:
-        return os.path.join(self.base_path, "test.parquet")
+    # TODO: scenario.fit is necessary, needs PredefinedWrap as a reccomender? and emptyFeatureProcessor?
+    # TODO: or may be just apply LamaWrap to the preprocessed predicts?
 
-    @property
-    def first_level_train_path(self) -> str:
-        return os.path.join(self.base_path, "first_level_train.parquet")
+    if second_model_type == "lama":
+        second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
+    else:
+        raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
 
-    @property
-    def second_level_positives_path(self) -> str:
-        return os.path.join(self.base_path, "second_level_positives.parquet")
+    second_stage_model.fit(artifacts.full_second_level_train)
 
-    @property
-    def negatives_path(self) -> str:
-        return os.path.join(self.base_path, "second_level_negatives.parquet")
+    # TODO: save the second_model
 
-    def model_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
+    recs = second_stage_model.predict(artifacts.full_second_level_train, k=k)
+    recs = scenario._filter_seen(recs, train, k, test_candidate_features.select('user_idx').distinct())
+    recs.write.parquet(second_level_predictions_path)
 
-    def partial_train_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
-
-    def predictions_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"{self.partial_predictions_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
-
-    @property
-    def full_first_level_train_path(self) -> str:
-        return os.path.join(self.base_path, "full_first_to_second_train.parquet")
-
-    @property
-    def full_first_level_predictions_path(self) -> str:
-        return os.path.join(self.base_path, "full_first_to_second_predictions.parquet")
-
-    @property
-    def second_level_model_path(self) -> str:
-        return os.path.join(self.base_path, "second_level_model")
-
-    @property
-    def second_level_predictions_path(self) -> str:
-        return os.path.join(self.base_path, "second_level_predictions.parquet")
+    _estimate_and_report_metrics(model_name, test, recs)
 
 
 @dag(
@@ -586,7 +635,7 @@ def build_full_dag():
 
     combine_first_level_partial_trains = task(task_id="combine_partial_trains")(combine_datasets_for_second_level)(
         partial_datasets_paths=[artifacts.partial_train_path(model_class_name) for model_class_name in models],
-        full_dataset_path=artifacts.full_first_level_train_path
+        full_dataset_path=artifacts.full_second_level_train_path
     )
 
     combine_first_level_partial_tests = task(task_id="combine_partial_tests")(combine_datasets_for_second_level)(
@@ -602,7 +651,7 @@ def build_full_dag():
             train_path=artifacts.train_path,
             test_path=artifacts.test_path,
             user_features_path=user_features_path,
-            final_second_level_train_path=artifacts.full_first_level_train_path,
+            final_second_level_train_path=artifacts.full_second_level_train_path,
             test_candidate_features_path=artifacts.full_first_level_predictions_path,
             second_level_model_path=artifacts.second_level_model_path,
             second_level_predictions_path=artifacts.second_level_predictions_path,
