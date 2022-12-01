@@ -154,4 +154,4 @@ metastore_db/
 
 .vscode
 
- experiments/tests/mlruns/
+experiments/tests/mlruns

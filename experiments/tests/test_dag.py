@@ -6,7 +6,8 @@ import uuid
 
 import pytest
 
-from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths
+from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
+    combine_datasets_for_second_level
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ def artifacts() -> ArtifactPaths:
 
     yield ArtifactPaths(base_path=path)
 
-    shutil.rmtree(path, ignore_errors=True)
+    # shutil.rmtree(path, ignore_errors=True)
 
 
 def test_data_splitting(log_path: str, artifacts: ArtifactPaths):
@@ -67,17 +68,19 @@ def test_first_level_fitting(resources_path: str, user_features_path: str, item_
     shutil.copytree(os.path.join(resources_path, "train.parquet"), artifacts.train_path)
     shutil.copytree(os.path.join(resources_path, "test.parquet"), artifacts.test_path)
 
-    model_class_name = "replay.models.knn.ItemKNN"
+    # alternative
+    # model_class_name = "replay.models.knn.ItemKNN"
+    # model_kwargs = {"num_neighbours": 10}
 
     # alternative
-    # model_class_name = "replay.models.als.ALSWrap"
-    # model_kwargs={"rank": 10}
+    model_class_name = "replay.models.als.ALSWrap"
+    model_kwargs={"rank": 10}
 
     first_level_fitting(
         train_path=artifacts.train_path,
         test_path=artifacts.test_path,
         model_class_name=model_class_name,
-        model_kwargs={"num_neighbours": 10},
+        model_kwargs=model_kwargs,
         model_path=artifacts.model_path(model_class_name),
         second_level_partial_train_path=artifacts.partial_train_path(model_class_name),
         first_level_model_predictions_path=artifacts.predictions_path(model_class_name),
@@ -131,11 +134,47 @@ def test_first_level_fitting(resources_path: str, user_features_path: str, item_
 
     # TODO: both datasets can be combined
 
-#
-# def test_combine_datasets():
-#     # TODO: dataset exists
-#     # TODO: no Nones
-#     pass
+
+def test_combine_datasets(artifacts: ArtifactPaths):
+    # the test's preparation
+    shutil.rmtree(artifacts.base_path, ignore_errors=True)
+    shutil.copytree("/opt/data/test_exp_folder_combine", artifacts.base_path)
+
+    partial_trains = sorted([
+        os.path.join(artifacts.base_path, path) for path in os.listdir(artifacts.base_path)
+        if path.startswith(artifacts.partial_train_prefix)
+    ])
+    partial_predictions = sorted([
+        os.path.join(artifacts.base_path, path) for path in os.listdir(artifacts.base_path)
+        if path.startswith(artifacts.partial_predictions_prefix)
+    ])
+
+    assert len(partial_trains) > 1
+    assert len(partial_trains) == len(partial_predictions)
+
+    # actual test
+
+    # checking combining of two datasets
+    combine_datasets_for_second_level(partial_trains, artifacts.full_first_level_train_path)
+
+    assert os.path.exists(artifacts.full_first_level_train_path)
+
+    combine_datasets_for_second_level(partial_predictions, artifacts.full_first_level_predictions_path)
+
+    assert os.path.exists(artifacts.full_first_level_predictions_path)
+
+    # checking combining if there is only one dataset
+    shutil.rmtree(artifacts.full_first_level_train_path, ignore_errors=True)
+    shutil.rmtree(artifacts.full_first_level_predictions_path, ignore_errors=True)
+
+    combine_datasets_for_second_level(partial_trains[:1], artifacts.full_first_level_train_path)
+    combine_datasets_for_second_level(partial_predictions[:1], artifacts.full_first_level_predictions_path)
+
+    assert os.path.exists(artifacts.full_first_level_train_path)
+    assert os.path.exists(artifacts.full_first_level_predictions_path)
+    # TODO: dataset exists
+    # TODO: no Nones
+    pass
 
 
 # def second_level_fitting():

@@ -416,6 +416,8 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
 class ArtifactPaths:
     base_path: str
     uid: str = f"{uuid.uuid4()}".replace('-', '')
+    partial_train_prefix: str = "partial_train"
+    partial_predictions_prefix: str = "predictions"
 
     @property
     def train_path(self) -> str:
@@ -441,10 +443,10 @@ class ArtifactPaths:
         return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
 
     def partial_train_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"partial_train_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
+        return os.path.join(self.base_path, f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
 
     def predictions_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"predictions_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
+        return os.path.join(self.base_path, f"{self.partial_predictions_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
 
     @property
     def full_first_level_train_path(self) -> str:
