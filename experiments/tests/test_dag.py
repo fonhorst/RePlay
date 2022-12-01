@@ -171,27 +171,25 @@ def test_combine_datasets(artifacts: ArtifactPaths):
 
     # actual test
 
-    # checking combining of two datasets
-    combine_datasets_for_second_level(partial_trains, artifacts.full_first_level_train_path)
-
-    assert os.path.exists(artifacts.full_first_level_train_path)
-
-    combine_datasets_for_second_level(partial_predictions, artifacts.full_first_level_predictions_path)
-
-    assert os.path.exists(artifacts.full_first_level_predictions_path)
-
     # checking combining if there is only one dataset
-    shutil.rmtree(artifacts.full_first_level_train_path, ignore_errors=True)
-    shutil.rmtree(artifacts.full_first_level_predictions_path, ignore_errors=True)
-
     combine_datasets_for_second_level(partial_trains[:1], artifacts.full_first_level_train_path)
     combine_datasets_for_second_level(partial_predictions[:1], artifacts.full_first_level_predictions_path)
 
     assert os.path.exists(artifacts.full_first_level_train_path)
     assert os.path.exists(artifacts.full_first_level_predictions_path)
 
+    shutil.rmtree(artifacts.full_first_level_train_path, ignore_errors=True)
+    shutil.rmtree(artifacts.full_first_level_predictions_path, ignore_errors=True)
 
-def test_second_level_fitting(artifacts: ArtifactPaths):
+    # checking combining of two datasets
+    combine_datasets_for_second_level(partial_trains, artifacts.full_first_level_train_path)
+    combine_datasets_for_second_level(partial_predictions, artifacts.full_first_level_predictions_path)
+
+    assert os.path.exists(artifacts.full_first_level_train_path)
+    assert os.path.exists(artifacts.full_first_level_predictions_path)
+
+
+def test_second_level_fitting(user_features_path: str, artifacts: ArtifactPaths):
     shutil.rmtree(artifacts.base_path, ignore_errors=True)
     shutil.copytree("/opt/data/test_exp_folder_second_model", artifacts.base_path)
 
@@ -199,6 +197,7 @@ def test_second_level_fitting(artifacts: ArtifactPaths):
         model_name="test_lama_model",
         train_path=artifacts.train_path,
         test_path=artifacts.test_path,
+        user_features_path=user_features_path,
         final_second_level_train_path=artifacts.full_first_level_train_path,
         test_candidate_features_path=artifacts.full_first_level_predictions_path,
         second_level_model_path=artifacts.second_level_model_path,

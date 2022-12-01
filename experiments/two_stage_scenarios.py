@@ -346,6 +346,15 @@ def first_level_fitting(
         item_features=item_features
     )
 
+    # recs = scenario._predict(
+    #     log=train,
+    #     k=k,
+    #     users=test.select('user_idx').distinct(),
+    #     user_features=user_features,
+    #     item_features=item_features,
+    #     filter_seen_items = True,
+    # )
+
     recs.write.parquet(first_level_model_predictions_path)
 
 
@@ -354,6 +363,7 @@ def second_level_fitting(
         model_name: str,
         train_path: str,
         test_path: str,
+        user_features_path: str,
         final_second_level_train_path: str,
         test_candidate_features_path: str,
         second_level_model_path: str,
@@ -381,21 +391,14 @@ def second_level_fitting(
     test = spark.read.parquet(test_path)
     second_level_train = spark.read.parquet(final_second_level_train_path)
     test_candidate_features = spark.read.parquet(test_candidate_features_path)
+    user_features = spark.read.csv(user_features_path, header=True).withColumn('user_idx', sf.col('user_id').cast('int'))
 
     second_stage_model.fit(second_level_train)
-    scenario.second_stage_model = second_stage_model
 
     # TODO: save the second_model
 
-    recs = scenario.predict(
-        log=train,
-        k=k,
-        users=test_candidate_features.select('user_idx').distinct(),
-        filter_seen_items=True,
-        user_features=None,
-        item_features=None
-    )
-
+    recs = second_stage_model.predict(test_candidate_features, k=k)
+    recs = scenario._filter_seen(recs, train, k, test_candidate_features.select('user_idx').distinct())
     recs.write.parquet(second_level_predictions_path)
 
     _estimate_and_report_metrics(model_name, test, recs)
@@ -505,8 +508,6 @@ class ArtifactPaths:
         return os.path.join(self.base_path, "second_level_predictions.parquet")
 
 
-
-
 @dag(
     schedule=None,
     start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
@@ -600,6 +601,7 @@ def build_full_dag():
             model_name=model_name,
             train_path=artifacts.train_path,
             test_path=artifacts.test_path,
+            user_features_path=user_features_path,
             final_second_level_train_path=artifacts.full_first_level_train_path,
             test_candidate_features_path=artifacts.full_first_level_predictions_path,
             second_level_model_path=artifacts.second_level_model_path,
