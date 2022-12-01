@@ -1,6 +1,9 @@
 import os
 import shutil
 
+import dataclasses
+import uuid
+
 import pytest
 
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths
@@ -64,12 +67,17 @@ def test_first_level_fitting(resources_path: str, user_features_path: str, item_
     shutil.copytree(os.path.join(resources_path, "train.parquet"), artifacts.train_path)
     shutil.copytree(os.path.join(resources_path, "test.parquet"), artifacts.test_path)
 
-    model_class_name = "replay.models.als.ALSWrap"
+    model_class_name = "replay.models.knn.ItemKNN"
+
+    # alternative
+    # model_class_name = "replay.models.als.ALSWrap"
+    # model_kwargs={"rank": 10}
+
     first_level_fitting(
         train_path=artifacts.train_path,
         test_path=artifacts.test_path,
         model_class_name=model_class_name,
-        model_kwargs={"rank": 128},
+        model_kwargs={"num_neighbours": 10},
         model_path=artifacts.model_path(model_class_name),
         second_level_partial_train_path=artifacts.partial_train_path(model_class_name),
         first_level_model_predictions_path=artifacts.predictions_path(model_class_name),
@@ -95,6 +103,7 @@ def test_first_level_fitting(resources_path: str, user_features_path: str, item_
     # TODO: model exists
     # TODO: dataset exists
 
+    artifacts = dataclasses.replace(artifacts, uid=str(uuid.uuid4()).replace('-', ''))
     next_model_class_name = "replay.models.knn.ItemKNN"
 
     first_level_fitting(

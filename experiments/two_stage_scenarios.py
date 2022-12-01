@@ -2,6 +2,7 @@ import functools
 import importlib
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from typing import Dict, cast, Optional, List, Union, Tuple
 
@@ -122,6 +123,7 @@ class CustomTwoStageScenario(TwoStagesScenario):
         self.predefined_train_and_positives = predefined_train_and_positives
         self.predefined_negatives = predefined_negatives
         self.predefined_test_candidate_features = predefined_test_candidate_features
+        self._is_already_dumped = False
 
         if empty_second_stage_params is not None:
             self.second_stage_model = EmptyWrap(**empty_second_stage_params)
@@ -156,8 +158,11 @@ class CustomTwoStageScenario(TwoStagesScenario):
         negative_candidates = super()._get_first_level_candidates(model, log, k, users,
                                                                   items, user_features, item_features, log_to_filter)
 
-        if self.predefined_negatives is not None and isinstance(self.predefined_negatives, str):
+        if self.predefined_negatives is not None \
+                and isinstance(self.predefined_negatives, str) \
+                and not self._is_already_dumped:
             negative_candidates.write.parquet(self.predefined_negatives)
+            self._is_already_dumped = True
 
         return negative_candidates
 
@@ -291,8 +296,8 @@ def first_level_fitting(
         user_features_path: Optional[str] = None):
     spark = _get_spark_session()
 
-    train = spark.read.parquet(train_path)
-    test = spark.read.parquet(test_path)
+    train = spark.read.parquet(train_path).drop('_c0')
+    test = spark.read.parquet(test_path).drop('_c0')
 
     if intermediate_datasets_mode == "use":
         first_level_train_path, second_level_positives_path = predefined_train_and_positives_path
@@ -308,8 +313,8 @@ def first_level_fitting(
     item_features = spark.read.csv(item_features_path, header=True).withColumnRenamed('item_id', 'item_idx') if item_features_path is not None else None
     user_features = spark.read.csv(user_features_path, header=True).withColumnRenamed('user_id', 'user_idx') if user_features_path is not None else None
 
-    item_features = item_features.withColumn('item_idx', sf.col('item_idx').cast('int'))
-    user_features = user_features.withColumn('user_idx', sf.col('user_idx').cast('int'))
+    item_features = item_features.withColumn('item_idx', sf.col('item_idx').cast('int')).drop('_c0')
+    user_features = user_features.withColumn('user_idx', sf.col('user_idx').cast('int')).drop('_c0')
 
     # 1. replaces train splitting with pre-splitted data
     # 2. dumps the second level train dataset
@@ -410,6 +415,7 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
 @dataclass(frozen=True)
 class ArtifactPaths:
     base_path: str
+    uid: str = f"{uuid.uuid4()}".replace('-', '')
 
     @property
     def train_path(self) -> str:
@@ -432,13 +438,13 @@ class ArtifactPaths:
         return os.path.join(self.base_path, "second_level_negatives.parquet")
 
     def model_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}")
+        return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
 
     def partial_train_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"partial_train_{model_cls_name.replace('.', '__')}.parquet")
+        return os.path.join(self.base_path, f"partial_train_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
 
     def predictions_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"predictions_{model_cls_name.replace('.', '__')}.parquet")
+        return os.path.join(self.base_path, f"predictions_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
 
     @property
     def full_first_level_train_path(self) -> str:
@@ -455,6 +461,8 @@ class ArtifactPaths:
     @property
     def second_level_predictions_path(self) -> str:
         return os.path.join(self.base_path, "second_level_predictions.parquet")
+
+
 
 
 @dag(
