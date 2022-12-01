@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
-    combine_datasets_for_second_level, _get_spark_session, second_level_fitting
+    combine_datasets_for_second_level, _get_spark_session, second_level_fitting, _estimate_and_report_metrics
 
 
 @pytest.fixture
@@ -217,3 +217,5 @@ def test_second_level_fitting(user_features_path: str, artifacts: ArtifactPaths)
     # TODO: restore this test later
     # assert os.path.exists(artifacts.second_level_model_path)
     assert os.path.exists(artifacts.second_level_predictions_path)
+
+    _estimate_and_report_metrics()

@@ -623,11 +623,12 @@ class TwoStagesScenario(HybridRecommender):
             ),
         )
 
-        self.features_processor.fit(
-            log=first_level_train,
-            user_features=user_features,
-            item_features=item_features,
-        )
+        if not self.features_processor.fitted:
+            self.features_processor.fit(
+                log=first_level_train,
+                user_features=user_features,
+                item_features=item_features,
+            )
 
         self.logger.info("Adding features to second-level train dataset")
         second_level_train_to_convert = self._add_features_for_second_level(
