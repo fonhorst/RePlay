@@ -450,7 +450,8 @@ class BaseRecommender(ABC):
                     n = 1
                     yield row
 
-        recs = recs.rdd.mapPartitions(get_top_k).toDF(["user_idx", "item_idx", "relevance"])
+        # recs = recs.rdd.mapPartitions(get_top_k).toDF(["user_idx", "item_idx", "relevance"])
+        recs = recs.rdd.mapPartitions(get_top_k).toDF()
 
         return recs
 
