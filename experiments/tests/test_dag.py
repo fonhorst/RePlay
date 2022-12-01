@@ -172,9 +172,6 @@ def test_combine_datasets(artifacts: ArtifactPaths):
 
     assert os.path.exists(artifacts.full_first_level_train_path)
     assert os.path.exists(artifacts.full_first_level_predictions_path)
-    # TODO: dataset exists
-    # TODO: no Nones
-    pass
 
 
 # def second_level_fitting():

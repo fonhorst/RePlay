@@ -405,11 +405,46 @@ def combine_datasets_for_second_level(partial_datasets_paths: List[str], full_da
     spark = _get_spark_session()
 
     dfs = [spark.read.parquet(path) for path in partial_datasets_paths]
-    df = functools.reduce(lambda acc, x: acc.join(x, on=["user_idx", "item_idx"]), dfs)
 
-    # TODO: check the resulting dataframe for correctness (no NONEs in any field)
+    # check that all dataframes have the same size
+    lengths = set(df.count() for df in dfs)
+    assert len(lengths) == 1 and next(iter(lengths)) > 0, f"Invalid lengths of datasets: {lengths}"
+
+    # strip all duplicate columns
+    no_duplicate_columns_dfs = [
+        dfs[0],
+        *(
+            df.select("user_idx", "item_idx", *set(df.columns).difference(set(dfs[0].columns)))
+            for df in dfs[1:]
+        )
+    ]
+
+    feature_columns = set(c for df in dfs[1:] for c in set(df.columns).symmetric_difference(set(dfs[0].columns)))
+
+    df = functools.reduce(lambda acc, x: acc.join(x, on=["user_idx", "item_idx"]), no_duplicate_columns_dfs)
+    df = df.cache()
+
+    full_size = df.count()
+    partial_size = dfs[0].count()
+    assert full_size == partial_size, \
+        f"The resulting dataset's length differs from the input datasets length: {full_size} != {partial_size}"
+
+    # check the resulting dataframe for correctness (no NONEs in any field)
+    invalid_values = df.select(*[
+        sf.sum((sf.isnan(feat) | sf.isnull(feat)).cast('int')).alias(feat)
+        for feat in feature_columns
+    ]).first().asDict()
+
+    has_invalid_values = any(invalid_values[feat] > 0 for feat in feature_columns)
+
+    if has_invalid_values:
+        df.unpersist()
+
+    assert not has_invalid_values, \
+        f"Found records with invalid values in feature columns: {invalid_values}"
 
     df.write.parquet(full_dataset_path)
+    df.unpersist()
 
 
 @dataclass(frozen=True)
