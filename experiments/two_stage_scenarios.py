@@ -15,6 +15,7 @@ from airflow.utils.helpers import chain, cross_downstream
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 from rs_datasets import MovieLens
 
+import replay
 from replay.data_preparator import DataPreparator
 from replay.experiment import Experiment
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
@@ -433,6 +434,7 @@ def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
 # this is @task
 def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict, k: int):
     with _init_spark_session():
+        setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
         scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
         scenario.first_level_models = [_get_model(model_class_name, model_kwargs)]
 
