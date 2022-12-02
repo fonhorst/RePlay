@@ -2,29 +2,13 @@ import dataclasses
 import os
 import shutil
 import uuid
-from typing import Dict
 
 import pytest
-from _pytest.reports import CollectReport
-from _pytest.stash
 
+from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level
-
-
-phase_report_key = StashKey[Dict[str, CollectReport]]()
-
-
-@pytest.hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_runtest_makereport(item, call):
-    # execute all other hooks to obtain the report object
-    outcome = yield
-    rep = outcome.get_result()
-
-    # store test results for each phase of a call, which can
-    # be "setup", "call", "teardown"
-    item.stash.setdefault(phase_report_key, {})[rep.when] = rep
 
 
 @pytest.fixture
@@ -52,6 +36,8 @@ def artifacts(request) -> ArtifactPaths:
         print("setting up a test failed or skipped", request.node.nodeid)
     elif ("call" not in report) or report["call"].failed:
         print("executing test failed or skipped", request.node.nodeid)
+    else:
+        print("it is succeded")
 
     # shutil.rmtree(path, ignore_errors=True)
 
