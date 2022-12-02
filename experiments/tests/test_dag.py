@@ -1,13 +1,13 @@
+import dataclasses
 import os
 import shutil
-
-import dataclasses
 import uuid
 
 import pytest
 
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
-    combine_datasets_for_second_level, _init_spark_session, second_level_fitting, _estimate_and_report_metrics
+    second_level_fitting, _estimate_and_report_metrics, init_refitable_two_stage_scenario, \
+    combine_train_predicts_for_second_level
 
 
 @pytest.fixture
@@ -15,43 +15,28 @@ def resources_path() -> str:
     return "/opt/data/"
 
 
-@pytest.fixture
-def log_path(resources_path: str) -> str:
-    return os.path.join(resources_path, "ml100k_ratings.csv")
-
-
-@pytest.fixture
-def user_features_path(resources_path: str) -> str:
-    return os.path.join(resources_path, "ml100k_users.csv")
-
-
-@pytest.fixture
-def item_features_path(resources_path: str) -> str:
-    return os.path.join(resources_path, "ml100k_items.csv")
-
-
 @pytest.fixture(scope="function")
 def artifacts() -> ArtifactPaths:
     path = "/opt/experiments/test_exp"
+    resources_path = "/opt/data/"
 
     shutil.rmtree(path, ignore_errors=True)
     os.makedirs(path)
 
-    yield ArtifactPaths(base_path=path)
+    yield ArtifactPaths(
+        base_path=path,
+        log_path=os.path.join(resources_path, "ml100k_ratings.csv"),
+        user_features_path=os.path.join(resources_path, "ml100k_users.csv"),
+        item_features_path=os.path.join(resources_path, "ml100k_items.csv")
+    )
 
     # shutil.rmtree(path, ignore_errors=True)
 
 
-def test_data_splitting(log_path: str, artifacts: ArtifactPaths):
-
-    # assert not os.path.exists(artifacts.base_path)
-
+def test_data_splitting(artifacts: ArtifactPaths):
     dataset_splitting.function(
-        log_path=log_path,
-        base_path=artifacts.base_path,
-        train_path=artifacts.train_path,
-        test_path=artifacts.test_path,
-        partitions_num=1
+        artifacts,
+        partitions_num=4
     )
 
     assert os.path.exists(artifacts.base_path)
@@ -59,6 +44,17 @@ def test_data_splitting(log_path: str, artifacts: ArtifactPaths):
     assert os.path.exists(artifacts.test_path)
 
     # TODO: they are not empty, no crossing by ids
+
+
+def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
+    init_refitable_two_stage_scenario.function(
+        artifacts
+    )
+
+    assert os.path.exists(artifacts.two_stage_scenario_path)
+    assert os.path.exists(artifacts.base_path, "first_level_train.parquet")
+    assert os.path.exists(artifacts.base_path, "second_level_positive.parquet")
+    assert os.path.exists(artifacts.base_path, "first_level_candidates.parquet")
 
 
 def test_first_level_fitting(resources_path: str, user_features_path: str, item_features_path: str, artifacts: ArtifactPaths):
@@ -76,61 +72,22 @@ def test_first_level_fitting(resources_path: str, user_features_path: str, item_
     model_class_name = "replay.models.als.ALSWrap"
     model_kwargs={"rank": 10}
 
-    first_level_fitting(
-        train_path=artifacts.train_path,
-        test_path=artifacts.test_path,
-        model_class_name=model_class_name,
-        model_kwargs=model_kwargs,
-        model_path=artifacts.model_path(model_class_name),
-        second_level_partial_train_path=artifacts.partial_train_path(model_class_name),
-        first_level_model_predictions_path=artifacts.predictions_path(model_class_name),
-        k=10,
-        intermediate_datasets_mode="dump",
-        predefined_train_and_positives_path=(
-            artifacts.first_level_train_path,
-            artifacts.second_level_positives_path
-        ),
-        predefined_negatives_path=artifacts.negatives_path,
-        item_features_path=item_features_path,
-        user_features_path=user_features_path
-    )
+    first_level_fitting(artifacts, model_class_name, model_kwargs)
 
     assert os.path.exists(artifacts.model_path(model_class_name))
     assert os.path.exists(artifacts.partial_train_path(model_class_name))
-    assert os.path.exists(artifacts.predictions_path(model_class_name))
-    assert os.path.exists(artifacts.first_level_train_path)
-    assert os.path.exists(artifacts.second_level_positives_path)
-    assert os.path.exists(artifacts.negatives_path)
+    assert os.path.exists(artifacts.partial_predicts_path(model_class_name))
 
     # second model (use)
-    # TODO: model exists
-    # TODO: dataset exists
+    next_artifacts = dataclasses.replace(artifacts, uid=str(uuid.uuid4()).replace('-', ''))
+    next_model_class_name = "replay.models.als.ALSWrap"
+    next_model_kwargs = {"rank": 10}
 
-    new_artifacts = dataclasses.replace(artifacts, uid=str(uuid.uuid4()).replace('-', ''))
-    next_model_class_name = "replay.models.knn.ItemKNN"
+    first_level_fitting(artifacts, next_model_class_name, next_model_kwargs)
 
-    first_level_fitting(
-        train_path=new_artifacts.train_path,
-        test_path=new_artifacts.test_path,
-        model_class_name=next_model_class_name,
-        model_kwargs={"num_neighbours": 10},
-        model_path=new_artifacts.model_path(next_model_class_name),
-        second_level_partial_train_path=new_artifacts.partial_train_path(next_model_class_name),
-        first_level_model_predictions_path=new_artifacts.predictions_path(next_model_class_name),
-        k=10,
-        intermediate_datasets_mode="use",
-        predefined_train_and_positives_path=(
-            new_artifacts.first_level_train_path,
-            new_artifacts.second_level_positives_path
-        ),
-        predefined_negatives_path=new_artifacts.negatives_path,
-        item_features_path=item_features_path,
-        user_features_path=user_features_path
-    )
-
-    assert os.path.exists(new_artifacts.model_path(next_model_class_name))
-    assert os.path.exists(new_artifacts.partial_train_path(next_model_class_name))
-    assert os.path.exists(new_artifacts.predictions_path(next_model_class_name))
+    assert os.path.exists(next_artifacts.model_path(next_model_class_name))
+    assert os.path.exists(next_artifacts.partial_train_path(next_model_class_name))
+    assert os.path.exists(next_artifacts.partial_predicts_path(next_model_class_name))
 
     # TODO: restore this checking later
     # spark = _get_spark_session()
@@ -157,51 +114,21 @@ def test_combine_datasets(artifacts: ArtifactPaths):
     shutil.rmtree(artifacts.base_path, ignore_errors=True)
     shutil.copytree("/opt/data/test_exp_folder_combine", artifacts.base_path)
 
-    partial_trains = sorted([
-        os.path.join(artifacts.base_path, path) for path in os.listdir(artifacts.base_path)
-        if path.startswith(artifacts.partial_train_prefix)
-    ])
-    partial_predictions = sorted([
-        os.path.join(artifacts.base_path, path) for path in os.listdir(artifacts.base_path)
-        if path.startswith(artifacts.partial_predictions_prefix)
-    ])
-
-    assert len(partial_trains) > 1
-    assert len(partial_trains) == len(partial_predictions)
-
-    # actual test
-
-    # checking combining if there is only one dataset
-    combine_datasets_for_second_level(partial_trains[:1], artifacts.full_second_level_train_path)
-    combine_datasets_for_second_level(partial_predictions[:1], artifacts.full_first_level_predictions_path)
+    combine_train_predicts_for_second_level.function(artifacts)
 
     assert os.path.exists(artifacts.full_second_level_train_path)
-    assert os.path.exists(artifacts.full_first_level_predictions_path)
-
-    shutil.rmtree(artifacts.full_second_level_train_path, ignore_errors=True)
-    shutil.rmtree(artifacts.full_first_level_predictions_path, ignore_errors=True)
-
-    # checking combining of two datasets
-    combine_datasets_for_second_level(partial_trains, artifacts.full_second_level_train_path)
-    combine_datasets_for_second_level(partial_predictions, artifacts.full_first_level_predictions_path)
-
-    assert os.path.exists(artifacts.full_second_level_train_path)
-    assert os.path.exists(artifacts.full_first_level_predictions_path)
+    assert os.path.exists(artifacts.full_second_level_predicts_path)
 
 
 def test_second_level_fitting(user_features_path: str, artifacts: ArtifactPaths):
     shutil.rmtree(artifacts.base_path, ignore_errors=True)
     shutil.copytree("/opt/data/test_exp_folder_second_model", artifacts.base_path)
 
+    model_name = "test_lama_model"
+
     second_level_fitting(
-        model_name="test_lama_model",
-        train_path=artifacts.train_path,
-        test_path=artifacts.test_path,
-        user_features_path=user_features_path,
-        final_second_level_train_path=artifacts.full_second_level_train_path,
-        test_candidate_features_path=artifacts.full_first_level_predictions_path,
-        second_level_model_path=artifacts.second_level_model_path,
-        second_level_predictions_path=artifacts.second_level_predictions_path,
+        artifacts=artifacts,
+        model_name=model_name,
         k=10,
         second_model_type="lama",
         second_model_params={
@@ -215,7 +142,5 @@ def test_second_level_fitting(user_features_path: str, artifacts: ArtifactPaths)
     )
 
     # TODO: restore this test later
-    # assert os.path.exists(artifacts.second_level_model_path)
-    assert os.path.exists(artifacts.second_level_predictions_path)
-
-    _estimate_and_report_metrics()
+    # assert os.path.exists(artifacts.second_level_model_path(model_name))
+    assert os.path.exists(artifacts.second_level_predicts_path(model_name))
