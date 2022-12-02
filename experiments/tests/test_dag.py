@@ -2,12 +2,29 @@ import dataclasses
 import os
 import shutil
 import uuid
+from typing import Dict
 
 import pytest
+from _pytest.reports import CollectReport
+from _pytest.stash
 
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
-    second_level_fitting, _estimate_and_report_metrics, init_refitable_two_stage_scenario, \
+    second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level
+
+
+phase_report_key = StashKey[Dict[str, CollectReport]]()
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    # execute all other hooks to obtain the report object
+    outcome = yield
+    rep = outcome.get_result()
+
+    # store test results for each phase of a call, which can
+    # be "setup", "call", "teardown"
+    item.stash.setdefault(phase_report_key, {})[rep.when] = rep
 
 
 @pytest.fixture
@@ -16,7 +33,7 @@ def resources_path() -> str:
 
 
 @pytest.fixture(scope="function")
-def artifacts() -> ArtifactPaths:
+def artifacts(request) -> ArtifactPaths:
     path = "/opt/experiments/test_exp"
     resources_path = "/opt/data/"
 
@@ -29,6 +46,12 @@ def artifacts() -> ArtifactPaths:
         user_features_path=os.path.join(resources_path, "ml100k_users.csv"),
         item_features_path=os.path.join(resources_path, "ml100k_items.csv")
     )
+
+    report = request.node.stash[phase_report_key]
+    if report["setup"].failed:
+        print("setting up a test failed or skipped", request.node.nodeid)
+    elif ("call" not in report) or report["call"].failed:
+        print("executing test failed or skipped", request.node.nodeid)
 
     # shutil.rmtree(path, ignore_errors=True)
 
