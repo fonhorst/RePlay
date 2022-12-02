@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
-    combine_datasets_for_second_level, _get_spark_session, second_level_fitting, _estimate_and_report_metrics
+    combine_datasets_for_second_level, _init_spark_session, second_level_fitting, _estimate_and_report_metrics
 
 
 @pytest.fixture
