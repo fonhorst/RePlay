@@ -447,7 +447,7 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
 
 
 @task
-def dataset_splitting(artifacts: ArtifactPaths, cores: int):
+def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
     with _init_spark_session():
         data = (
             artifacts.log
@@ -466,7 +466,7 @@ def dataset_splitting(artifacts: ArtifactPaths, cores: int):
 
         print(get_log_info(log))
 
-        log = log.repartition(cores).cache()
+        log = log.repartition(partitions_num).cache()
         log.write.mode('overwrite').format('noop').save()
 
         only_positives_log = log.filter(sf.col('relevance') >= 3).withColumn('relevance', sf.lit(1))
@@ -493,6 +493,7 @@ def dataset_splitting(artifacts: ArtifactPaths, cores: int):
         test.drop('_c0').write.parquet(artifacts.test_path)
 
 
+@task
 def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
     with _init_spark_session():
         scenario = RefitableTwoStageScenario(base_path=artifacts.base_path)
@@ -578,19 +579,14 @@ def second_level_fitting(
     tags=['example'],
 )
 def build_full_dag():
-    cores = 6
     k = 10
 
-    # external paths
-    log_path = "/opt/data/ml100k_ratings.parquet"
-    item_features_path = "/opt/data/ml100k_items.parquet"
-    user_features_path = "/opt/data/ml100k_users.parquet"
-
-    # the base path for all intermeidate and final datasets
-    base_path = "/opt/experiments/two_stage_{{ ds }}_{{ run_id }}"
-
-    # intermediate and final datasets
-    artifacts = ArtifactPaths(base_path)
+    artifacts = ArtifactPaths(
+        base_path="/opt/experiments/two_stage_{{ ds }}_{{ run_id }}",
+        log_path = "/opt/data/ml100k_ratings.parquet",
+        item_features_path = "/opt/data/ml100k_items.parquet",
+        user_features_path = "/opt/data/ml100k_users.parquet"
+    )
 
     first_model_class_name = "replay.models.als.ALSWrap"
     models = {
@@ -599,90 +595,39 @@ def build_full_dag():
 
     second_level_models = {
         "default_lama": {
+            "second_model_type": "lama",
             "second_model_params": {"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
         }
     }
 
-    splitting = dataset_splitting(log_path, base_path, artifacts.train_path, artifacts.test_path, cores)
-
-    fit_initial_first_level_model = \
-        task(task_id=f"initial_level_model_{first_model_class_name.split('.')[-1]}")(first_level_fitting)(
-            train_path=artifacts.train_path,
-            test_path=artifacts.test_path,
-            model_class_name=first_model_class_name,
-            model_kwargs=models[first_model_class_name],
-            model_path=artifacts.model_path(first_model_class_name),
-            second_level_partial_train_path=artifacts.partial_train_path(first_model_class_name),
-            first_level_model_predictions_path=artifacts.predictions_path(first_model_class_name),
-            k=k,
-            intermediate_datasets_mode="dump",
-            predefined_train_and_positives_path=(
-                artifacts.first_level_train_path,
-                artifacts.second_level_positives_path
-            ),
-            predefined_negatives_path=artifacts.negatives_path,
-            item_features_path=item_features_path,
-            user_features_path=user_features_path
-        )
-
+    splitting = dataset_splitting(artifacts, partitions_num=4)
+    create_scenario_datasets = init_refitable_two_stage_scenario(artifacts)
     fit_first_level_models = [
         task(task_id=f"first_level_{model_class_name.split('.')[-1]}")(first_level_fitting)(
-            train_path=artifacts.train_path,
-            test_path=artifacts.test_path,
-            model_class_name=model_class_name,
-            model_kwargs=model_kwargs,
-            model_path=artifacts.model_path(model_class_name),
-            second_level_partial_train_path=artifacts.partial_train_path(model_class_name),
-            first_level_model_predictions_path=artifacts.predictions_path(model_class_name),
-            k=k,
-            intermediate_datasets_mode="use",
-            predefined_train_and_positives_path=(
-                artifacts.first_level_train_path,
-                artifacts.second_level_positives_path
-            ),
-            predefined_negatives_path=artifacts.negatives_path,
-            item_features_path=item_features_path,
-            user_features_path=user_features_path
+            artifacts,
+            model_class_name,
+            model_kwargs,
+            k
         )
-        for model_class_name, model_kwargs in models.items() if model_class_name != first_model_class_name
+        for model_class_name, model_kwargs in models.items()
     ]
-
-    combine_first_level_partial_trains = task(task_id="combine_partial_trains")(combine_datasets_for_second_level)(
-        partial_datasets_paths=[artifacts.partial_train_path(model_class_name) for model_class_name in models],
-        full_dataset_path=artifacts.full_second_level_train_path
-    )
-
-    combine_first_level_partial_tests = task(task_id="combine_partial_tests")(combine_datasets_for_second_level)(
-        partial_datasets_paths=[artifacts.predictions_path(model_class_name) for model_class_name in models],
-        full_dataset_path=artifacts.full_first_level_predictions_path
-    )
-
-    combine_first_level_partials = [combine_first_level_partial_trains, combine_first_level_partial_tests]
-
+    combining = combine_train_predicts_for_second_level(artifacts)
     fit_second_level_models = [
         task(task_id=f"second_level_{model_name}")(second_level_fitting)(
-            model_name=model_name,
-            train_path=artifacts.train_path,
-            test_path=artifacts.test_path,
-            user_features_path=user_features_path,
-            final_second_level_train_path=artifacts.full_second_level_train_path,
-            test_candidate_features_path=artifacts.full_first_level_predictions_path,
-            second_level_model_path=artifacts.second_level_model_path,
-            second_level_predictions_path=artifacts.second_level_predictions_path,
-            k=k,
-            second_model_type="lama",
+            artifacts,
+            model_name,
+            k,
             **model_kwargs
         )
         for model_name, model_kwargs in second_level_models.items()
     ]
 
-    chain(splitting, fit_initial_first_level_model, fit_first_level_models)
-    cross_downstream([fit_initial_first_level_model, *fit_first_level_models], combine_first_level_partials)
-    cross_downstream(combine_first_level_partials, fit_second_level_models)
-
-
-dag = build_full_dag()
+    chain(splitting, create_scenario_datasets, fit_first_level_models)
+    cross_downstream(fit_first_level_models, combining)
+    cross_downstream(combining, fit_second_level_models)
 
 
 if __name__ == "__main__":
     main()
+else:
+    dag = build_full_dag()

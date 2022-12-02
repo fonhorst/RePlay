@@ -51,7 +51,7 @@ def test_data_splitting(log_path: str, artifacts: ArtifactPaths):
         base_path=artifacts.base_path,
         train_path=artifacts.train_path,
         test_path=artifacts.test_path,
-        cores=1
+        partitions_num=1
     )
 
     assert os.path.exists(artifacts.base_path)
