@@ -816,6 +816,7 @@ def get_default_fs():
     )
     return default_fs
 
+
 def get_filesystem(path: str) -> Tuple[int, Optional[str], str]:
     """Analyzes path and hadoop config and return tuple of `filesystem`,
     `hdfs uri` (if filesystem is hdfs) and `cleaned path` (without prefix).
@@ -856,6 +857,15 @@ def get_filesystem(path: str) -> Tuple[int, Optional[str], str]:
             return FileSystem.HDFS, default_fs, path
         else:
             return FileSystem.LOCAL, None, path
+
+
+def create_folder(path: str):
+    filesystem, uri, prefixless_path = get_filesystem(path)
+
+    if filesystem == FileSystem.HDFS:
+        fs.HadoopFileSystem.create_dir(uri)
+    else:
+        fs.LocalFileSystem.create_dir(path)
 
 
 def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
