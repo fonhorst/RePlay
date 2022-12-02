@@ -26,6 +26,12 @@ from replay.utils import (
 class EmptyFeatureProcessor:
     """Do not perform any transformations on the dataframe"""
 
+    @classmethod
+    def load(cls) -> :
+        """
+            Load instance of this class
+        """
+
     def fit(self, log: DataFrame, features: Optional[DataFrame]) -> None:
         """
         :param log: input DataFrame ``[user_idx, item_idx, timestamp, relevance]``
@@ -39,6 +45,9 @@ class EmptyFeatureProcessor:
         :param log: spark DataFrame
         """
         return log
+
+    def save(self, path: str):
+        pass
 
 
 class LogStatFeaturesProcessor(EmptyFeatureProcessor):

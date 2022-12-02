@@ -153,6 +153,7 @@ class RefitableTwoStageScenario(TwoStagesScenario):
                                                                   items, user_features, item_features, log_to_filter)
 
         first_level_candidates.write.parquet(self._first_level_candidates_path)
+        self._are_candidates_dumped = True
 
         return first_level_candidates
 

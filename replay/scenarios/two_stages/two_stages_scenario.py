@@ -1,9 +1,11 @@
 # pylint: disable=too-many-lines
+import pickle
 from collections.abc import Iterable
 from typing import Dict, Optional, Tuple, List, Union, Any
 
 import pyspark.sql.functions as sf
 from pyspark.sql import DataFrame
+from pyspark.sql.session import SparkSession
 
 from replay.constants import AnyDataFrame
 from replay.data_preparator import ToNumericFeatureTransformer
@@ -260,6 +262,15 @@ class TwoStagesScenario(HybridRecommender):
     @property
     def _init_args(self):
         return {}
+
+    def _save_model(self, path: str):
+        df = State().session.createDataFrame([{"data": pickle.dumps(self)}])
+        df.coalesce(1).write.parquet(path)
+
+    def _load_model(self, path: str):
+        serialized_scenario = State().session.read.parquet(path).first().asDict()["data"]
+        scenario = pickle.loads(serialized_scenario)
+        self.__dict__.update(scenario.__dict__)
 
     # pylint: disable=too-many-locals
     def _add_features_for_second_level(

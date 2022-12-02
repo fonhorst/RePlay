@@ -2,13 +2,15 @@ import dataclasses
 import os
 import shutil
 import uuid
+from typing import cast
 
 import pytest
 
 from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
-    combine_train_predicts_for_second_level
+    combine_train_predicts_for_second_level, RefitableTwoStageScenario
+from replay.model_handler import load
 
 
 @pytest.fixture
@@ -85,6 +87,11 @@ def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths, resource_pa
     assert os.path.exists(os.path.join(artifacts.base_path, "first_level_train.parquet"))
     assert os.path.exists(os.path.join(artifacts.base_path, "second_level_positive.parquet"))
     assert os.path.exists(os.path.join(artifacts.base_path, "first_level_candidates.parquet"))
+
+    scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
+    assert scenario._are_candidates_dumped
+    assert scenario._are_split_data_dumped
+    assert scenario.features_processor.fitted
 
 
 @pytest.mark.parametrize('ctx', ['test_init_refitable_two_stage_scenario__out'], indirect=True)
