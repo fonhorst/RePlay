@@ -863,9 +863,9 @@ def create_folder(path: str):
     filesystem, uri, prefixless_path = get_filesystem(path)
 
     if filesystem == FileSystem.HDFS:
-        fs.HadoopFileSystem.create_dir(uri)
+        fs.HadoopFileSystem().create_dir(uri)
     else:
-        fs.LocalFileSystem.create_dir(path)
+        fs.LocalFileSystem().create_dir(path)
 
 
 def sample_k_items(pairs: DataFrame, k: int, seed: int = None):

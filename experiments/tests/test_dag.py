@@ -9,7 +9,8 @@ import pytest
 from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
-    combine_train_predicts_for_second_level, RefitableTwoStageScenario
+    combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session
+from replay.history_based_fp import LogStatFeaturesProcessor
 from replay.model_handler import load
 
 
@@ -175,3 +176,21 @@ def test_second_level_fitting(artifacts: ArtifactPaths, ctx):
     # TODO: restore this test later
     # assert os.path.exists(artifacts.second_level_model_path(model_name))
     assert os.path.exists(artifacts.second_level_predicts_path(model_name))
+
+
+@pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
+def test_log_stat_features_processor_save_load(artifacts: ArtifactPaths, ctx):
+    with _init_spark_session():
+        processor = LogStatFeaturesProcessor()
+        processor.fit(artifacts.train)
+
+        result = processor.transform(artifacts.test)
+        assert result.count() == artifacts.test.count()
+
+        path = os.path.join(artifacts.base_path, "log_stat_processor")
+
+        processor.save(path)
+        loaded_processor = LogStatFeaturesProcessor.load(path)
+
+        new_result = loaded_processor.transform(artifacts.test)
+        assert sorted(result.columns) == sorted(new_result.columns)
