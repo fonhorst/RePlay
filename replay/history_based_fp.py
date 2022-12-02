@@ -506,6 +506,11 @@ class ConditionalPopularityProcessor(EmptyFeatureProcessor):
             joined = joined.fillna({f"{self.entity_name[0]}_pop_by_{key}": 0})
         return joined
 
+    def save(self, path: str):
+        self.entity_name
+        self.cat_features_list
+        self.conditional_pop_dict
+
     def __del__(self):
         for df in self.conditional_pop_dict.values():
             unpersist_if_exists(df)
