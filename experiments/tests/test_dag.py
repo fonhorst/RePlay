@@ -16,6 +16,16 @@ def resource_path() -> str:
     return "/opt/data/resources"
 
 
+@pytest.fixture(scope='function')
+def ctx(request, resource_path: str, artifacts: ArtifactPaths):
+    # copy the context of dependencies
+    context_name = request.param
+    required_resource_path = os.path.join(resource_path, context_name)
+    assert os.path.exists(required_resource_path)
+    shutil.rmtree(artifacts.base_path, ignore_errors=True)
+    shutil.copytree(required_resource_path, artifacts.base_path)
+
+
 @pytest.fixture(scope="function")
 def artifacts(request, resource_path: str) -> ArtifactPaths:
     path = "/opt/experiments/test_exp"
@@ -37,7 +47,10 @@ def artifacts(request, resource_path: str) -> ArtifactPaths:
     elif ("call" not in report) or report["call"].failed:
         print("executing test failed or skipped", request.node.nodeid)
     else:
-        resource_test_path = os.path.join(resource_path, f"{request.node.name}__out")
+        test_name = request.node.name
+        # process cases like this "test_init_refitable_two_stage_scenario[test_data_splitting__out]"
+        test_name = test_name[:test_name.find('[')] if test_name.endswith(']') else test_name
+        resource_test_path = os.path.join(resource_path, f"{test_name}__out")
         if os.path.exists(resource_test_path):
             shutil.rmtree(resource_test_path)
 
@@ -62,38 +75,29 @@ def test_data_splitting(artifacts: ArtifactPaths):
     # TODO: they are not empty, no crossing by ids
 
 
-def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths, resource_path: str):
-    required_resource_path = os.path.join(resource_path, "test_data_splitting__out")
-    assert os.path.exists(required_resource_path)
-    shutil.rmtree(artifacts.base_path, ignore_errors=True)
-    shutil.copytree(required_resource_path, artifacts.base_path)
-
+@pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
+def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths, resource_path: str, ctx):
     init_refitable_two_stage_scenario.function(
         artifacts
     )
 
     assert os.path.exists(artifacts.two_stage_scenario_path)
-    assert os.path.exists(artifacts.base_path, "first_level_train.parquet")
-    assert os.path.exists(artifacts.base_path, "second_level_positive.parquet")
-    assert os.path.exists(artifacts.base_path, "first_level_candidates.parquet")
+    assert os.path.exists(os.path.join(artifacts.base_path, "first_level_train.parquet"))
+    assert os.path.exists(os.path.join(artifacts.base_path, "second_level_positive.parquet"))
+    assert os.path.exists(os.path.join(artifacts.base_path, "first_level_candidates.parquet"))
 
 
-def test_first_level_fitting(resource_path, user_features_path: str, item_features_path: str, artifacts: ArtifactPaths):
-    # first model (dump)
-    assert len(os.listdir(artifacts.base_path)) == 0
-
-    shutil.copytree(os.path.join(resource_path, "train.parquet"), artifacts.train_path)
-    shutil.copytree(os.path.join(resource_path, "test.parquet"), artifacts.test_path)
+@pytest.mark.parametrize('ctx', ['test_init_refitable_two_stage_scenario__out'], indirect=True)
+def test_first_level_fitting(artifacts: ArtifactPaths, ctx):
+    # alternative
+    model_class_name = "replay.models.knn.ItemKNN"
+    model_kwargs = {"num_neighbours": 10}
 
     # alternative
-    # model_class_name = "replay.models.knn.ItemKNN"
-    # model_kwargs = {"num_neighbours": 10}
+    # model_class_name = "replay.models.als.ALSWrap"
+    # model_kwargs={"rank": 10}
 
-    # alternative
-    model_class_name = "replay.models.als.ALSWrap"
-    model_kwargs={"rank": 10}
-
-    first_level_fitting(artifacts, model_class_name, model_kwargs)
+    first_level_fitting(artifacts, model_class_name, model_kwargs, k=10)
 
     assert os.path.exists(artifacts.model_path(model_class_name))
     assert os.path.exists(artifacts.partial_train_path(model_class_name))
@@ -130,7 +134,8 @@ def test_first_level_fitting(resource_path, user_features_path: str, item_featur
     # TODO: both datasets can be combined
 
 
-def test_combine_datasets(artifacts: ArtifactPaths):
+@pytest.mark.parametrize('ctx', ['test_first_level_fitting__out'], indirect=True)
+def test_combine_datasets(artifacts: ArtifactPaths, ctx):
     # the test's preparation
     shutil.rmtree(artifacts.base_path, ignore_errors=True)
     shutil.copytree("/opt/data/test_exp_folder_combine", artifacts.base_path)
@@ -141,10 +146,8 @@ def test_combine_datasets(artifacts: ArtifactPaths):
     assert os.path.exists(artifacts.full_second_level_predicts_path)
 
 
-def test_second_level_fitting(user_features_path: str, artifacts: ArtifactPaths):
-    shutil.rmtree(artifacts.base_path, ignore_errors=True)
-    shutil.copytree("/opt/data/test_exp_folder_second_model", artifacts.base_path)
-
+@pytest.mark.parametrize('ctx', ['test_combine_datasets__out'], indirect=True)
+def test_second_level_fitting(artifacts: ArtifactPaths, ctx):
     model_name = "test_lama_model"
 
     second_level_fitting(

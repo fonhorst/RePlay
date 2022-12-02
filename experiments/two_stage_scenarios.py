@@ -87,6 +87,7 @@ class RefitableTwoStageScenario(TwoStagesScenario):
             custom_features_processor=custom_features_processor,
             seed=seed
         )
+        self.second_stage_model = EmptyWrap()
         self._first_level_train_path = os.path.join(base_path, "first_level_train.parquet")
         self._second_level_positive_path = os.path.join(base_path, "second_level_positive.parquet")
         self._first_level_candidates_path = os.path.join(base_path, "first_level_candidates.parquet")
@@ -236,7 +237,7 @@ class ArtifactPaths:
     @property
     def item_features(self) -> Optional[DataFrame]:
         return (
-            self._get_session().read.csv(self.user_features_path, header=True)
+            self._get_session().read.csv(self.item_features_path, header=True)
             .withColumnRenamed('item_id', 'item_idx')
             .withColumn('item_idx', sf.col('item_idx').cast('int'))
             .drop('_c0')
