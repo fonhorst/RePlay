@@ -12,23 +12,23 @@ from experiments.two_stage_scenarios import dataset_splitting, first_level_fitti
 
 
 @pytest.fixture
-def resources_path() -> str:
-    return "/opt/data/"
+def resource_path() -> str:
+    return "/opt/data/resources"
 
 
 @pytest.fixture(scope="function")
-def artifacts(request) -> ArtifactPaths:
+def artifacts(request, resource_path: str) -> ArtifactPaths:
     path = "/opt/experiments/test_exp"
-    resources_path = "/opt/data/"
+    data_base_path = "/opt/data/"
 
     shutil.rmtree(path, ignore_errors=True)
     os.makedirs(path)
 
     yield ArtifactPaths(
         base_path=path,
-        log_path=os.path.join(resources_path, "ml100k_ratings.csv"),
-        user_features_path=os.path.join(resources_path, "ml100k_users.csv"),
-        item_features_path=os.path.join(resources_path, "ml100k_items.csv")
+        log_path=os.path.join(data_base_path, "ml100k_ratings.csv"),
+        user_features_path=os.path.join(data_base_path, "ml100k_users.csv"),
+        item_features_path=os.path.join(data_base_path, "ml100k_items.csv")
     )
 
     report = request.node.stash[phase_report_key]
@@ -37,7 +37,14 @@ def artifacts(request) -> ArtifactPaths:
     elif ("call" not in report) or report["call"].failed:
         print("executing test failed or skipped", request.node.nodeid)
     else:
-        print("it is succeded")
+        resource_test_path = os.path.join(resource_path, f"{request.node.name}__out")
+        if os.path.exists(resource_test_path):
+            shutil.rmtree(resource_test_path)
+
+        os.makedirs(resource_path, exist_ok=True)
+        shutil.copytree(path, resource_test_path)
+        print(f"Copied the exp dir state ({path}) to the resource folder "
+              f"of this test ({resource_test_path}) for next tests")
 
     # shutil.rmtree(path, ignore_errors=True)
 
@@ -55,7 +62,12 @@ def test_data_splitting(artifacts: ArtifactPaths):
     # TODO: they are not empty, no crossing by ids
 
 
-def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
+def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths, resource_path: str):
+    required_resource_path = os.path.join(resource_path, "test_data_splitting__out")
+    assert os.path.exists(required_resource_path)
+    shutil.rmtree(artifacts.base_path, ignore_errors=True)
+    shutil.copytree(required_resource_path, artifacts.base_path)
+
     init_refitable_two_stage_scenario.function(
         artifacts
     )
@@ -66,12 +78,12 @@ def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
     assert os.path.exists(artifacts.base_path, "first_level_candidates.parquet")
 
 
-def test_first_level_fitting(resources_path: str, user_features_path: str, item_features_path: str, artifacts: ArtifactPaths):
+def test_first_level_fitting(resource_path, user_features_path: str, item_features_path: str, artifacts: ArtifactPaths):
     # first model (dump)
     assert len(os.listdir(artifacts.base_path)) == 0
 
-    shutil.copytree(os.path.join(resources_path, "train.parquet"), artifacts.train_path)
-    shutil.copytree(os.path.join(resources_path, "test.parquet"), artifacts.test_path)
+    shutil.copytree(os.path.join(resource_path, "train.parquet"), artifacts.train_path)
+    shutil.copytree(os.path.join(resource_path, "test.parquet"), artifacts.test_path)
 
     # alternative
     # model_class_name = "replay.models.knn.ItemKNN"
