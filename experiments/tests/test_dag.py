@@ -12,7 +12,8 @@ from experiments.two_stage_scenarios import dataset_splitting, first_level_fitti
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session
 from replay.data_preparator import ToNumericFeatureTransformer
-from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor
+from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
+    HistoryBasedFeaturesProcessor
 from replay.model_handler import load
 from replay.utils import save_transformer, load_transformer
 
@@ -191,11 +192,28 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
 @pytest.mark.parametrize('transformer', [
     EmptyFeatureProcessor(),
     LogStatFeaturesProcessor(),
-    ConditionalPopularityProcessor(cat_features_list=["gender", "age", "occupation", "zip_code"])
+    ConditionalPopularityProcessor(cat_features_list=["gender", "age", "occupation", "zip_code"]),
+    HistoryBasedFeaturesProcessor(
+        use_log_features=True,
+        use_conditional_popularity=True,
+        user_cat_features_list=["gender", "age", "occupation", "zip_code"],
+        item_cat_features_list=['title', 'release_date', 'imdb_url', 'unknown',
+                                'Action', 'Adventure', 'Animation', "Children's",
+                                'Comedy', 'Crime', 'Documentary', 'Drama', 'Fantasy',
+                                'Film-Noir', 'Horror', 'Musical', 'Mystery', 'Romance',
+                                'Sci-Fi', 'Thriller', 'War', 'Western']
+    )
 ])
 def test_transformer_save_load(spark_sess: SparkSession, artifacts: ArtifactPaths, transformer, ctx):
-    test_df = artifacts.test.join(artifacts.user_features, on=["user_idx"], how="left")
-    transformer.fit(artifacts.train, artifacts.user_features)
+    test_df = (
+        artifacts.test
+        .join(artifacts.user_features, on=["user_idx"], how="left")
+        .join(artifacts.item_features, on=["item_idx"], how="left")
+    )
+    if isinstance(transformer, HistoryBasedFeaturesProcessor):
+        transformer.fit(artifacts.train, artifacts.user_features, artifacts.item_features)
+    else:
+        transformer.fit(artifacts.train, artifacts.user_features)
 
     result = transformer.transform(test_df)
     assert result.count() == artifacts.test.count()
