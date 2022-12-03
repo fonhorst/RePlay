@@ -193,8 +193,8 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
     )
 
     # TODO: restore this test later
-    # assert os.path.exists(artifacts.second_level_model_path(model_name))
     assert os.path.exists(artifacts.second_level_predicts_path(model_name))
+    assert os.path.exists(artifacts.second_level_model_path(model_name))
 
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)

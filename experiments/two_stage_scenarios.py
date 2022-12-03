@@ -27,7 +27,7 @@ from replay.scenarios import TwoStagesScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info
+from replay.utils import get_log_info, save_transformer
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,31 @@ class RefitableTwoStageScenario(TwoStagesScenario):
         self._are_candidates_dumped = True
 
         return first_level_candidates
+
+    def _add_features_for_second_level(self, log_to_add_features: DataFrame, log_for_first_level_models: DataFrame,
+                                       user_features: DataFrame, item_features: DataFrame) -> DataFrame:
+        candidates_with_features = super()._add_features_for_second_level(log_to_add_features, log_for_first_level_models, user_features,
+                                                      item_features)
+
+        if self._are_candidates_dumped and self.candidates_with_positives:
+            assert self._are_split_data_dumped, "Cannot do that without dumped second level positives"
+            spark = log_to_add_features.sql_ctx.sparkSession
+            first_level_candidates = spark.read.parquet(self._first_level_candidates_path)
+            second_level_positive = spark.read.parquet(self._second_level_positive_path)
+            candidates_with_target = (
+                first_level_candidates.join(
+                    second_level_positive.select(
+                        "user_idx", "item_idx"
+                    ).withColumn("target", sf.lit(1.0)),
+                    on=["user_idx", "item_idx"],
+                    how="left",
+                ).fillna(0.0, subset="target").select("user_idx", "item_idx", "target")
+            )
+
+            candidates_with_features = candidates_with_features\
+                .join(candidates_with_target, on=["user_idx", "item_idx"], how='left')
+
+        return candidates_with_features
 
     def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
                            candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:
@@ -500,6 +525,7 @@ def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_k
         item_features = artifacts.item_features.cache()
 
         scenario.fit(log=train, user_features=user_features, item_features=item_features)
+        assert len(scenario.first_level_models_relevance_columns) == 1
 
         save(scenario.first_level_models[0], artifacts.model_path(model_class_name))
 
@@ -507,13 +533,19 @@ def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_k
         # (though with all prepared features required on the second level)
         scenario.candidates_with_positives = True
         recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
-                                filter_seen_items=True, user_features=user_features, item_features=item_features)
+                                filter_seen_items=False, user_features=user_features, item_features=item_features)
+        recs = recs.cache()
+        assert scenario.first_level_models_relevance_columns[0] in recs.columns
+        assert "target" and recs.columns
+        assert recs.select('target').distinct().count() == 2
         recs.write.parquet(artifacts.partial_train_path(model_class_name))
+        recs.unpersist()
 
         # getting first level predictions that can be re-evaluated by the second model
         scenario.candidates_with_positives = False
         recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
                                 filter_seen_items=True, user_features=user_features, item_features=item_features)
+        assert scenario.first_level_models_relevance_columns[0] in recs.columns
         recs.write.parquet(artifacts.partial_predicts_path(model_class_name))
 
         rel_col_name = scenario.first_level_models_relevance_columns[0]
@@ -552,6 +584,8 @@ def second_level_fitting(
         second_model_params: Optional[Union[Dict, str]] = None,
         second_model_config_path: Optional[str] = None):
     with _init_spark_session():
+        setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
+        setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
         scenario = load(artifacts.two_stage_scenario_path)
 
         if second_model_type == "lama":
@@ -561,14 +595,16 @@ def second_level_fitting(
 
         second_stage_model.fit(artifacts.full_second_level_train)
 
-        # TODO: save the second_model
-        # artifacts.second_level_model_path(model_name)
+        second_level_model_path = artifacts.second_level_model_path(model_name)
+        save_transformer(second_stage_model, second_level_model_path)
 
         recs = second_stage_model.predict(artifacts.full_second_level_predicts, k=k)
         recs = scenario._filter_seen(recs, artifacts.train, k, artifacts.train.select('user_idx').distinct())
         recs.write.parquet(artifacts.second_level_predicts_path(model_name))
 
         _estimate_and_report_metrics(model_name, artifacts.test, recs)
+
+
 
 
 @dag(
