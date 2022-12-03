@@ -428,6 +428,25 @@ class ConditionalPopularityProcessor(EmptyFeatureProcessor):
     conditional_pop_dict: Optional[Dict[str, DataFrame]]
     entity_name: str
 
+    @classmethod
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        spark = spark or cls._get_spark_session()
+
+        row = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
+
+        if row["has_conditional_pop_dict"]:
+            dfs_folder = os.path.join(path, "conditional_pop_dict")
+            conditional_pop_dict = dict()
+            for i, key in enumerate(row["key_order"]):
+                conditional_pop_dict[key] = spark.read.parquet(os.path.join(dfs_folder, f"{i}"))
+        else:
+            conditional_pop_dict = None
+
+        transformer = pickle.loads(row["data"])
+        transformer.conditional_pop_dict = conditional_pop_dict
+
+        return transformer
+
     def __init__(
         self,
         cat_features_list: List,
@@ -513,10 +532,31 @@ class ConditionalPopularityProcessor(EmptyFeatureProcessor):
             joined = joined.fillna({f"{self.entity_name[0]}_pop_by_{key}": 0})
         return joined
 
-    def save(self, path: str):
-        self.entity_name
-        self.cat_features_list
-        self.conditional_pop_dict
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        spark = spark or self._get_spark_session()
+        create_folder(path, delete_if_exists=overwrite)
+
+        conditional_pop_dict = self.conditional_pop_dict
+        self.conditional_pop_dict = None
+        data = pickle.dumps(self)
+        self.conditional_pop_dict = conditional_pop_dict
+
+        if self.conditional_pop_dict is not None:
+            dfs_folder = os.path.join(path, "conditional_pop_dict")
+            create_folder(dfs_folder)
+            key_order = []
+            for i, key, df in enumerate(self.conditional_pop_dict.items()):
+                key_order.append(key)
+                df.write.parquet(os.path.join(dfs_folder, f"{i}"))
+        else:
+            key_order = []
+
+        spark.createDataFrame([{
+            "classname": self.get_classname(),
+            "data": data,
+            "key_order": key_order,
+            "has_conditional_pop_dict": self.conditional_pop_dict is not None
+        }]).write.parquet(os.path.join(path, "data.parquet"))
 
     def __del__(self):
         for df in self.conditional_pop_dict.values():

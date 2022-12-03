@@ -12,7 +12,7 @@ from experiments.two_stage_scenarios import dataset_splitting, first_level_fitti
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session
 from replay.data_preparator import ToNumericFeatureTransformer
-from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor
+from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor
 from replay.model_handler import load
 from replay.utils import save_transformer, load_transformer
 
@@ -190,7 +190,7 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
 @pytest.mark.parametrize('transformer', [
     EmptyFeatureProcessor(),
-    LogStatFeaturesProcessor(),
+    LogStatFeaturesProcessor()
 ])
 def test_transformer_save_load(spark_sess: SparkSession, artifacts: ArtifactPaths, transformer, ctx):
     transformer.fit(artifacts.train, artifacts.user_features)
