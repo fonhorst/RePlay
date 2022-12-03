@@ -1,4 +1,5 @@
 # pylint: disable=too-many-lines
+import os
 import pickle
 from collections.abc import Iterable
 from typing import Dict, Optional, Tuple, List, Union, Any
@@ -11,6 +12,7 @@ from replay.constants import AnyDataFrame
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import Metric, Precision
+from replay.model_handler import save, load
 from replay.models import ALSWrap, RandomRec, PopRec
 from replay.models.base_rec import BaseRecommender, HybridRecommender
 from replay.scenarios.two_stages.reranker import LamaWrap
@@ -26,7 +28,7 @@ from replay.utils import (
     horizontal_explode,
     join_or_return,
     join_with_col_renaming,
-    unpersist_if_exists,
+    unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer,
 )
 
 
@@ -264,13 +266,102 @@ class TwoStagesScenario(HybridRecommender):
         return {}
 
     def _save_model(self, path: str):
-        df = State().session.createDataFrame([{"data": pickle.dumps(self)}])
-        df.coalesce(1).write.parquet(path)
+        spark = State().session
+        create_folder(path)
+
+        # save features
+        if self.first_level_user_features_transformer is not None:
+            save_transformer(
+                self.first_level_user_features_transformer,
+                os.path.join(path, "first_level_user_features_transformer")
+            )
+
+        if self.first_level_item_features_transformer is not None:
+            save_transformer(
+                self.first_level_item_features_transformer,
+                os.path.join(path, "first_level_item_features_transformer")
+            )
+
+        if self.features_processor is not None:
+            save_transformer(self.features_processor, os.path.join(path, "features_processor"))
+
+        # Save first level models
+        first_level_models_path = os.path.join(path, "first_level_models")
+        create_folder(first_level_models_path)
+        for i, model in enumerate(self.first_level_models):
+            save(model, os.path.join(first_level_models_path, f"model_{i}"))
+
+        # save auxillary models
+        if self.random_model is not None:
+            save(self.random_model, os.path.join(path, "random_model"))
+
+        if self.fallback_model is not None:
+            save(self.fallback_model, os.path.join(path, "fallback_model"))
+
+        # save second stage model
+        if self.second_stage_model is not None:
+            save_transformer(self.second_stage_model, os.path.join(path, "second_stage_model"))
+
+        # save general data and settings
+        data = {
+            "train_splitter": pickle.dumps(self.train_splitter),
+            "first_level_item_len": self.first_level_item_len,
+            "first_level_user_len": self.first_level_user_len,
+            "use_first_level_models_feat": self.use_first_level_models_feat,
+            "num_negatives": self.num_negatives,
+            "negatives_type": self.negatives_type,
+            "use_generated_features": self.use_generated_features,
+            "seed": self.seed
+        }
+
+        spark.createDataFrame([data]).write.parquet(os.path.join(path, "data.parquet"))
 
     def _load_model(self, path: str):
-        serialized_scenario = State().session.read.parquet(path).first().asDict()["data"]
-        scenario = pickle.loads(serialized_scenario)
-        self.__dict__.update(scenario.__dict__)
+        spark = State().session
+
+        # load general data and settings
+        data = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
+
+        # load transformers for features
+        comp_path = os.path.join(path, "first_level_user_features_transformer")
+        first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
+
+        comp_path = os.path.join(path, "first_level_item_features_transformer")
+        first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
+
+        comp_path = os.path.join(path, "features_processor")
+        features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None
+
+        # load first level models
+        first_level_models_path = os.path.join(path, "first_level_models")
+        if do_path_exists(first_level_models_path):
+            # TODO: list dirs
+            model_paths = [""]
+            first_level_models = [load(model_path) for model_path in model_paths]
+        else:
+            first_level_models = None
+
+        # load auxillary models
+        comp_path = os.path.join(path, "random_model")
+        random_model = load(comp_path) if do_path_exists(comp_path) else None
+
+        comp_path = os.path.join(path, "fallback_model")
+        fallback_model = load(comp_path) if do_path_exists(comp_path) else None
+
+        # load second stage model
+        comp_path = os.path.join(path, "second_stage_model")
+        second_stage_model = load_transformer(comp_path) if do_path_exists(comp_path) else None
+
+        self.__dict__.update({
+            **data,
+            "first_level_user_features_transformer": first_level_user_features_transformer,
+            "first_level_item_features_transformer": first_level_item_features_transformer,
+            "features_processor": features_processor,
+            "first_level_models": first_level_models,
+            "random_model": random_model,
+            "fallback_model": fallback_model,
+            "second_stage_model": second_stage_model
+        })
 
     # pylint: disable=too-many-locals
     def _add_features_for_second_level(

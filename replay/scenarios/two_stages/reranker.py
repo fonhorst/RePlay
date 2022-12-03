@@ -8,11 +8,11 @@ from pyspark.sql import DataFrame
 
 from replay.utils import (
     convert2spark,
-    get_top_k_recs,
+    get_top_k_recs, AbleToSaveAndLoad,
 )
 
 
-class ReRanker:
+class ReRanker(AbleToSaveAndLoad):
     """
     Base class for models which re-rank recommendations produced by other models.
     May be used as a part of two-stages recommendation pipeline.
