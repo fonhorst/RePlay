@@ -7,10 +7,11 @@ from typing import cast
 import pytest
 from pyspark.sql import SparkSession
 
+import replay
 from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
-    combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session
+    combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session, EmptyRecommender
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
@@ -90,6 +91,8 @@ def test_data_splitting(spark_sess: SparkSession, artifacts: ArtifactPaths):
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
 def test_init_refitable_two_stage_scenario(spark_sess: SparkSession, artifacts: ArtifactPaths, resource_path: str, ctx):
+    os.environ["INIT_SPARK_SESSION_STOP_SESSION"] = "0"
+
     init_refitable_two_stage_scenario.function(
         artifacts
     )
@@ -99,10 +102,20 @@ def test_init_refitable_two_stage_scenario(spark_sess: SparkSession, artifacts: 
     assert os.path.exists(os.path.join(artifacts.base_path, "second_level_positive.parquet"))
     assert os.path.exists(os.path.join(artifacts.base_path, "first_level_candidates.parquet"))
 
+    setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
+    setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
     scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
+
     assert scenario._are_candidates_dumped
     assert scenario._are_split_data_dumped
     assert scenario.features_processor.fitted
+    assert scenario.first_level_item_features_transformer.fitted
+    assert scenario.first_level_user_features_transformer.fitted
+
+    result = scenario.predict(
+        log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features,k=20
+    )
+    assert result.count() > 0
 
 
 @pytest.mark.parametrize('ctx', ['test_init_refitable_two_stage_scenario__out'], indirect=True)

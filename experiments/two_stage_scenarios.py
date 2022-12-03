@@ -25,6 +25,7 @@ from replay.models import PopRec
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
+from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import get_log_info
 
@@ -104,6 +105,7 @@ class RefitableTwoStageScenario(TwoStagesScenario):
             seed=seed
         )
         self.second_stage_model = EmptyWrap()
+        self._base_path = base_path
         self._first_level_train_path = os.path.join(base_path, "first_level_train.parquet")
         self._second_level_positive_path = os.path.join(base_path, "second_level_positive.parquet")
         self._first_level_candidates_path = os.path.join(base_path, "first_level_candidates.parquet")
@@ -112,6 +114,10 @@ class RefitableTwoStageScenario(TwoStagesScenario):
         self._are_candidates_dumped = False
 
         self._return_candidates_with_positives = False
+
+    @property
+    def _init_args(self):
+        return {**super()._init_args, "base_path": self._base_path}
 
     @property
     def candidates_with_positives(self) -> bool:
@@ -131,6 +137,7 @@ class RefitableTwoStageScenario(TwoStagesScenario):
 
         first_level_train.write.parquet(self._first_level_train_path)
         second_level_positive.write.parquet(self._second_level_positive_path)
+        self._are_split_data_dumped = True
 
         return first_level_train, second_level_positive
 
@@ -171,6 +178,25 @@ class RefitableTwoStageScenario(TwoStagesScenario):
         self._are_candidates_dumped = True
 
         return first_level_candidates
+
+    def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
+                           candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:
+        raise NotImplementedError("Unsupported method")
+
+    def _save_model(self, path: str):
+        super()._save_model(path)
+        spark = State().session
+        spark.createDataFrame([{
+            "_are_candidates_dumped": self._are_candidates_dumped,
+            "_are_split_data_dumped": self._are_split_data_dumped
+        }]).write.parquet(os.path.join(path, "data_refittable.parquet"))
+
+    def _load_model(self, path: str):
+        super()._load_model(path)
+        spark = State().session
+        row = spark.read.parquet(os.path.join(path, "data_refittable.parquet")).first().asDict()
+        self._are_candidates_dumped = row["_are_candidates_dumped"]
+        self._are_split_data_dumped = row["_are_split_data_dumped"]
 
 
 # def _get_scenario(
@@ -303,7 +329,8 @@ def _init_spark_session() -> SparkSession:
 
     yield spark
 
-    spark.stop()
+    if bool(int(os.environ.get("INIT_SPARK_SESSION_STOP_SESSION", "1"))):
+        spark.stop()
 
 
 def _get_model(model_class_name: str, model_kwargs: Dict) -> BaseRecommender:
@@ -450,6 +477,7 @@ def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
 # this is @task
 def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict, k: int):
     with _init_spark_session():
+        setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
         setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
         scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
         scenario.first_level_models = [_get_model(model_class_name, model_kwargs)]

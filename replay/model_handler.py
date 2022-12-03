@@ -14,6 +14,7 @@ from replay.models.base_rec import BaseRecommender
 from replay.session_handler import State
 from replay.splitters import *
 from replay.utils import do_path_exists
+from replay.models import *
 
 
 def save(model: BaseRecommender, path: str, overwrite: bool = False):

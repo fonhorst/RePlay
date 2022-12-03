@@ -6,17 +6,14 @@ from typing import Dict, Optional, Tuple, List, Union, Any
 
 import pyspark.sql.functions as sf
 from pyspark.sql import DataFrame
-from pyspark.sql.session import SparkSession
 
 from replay.constants import AnyDataFrame
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import Metric, Precision
-from replay.model_handler import save, load
 from replay.models import ALSWrap, RandomRec, PopRec
 from replay.models.base_rec import BaseRecommender, HybridRecommender
 from replay.scenarios.two_stages.reranker import LamaWrap
-
 from replay.session_handler import State
 from replay.splitters import Splitter, UserSplitter
 from replay.utils import (
@@ -266,6 +263,7 @@ class TwoStagesScenario(HybridRecommender):
         return {}
 
     def _save_model(self, path: str):
+        from replay.model_handler import save
         spark = State().session
         create_folder(path)
 
@@ -317,6 +315,7 @@ class TwoStagesScenario(HybridRecommender):
         spark.createDataFrame([data]).write.parquet(os.path.join(path, "data.parquet"))
 
     def _load_model(self, path: str):
+        from replay.model_handler import load
         spark = State().session
 
         # load general data and settings
@@ -656,8 +655,11 @@ class TwoStagesScenario(HybridRecommender):
             item_features.cache()
             self.cached_list.append(item_features)
 
-        self.first_level_item_features_transformer.fit(item_features)
-        self.first_level_user_features_transformer.fit(user_features)
+        if not self.first_level_item_features_transformer.fitted:
+            self.first_level_item_features_transformer.fit(item_features)
+
+        if not self.first_level_user_features_transformer.fitted:
+            self.first_level_user_features_transformer.fit(user_features)
 
         first_level_item_features = cache_if_exists(
             self.first_level_item_features_transformer.transform(item_features)
