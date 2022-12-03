@@ -8,6 +8,7 @@ Contains classes for users' and items' features generation based on interactions
     and ConditionalPopularityProcessor as a pipeline.
 """
 import os
+import pickle
 from typing import Dict, Optional, List
 
 import pyspark.sql.functions as sf
@@ -18,6 +19,7 @@ from pyarrow import fs
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.types import TimestampType, StructType, StructField, StringType
 
+from replay.model_handler import AbleToSaveAndLoad
 from replay.utils import (
     join_or_return,
     join_with_col_renaming,
@@ -25,14 +27,22 @@ from replay.utils import (
 )
 
 
-class EmptyFeatureProcessor:
+class EmptyFeatureProcessor(AbleToSaveAndLoad):
     """Do not perform any transformations on the dataframe"""
 
     @classmethod
-    def load(cls, path: str):
-        """
-            Load instance of this class
-        """
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        spark = spark or cls._get_spark_session()
+        row = spark.read.parquet(path).first().asDict()
+        cls._validate_classname(row["classname"])
+        return EmptyFeatureProcessor()
+
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        spark = spark or self._get_spark_session()
+        spark.createDataFrame([{"data": None, "classname": type(self).__name__}]).write.parquet(
+            path,
+            mode='overwrite' if overwrite else 'error'
+        )
 
     def fit(self, log: DataFrame, features: Optional[DataFrame]) -> None:
         """
@@ -47,9 +57,6 @@ class EmptyFeatureProcessor:
         :param log: spark DataFrame
         """
         return log
-
-    def save(self, path: str):
-        pass
 
 
 class LogStatFeaturesProcessor(EmptyFeatureProcessor):
@@ -80,30 +87,24 @@ class LogStatFeaturesProcessor(EmptyFeatureProcessor):
     item_log_features: Optional[DataFrame] = None
 
     @classmethod
-    def load(cls, path: str):
-        spark = SparkSession.getActiveSession()
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        spark = spark or cls._get_spark_session()
 
-        (calc_timestamp_based, calc_relevance_based, has_user_log_features, has_item_log_features) \
-            = spark.read.parquet(os.path.join(path, "metadata.parquet")).select(
-            "calc_timestamp_based",
-            "calc_relevance_based",
-            "has_user_log_features",
-            "has_item_log_features"
-        ).first()
+        row = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
 
-        if has_user_log_features:
+        if row["has_user_log_features"]:
             user_log_features = spark.read.parquet(os.path.join(path, "user_log_features.parquet"))
         else:
             user_log_features = None
 
-        if has_item_log_features:
+        if row["has_item_log_features"]:
             item_log_features = spark.read.parquet(os.path.join(path, "item_log_features.parquet"))
         else:
             item_log_features = None
 
         processor = LogStatFeaturesProcessor()
-        processor.calc_timestamp_based = calc_timestamp_based
-        processor.calc_relevance_based = calc_relevance_based
+        processor.calc_timestamp_based = row["calc_timestamp_based"]
+        processor.calc_relevance_based = row["calc_relevance_based"]
         processor.user_log_features = user_log_features
         processor.item_log_features = item_log_features
 
@@ -386,7 +387,8 @@ class LogStatFeaturesProcessor(EmptyFeatureProcessor):
 
         return joined
 
-    def save(self, path: str):
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        # TODO: make overwrite logic
         create_folder(path)
 
         if self.user_log_features is not None:
@@ -395,16 +397,25 @@ class LogStatFeaturesProcessor(EmptyFeatureProcessor):
         if self.item_log_features is not None:
             self.item_log_features.write.parquet(os.path.join(path, "item_log_features.parquet"))
 
-        spark = SparkSession.getActiveSession()
+        spark = spark or self._get_spark_session()
+
+        user_log_features = self.user_log_features
+        item_log_features = self.item_log_features
+        self.user_log_features = None
+        self.item_log_features = None
+
+        data = pickle.dumps(self)
+        self.user_log_features = user_log_features
+        self.item_log_features = item_log_features
 
         df = spark.createDataFrame([{
-            "calc_timestamp_based": self.calc_timestamp_based,
-            "calc_relevance_based": self.calc_relevance_based,
+            "data": data,
+            "classname": self._get_classname(),
             "has_user_log_features": self.user_log_features is not None,
             "has_item_log_features": self.item_log_features is not None
         }])
 
-        df.write.parquet(os.path.join(path, "metadata.parquet"))
+        df.write.parquet(os.path.join(path, "data.parquet"))
 
     def __del__(self):
         unpersist_if_exists(self.user_log_features)

@@ -3,20 +3,52 @@ import os
 import json
 import pickle
 import shutil
+from abc import ABC, abstractmethod
 from inspect import getfullargspec
 from collections import namedtuple
+from typing import Optional
 
 import joblib
 from os.path import exists, join
 
 import pyspark.sql.types as st
 from pyspark.ml.feature import StringIndexerModel, IndexToString
+from pyspark.sql import SparkSession
 
 from replay.data_preparator import Indexer
 from replay.models import *
 from replay.models.base_rec import BaseRecommender
 from replay.session_handler import State
 from replay.splitters import *
+
+
+class AbleToSaveAndLoad(ABC):
+    @classmethod
+    @abstractmethod
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        """
+            load an instance of this class from saved state
+
+            :return: an instance of the current class
+        """
+
+    @abstractmethod
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        """
+            Saves the current instance
+        """
+
+    @staticmethod
+    def _get_spark_session() -> SparkSession:
+        return SparkSession.getActiveSession()
+
+    @classmethod
+    def _validate_classname(self, classname: str):
+        assert classname == self._get_classname()
+
+    @classmethod
+    def _get_classname(self):
+        return type(self).__name__
 
 
 def prepare_dir(path):
