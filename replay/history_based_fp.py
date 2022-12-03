@@ -599,3 +599,9 @@ class HistoryBasedFeaturesProcessor:
         joined = self.item_cond_pop_proc.transform(joined)
 
         return joined
+
+    def save(self, path: str):
+        log_processor = EmptyFeatureProcessor()
+        user_cond_pop_proc = EmptyFeatureProcessor()
+        item_cond_pop_proc = EmptyFeatureProcessor()
+        pass
