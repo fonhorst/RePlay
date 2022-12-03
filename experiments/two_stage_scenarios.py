@@ -252,11 +252,19 @@ class ArtifactPaths:
 
     @property
     def partial_train_paths(self) -> List[str]:
-        return [path for path in os.listdir(self.base_path) if path.startswith(self.partial_train_prefix)]
+        return [
+            os.path.join(self.base_path, path)
+            for path in os.listdir(self.base_path)
+            if path.startswith(self.partial_train_prefix)
+        ]
 
     @property
     def partial_predicts_paths(self) -> List[str]:
-        return [path for path in os.listdir(self.base_path) if path.startswith(self.partial_predict_prefix)]
+        return [
+            os.path.join(self.base_path, path)
+            for path in os.listdir(self.base_path)
+            if path.startswith(self.partial_predict_prefix)
+        ]
 
     @property
     def full_second_level_train_path(self) -> str:
@@ -348,10 +356,11 @@ def _get_model(model_class_name: str, model_kwargs: Dict) -> BaseRecommender:
 
 
 # this is @task
-def _combine_datasets_for_second_level(partial_datasets_paths: List[str], combined_dataset_path: str):
+def _combine_datasets_for_second_level(
+        partial_datasets_paths: List[str],
+        combined_dataset_path: str,
+        spark: SparkSession):
     assert len(partial_datasets_paths) > 0, "Cannot work with empty sequence of paths"
-
-    spark = _init_spark_session()
 
     dfs = [spark.read.parquet(path) for path in partial_datasets_paths]
 
@@ -521,9 +530,17 @@ def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_k
 
 @task
 def combine_train_predicts_for_second_level(artifacts: ArtifactPaths):
-    with _init_spark_session():
-        _combine_datasets_for_second_level(artifacts.partial_train_paths, artifacts.full_second_level_train_path)
-        _combine_datasets_for_second_level(artifacts.partial_predicts_paths, artifacts.full_second_level_predicts_path)
+    with _init_spark_session() as spark:
+        _combine_datasets_for_second_level(
+            artifacts.partial_train_paths,
+            artifacts.full_second_level_train_path,
+            spark
+        )
+        _combine_datasets_for_second_level(
+            artifacts.partial_predicts_paths,
+            artifacts.full_second_level_predicts_path,
+            spark
+        )
 
 
 # this is @task
