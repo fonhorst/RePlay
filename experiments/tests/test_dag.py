@@ -11,8 +11,10 @@ from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session
+from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor
-from replay.model_handler import load, save_transformer, load_transformer
+from replay.model_handler import load
+from replay.utils import save_transformer, load_transformer
 
 
 @pytest.fixture(scope="session")
@@ -186,7 +188,10 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
 
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
-@pytest.mark.parametrize('transformer', [EmptyFeatureProcessor(), LogStatFeaturesProcessor()])
+@pytest.mark.parametrize('transformer', [
+    EmptyFeatureProcessor(),
+    LogStatFeaturesProcessor(),
+])
 def test_transformer_save_load(spark_sess: SparkSession, artifacts: ArtifactPaths, transformer, ctx):
     transformer.fit(artifacts.train, artifacts.user_features)
 
@@ -199,4 +204,23 @@ def test_transformer_save_load(spark_sess: SparkSession, artifacts: ArtifactPath
     loaded_transformer = load_transformer(path)
 
     new_result = loaded_transformer.transform(artifacts.test)
+    assert sorted(result.columns) == sorted(new_result.columns)
+
+
+@pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
+@pytest.mark.parametrize('transformer', [
+    ToNumericFeatureTransformer()
+])
+def test_feature_transformer_save_load(spark_sess: SparkSession, artifacts: ArtifactPaths, transformer, ctx):
+    transformer.fit(artifacts.user_features)
+
+    result = transformer.transform(artifacts.user_features)
+    assert result.count() == artifacts.user_features.count()
+
+    path = os.path.join(artifacts.base_path, "some_transformer")
+
+    save_transformer(transformer, path)
+    loaded_transformer = load_transformer(path)
+
+    new_result = loaded_transformer.transform(artifacts.user_features)
     assert sorted(result.columns) == sorted(new_result.columns)

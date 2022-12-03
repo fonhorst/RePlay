@@ -19,11 +19,10 @@ from pyarrow import fs
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.types import TimestampType, StructType, StructField, StringType
 
-from replay.model_handler import AbleToSaveAndLoad, do_path_exists
 from replay.utils import (
     join_or_return,
     join_with_col_renaming,
-    unpersist_if_exists, get_filesystem, create_folder,
+    unpersist_if_exists, get_filesystem, create_folder, AbleToSaveAndLoad, do_path_exists,
 )
 
 
@@ -386,10 +385,7 @@ class LogStatFeaturesProcessor(EmptyFeatureProcessor):
         return joined
 
     def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
-        if do_path_exists(path) and not overwrite:
-            raise RuntimeError(f"The path exists and not allowed to overwrite: {path}")
-
-        create_folder(path)
+        create_folder(path, delete_if_exists=overwrite)
 
         if self.user_log_features is not None:
             self.user_log_features.write.parquet(os.path.join(path, "user_log_features.parquet"))

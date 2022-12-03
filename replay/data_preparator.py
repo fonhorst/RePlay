@@ -10,7 +10,6 @@ import logging
 import os
 import pickle
 import string
-from copy import copy
 from typing import Dict, List, Optional, cast
 
 from pyspark.ml.feature import StringIndexerModel, IndexToString, StringIndexer
@@ -20,7 +19,8 @@ from pyspark.sql.types import DoubleType, NumericType
 
 from replay.constants import AnyDataFrame
 from replay.session_handler import State
-from replay.utils import convert2spark, process_timestamp_column, create_folder
+from replay.utils import convert2spark, process_timestamp_column, create_folder, AbleToSaveAndLoad, load_transformer, \
+    save_transformer
 
 LOG_COLUMNS = ["user_id", "item_id", "timestamp", "relevance"]
 
@@ -484,16 +484,16 @@ class DataPreparator:
         return dataframe
 
 
-class CatFeaturesTransformer:
+class CatFeaturesTransformer(AbleToSaveAndLoad):
     """Transform categorical features in ``cat_cols_list``
     with one-hot encoding and remove original columns."""
 
     @classmethod
-    def load(cls, path: str):
-        row = SparkSession.getActiveSession().read.parquet(path).first().asDict()
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        spark = spark or cls._get_spark_session()
+        row = spark.read.parquet(path).first().asDict()
 
-        transformer = CatFeaturesTransformer(cat_cols_list=row["cat_cols_list"], alias=row["alias"])
-        transformer.expressions_list = row["expressions_list"]
+        transformer = cast(CatFeaturesTransformer, pickle.loads(row["data"]))
 
         return transformer
 
@@ -507,7 +507,7 @@ class CatFeaturesTransformer:
         :param alias: prefix for one-hot encoding columns
         """
         self.cat_cols_list = cat_cols_list
-        self.expressions_list = []
+        self.cat_feat_values_dict = None
         self.alias = alias
 
     def fit(self, spark_df: Optional[DataFrame]) -> None:
@@ -518,23 +518,25 @@ class CatFeaturesTransformer:
         if spark_df is None:
             return
 
-        cat_feat_values_dict = {
+        self.cat_feat_values_dict = {
             name: (
                 spark_df.select(sf.collect_set(sf.col(name))).collect()[0][0]
             )
             for name in self.cat_cols_list
         }
-        self.expressions_list = [
+
+    def _expressions_list(self):
+        return [
             sf.when(sf.col(col_name) == cur_name, 1)
-            .otherwise(0)
-            .alias(
+                .otherwise(0)
+                .alias(
                 f"""{self.alias}_{col_name}_{str(cur_name).translate(
-                        str.maketrans(
-                            "", "", string.punctuation + string.whitespace
-                        )
-                    )[:30]}"""
+                    str.maketrans(
+                        "", "", string.punctuation + string.whitespace
+                    )
+                )[:30]}"""
             )
-            for col_name, col_values in cat_feat_values_dict.items()
+            for col_name, col_values in self.cat_feat_values_dict.items()
             for cur_name in col_values
         ]
 
@@ -547,21 +549,25 @@ class CatFeaturesTransformer:
         """
         if spark_df is None:
             return None
-        return spark_df.select(*spark_df.columns, *self.expressions_list).drop(
+        return spark_df.select(*spark_df.columns, *self._expressions_list()).drop(
             *self.cat_cols_list
         )
 
-    def save(self, path: str):
-        df = SparkSession.getActiveSession().createDataFrame([{
-            "cat_cols_list": self.cat_cols_list,
-            "expressions_list": [str(col)[len("Column<'"):-2] for col in self.expressions_list],
-            "alias": self.alias
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        spark = spark or self._get_spark_session()
+
+        data = pickle.dumps(self)
+
+        df = spark.createDataFrame([{
+            "classname": self.get_classname(),
+            "data": data
         }])
 
-        df.write.parquet(path)
+        df.write.parquet(path, mode='overwrite' if overwrite else 'error')
 
 
-class ToNumericFeatureTransformer:
+
+class ToNumericFeatureTransformer(AbleToSaveAndLoad):
     """Transform user/item features to numeric types:
     - numeric features stays as is
     - categorical features:
@@ -577,13 +583,19 @@ class ToNumericFeatureTransformer:
     all_columns: Optional[List]
 
     @classmethod
-    def load(cls, path: str):
-        transformer = CatFeaturesTransformer.load(path)
-        data = State().session.read.parquet(os.path.join(path, "data.parquet")).first().asDict()["data"]
-        num_feat_transformer = cast(ToNumericFeatureTransformer, pickle.loads(data))
-        num_feat_transformer.cat_feat_transformer = transformer
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        spark = spark or cls._get_spark_session()
+        row = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
 
-        return num_feat_transformer
+        if row["has_cat_feat_transformer"]:
+            cat_feat_transformer = load_transformer(os.path.join(path, "cat_feat_transformer"))
+        else:
+            cat_feat_transformer = None
+
+        transformer = pickle.loads(row["data"])
+        transformer.cat_feat_transformer = cat_feat_transformer
+
+        return transformer
 
     def __init__(self, threshold: Optional[int] = 100):
         self.threshold = threshold
@@ -691,17 +703,20 @@ class ToNumericFeatureTransformer:
         self.fit(spark_df)
         return self.transform(spark_df)
 
-    def save(self, path: str):
-        create_folder(path)
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        create_folder(path, delete_if_exists=overwrite)
 
         cat_feat_transformer = self.cat_feat_transformer
         self.cat_feat_transformer = None
         dump = pickle.dumps(self)
         self.cat_feat_transformer = cat_feat_transformer
 
-        self.cat_feat_transformer.save(os.path.join(path, "cat_feat_transformer"))
+        if self.cat_feat_transformer is not None:
+            save_transformer(self.cat_feat_transformer, os.path.join(path, "cat_feat_transformer"))
 
         df = SparkSession.getActiveSession().createDataFrame([{
-            "data": dump
+            "classname": self.get_classname(),
+            "data": dump,
+            "has_cat_feat_transformer": self.cat_feat_transformer is not None
         }])
         df.write.parquet(os.path.join(path, "data.parquet"))

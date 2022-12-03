@@ -2,106 +2,18 @@
 import json
 import os
 import pickle
-import shutil
-from abc import ABC, abstractmethod
 from collections import namedtuple
 from inspect import getfullargspec
-from os.path import exists, join
-from typing import Optional
+from os.path import join
 
 import pyspark.sql.types as st
 from pyspark.ml.feature import StringIndexerModel, IndexToString
-from pyspark.sql import SparkSession
 
 from replay.data_preparator import Indexer
 from replay.models.base_rec import BaseRecommender
 from replay.session_handler import State
 from replay.splitters import *
-from replay.utils import create_folder, delete_folder
-
-
-class AbleToSaveAndLoad(ABC):
-    @classmethod
-    @abstractmethod
-    def load(cls, path: str, spark: Optional[SparkSession] = None):
-        """
-            load an instance of this class from saved state
-
-            :return: an instance of the current class
-        """
-
-    @abstractmethod
-    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
-        """
-            Saves the current instance
-        """
-
-    @staticmethod
-    def _get_spark_session() -> SparkSession:
-        return State().session
-
-    @classmethod
-    def _validate_classname(cls, classname: str):
-        assert classname == cls.get_classname()
-
-    @classmethod
-    def get_classname(cls):
-        return ".".join([cls.__module__, cls.__name__])
-
-
-def prepare_dir(path):
-    """
-    Create empty `path` dir
-    """
-    if exists(path):
-        shutil.rmtree(path)
-    os.makedirs(path)
-
-
-def get_class_by_name(classname: str) -> type:
-    parts = classname.split(".")
-    module = ".".join(parts[:-1])
-    m = __import__(module)
-    for comp in parts[1:]:
-        m = getattr(m, comp)
-    return m
-
-
-def do_path_exists(path: str) -> bool:
-    spark = State().session
-    fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
-    is_exists = fs.exists(spark._jvm.org.apache.hadoop.fs.Path(path))
-    return is_exists
-
-
-def save_transformer(
-        transformer: AbleToSaveAndLoad,
-        path: str,
-        overwrite: bool = False):
-    spark = State().session
-
-    is_exists = do_path_exists(path)
-
-    if is_exists and not overwrite:
-        raise FileExistsError(f"Path '{path}' already exists. Mode is 'overwrite = False'.")
-    elif is_exists:
-        delete_folder(path)
-
-    create_folder(path)
-
-    spark.createDataFrame([{
-        "classname": transformer.get_classname()
-    }]).write.parquet(os.path.join(path, "metadata.parquet"))
-
-    transformer.save(os.path.join(path, "transformer"), overwrite, spark=spark)
-
-
-def load_transformer(path: str):
-    spark = State().session
-    metadata_row = spark.read.parquet(os.path.join(path, "metadata.parquet")).first().asDict()
-    clazz = get_class_by_name(metadata_row["classname"])
-    instance = clazz.load(os.path.join(path, "transformer"), spark)
-    return instance
+from replay.utils import do_path_exists
 
 
 def save(model: BaseRecommender, path: str, overwrite: bool = False):

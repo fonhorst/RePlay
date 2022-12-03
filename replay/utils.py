@@ -1,6 +1,10 @@
 # import copy
 import logging
 # import os
+import os
+import shutil
+from abc import ABC, abstractmethod
+from os.path import exists
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime
 from enum import Enum
@@ -868,8 +872,14 @@ def delete_folder(path: str):
         fs.LocalFileSystem().delete_dir(path)
 
 
-def create_folder(path: str):
+def create_folder(path: str, delete_if_exists: bool = False):
     filesystem, uri, prefixless_path = get_filesystem(path)
+
+    is_exists = do_path_exists(path)
+    if is_exists and delete_if_exists:
+        delete_folder(path)
+    elif is_exists:
+        raise FileExistsError(f"The path already exists: {path}")
 
     if filesystem == FileSystem.HDFS:
         fs.HadoopFileSystem().create_dir(uri)
@@ -921,3 +931,87 @@ def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
     recs = pairs.groupby("user_idx").applyInPandas(grouped_map, REC_SCHEMA)
 
     return recs
+
+
+class AbleToSaveAndLoad(ABC):
+    @classmethod
+    @abstractmethod
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        """
+            load an instance of this class from saved state
+
+            :return: an instance of the current class
+        """
+
+    @abstractmethod
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        """
+            Saves the current instance
+        """
+
+    @staticmethod
+    def _get_spark_session() -> SparkSession:
+        return State().session
+
+    @classmethod
+    def _validate_classname(cls, classname: str):
+        assert classname == cls.get_classname()
+
+    @classmethod
+    def get_classname(cls):
+        return ".".join([cls.__module__, cls.__name__])
+
+
+def prepare_dir(path):
+    """
+    Create empty `path` dir
+    """
+    if exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path)
+
+
+def get_class_by_name(classname: str) -> type:
+    parts = classname.split(".")
+    module = ".".join(parts[:-1])
+    m = __import__(module)
+    for comp in parts[1:]:
+        m = getattr(m, comp)
+    return m
+
+
+def do_path_exists(path: str) -> bool:
+    spark = State().session
+    fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+    is_exists = fs.exists(spark._jvm.org.apache.hadoop.fs.Path(path))
+    return is_exists
+
+
+def save_transformer(
+        transformer: AbleToSaveAndLoad,
+        path: str,
+        overwrite: bool = False):
+    spark = State().session
+
+    is_exists = do_path_exists(path)
+
+    if is_exists and not overwrite:
+        raise FileExistsError(f"Path '{path}' already exists. Mode is 'overwrite = False'.")
+    elif is_exists:
+        delete_folder(path)
+
+    create_folder(path)
+
+    spark.createDataFrame([{
+        "classname": transformer.get_classname()
+    }]).write.parquet(os.path.join(path, "metadata.parquet"))
+
+    transformer.save(os.path.join(path, "transformer"), overwrite, spark=spark)
+
+
+def load_transformer(path: str):
+    spark = State().session
+    metadata_row = spark.read.parquet(os.path.join(path, "metadata.parquet")).first().asDict()
+    clazz = get_class_by_name(metadata_row["classname"])
+    instance = clazz.load(os.path.join(path, "transformer"), spark)
+    return instance
