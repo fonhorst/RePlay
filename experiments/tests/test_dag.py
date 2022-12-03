@@ -22,7 +22,9 @@ from replay.utils import save_transformer, load_transformer
 @pytest.fixture(scope="session")
 def spark_sess() -> SparkSession:
     with _init_spark_session() as spark_s:
+        os.environ["INIT_SPARK_SESSION_STOP_SESSION"] = "0"
         yield spark_s
+        del os.environ["INIT_SPARK_SESSION_STOP_SESSION"]
 
 
 @pytest.fixture
@@ -91,8 +93,6 @@ def test_data_splitting(spark_sess: SparkSession, artifacts: ArtifactPaths):
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
 def test_init_refitable_two_stage_scenario(spark_sess: SparkSession, artifacts: ArtifactPaths, resource_path: str, ctx):
-    os.environ["INIT_SPARK_SESSION_STOP_SESSION"] = "0"
-
     init_refitable_two_stage_scenario.function(
         artifacts
     )
@@ -139,7 +139,7 @@ def test_first_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths,
     next_model_class_name = "replay.models.als.ALSWrap"
     next_model_kwargs = {"rank": 10}
 
-    first_level_fitting(artifacts, next_model_class_name, next_model_kwargs)
+    first_level_fitting(next_artifacts, next_model_class_name, next_model_kwargs, k=10)
 
     assert os.path.exists(next_artifacts.model_path(next_model_class_name))
     assert os.path.exists(next_artifacts.partial_train_path(next_model_class_name))
@@ -167,10 +167,6 @@ def test_first_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths,
 
 @pytest.mark.parametrize('ctx', ['test_first_level_fitting__out'], indirect=True)
 def test_combine_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
-    # the test's preparation
-    shutil.rmtree(artifacts.base_path, ignore_errors=True)
-    shutil.copytree("/opt/data/test_exp_folder_combine", artifacts.base_path)
-
     combine_train_predicts_for_second_level.function(artifacts)
 
     assert os.path.exists(artifacts.full_second_level_train_path)

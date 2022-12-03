@@ -123,6 +123,10 @@ class RefitableTwoStageScenario(TwoStagesScenario):
     def candidates_with_positives(self) -> bool:
         return self._return_candidates_with_positives
 
+    @property
+    def first_level_models_relevance_columns(self) -> List[str]:
+        return [f"rel_{idx}_{model}" for idx, model in enumerate(self.first_level_models)]
+
     @candidates_with_positives.setter
     def candidates_with_positives(self, val: bool):
         self._return_candidates_with_positives = val
@@ -503,7 +507,12 @@ def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_k
                                 filter_seen_items=True, user_features=user_features, item_features=item_features)
         recs.write.parquet(artifacts.partial_predicts_path(model_class_name))
 
-        _estimate_and_report_metrics(model_class_name, artifacts.test, recs)
+        rel_col_name = scenario.first_level_models_relevance_columns[0]
+        _estimate_and_report_metrics(
+            model_class_name,
+            artifacts.test,
+            recs.withColumnRenamed(rel_col_name, 'relevance')
+        )
 
         train.unpersist()
         user_features.unpersist()
