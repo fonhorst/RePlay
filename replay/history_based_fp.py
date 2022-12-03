@@ -545,7 +545,7 @@ class ConditionalPopularityProcessor(EmptyFeatureProcessor):
             dfs_folder = os.path.join(path, "conditional_pop_dict")
             create_folder(dfs_folder)
             key_order = []
-            for i, key, df in enumerate(self.conditional_pop_dict.items()):
+            for i, (key, df) in enumerate(self.conditional_pop_dict.items()):
                 key_order.append(key)
                 df.write.parquet(os.path.join(dfs_folder, f"{i}"))
         else:

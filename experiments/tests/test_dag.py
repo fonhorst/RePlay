@@ -190,12 +190,14 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
 @pytest.mark.parametrize('transformer', [
     EmptyFeatureProcessor(),
-    LogStatFeaturesProcessor()
+    LogStatFeaturesProcessor(),
+    ConditionalPopularityProcessor(cat_features_list=["gender", "age", "occupation", "zip_code"])
 ])
 def test_transformer_save_load(spark_sess: SparkSession, artifacts: ArtifactPaths, transformer, ctx):
+    test_df = artifacts.test.join(artifacts.user_features, on=["user_idx"], how="left")
     transformer.fit(artifacts.train, artifacts.user_features)
 
-    result = transformer.transform(artifacts.test)
+    result = transformer.transform(test_df)
     assert result.count() == artifacts.test.count()
 
     path = os.path.join(artifacts.base_path, "some_transformer")
@@ -203,7 +205,7 @@ def test_transformer_save_load(spark_sess: SparkSession, artifacts: ArtifactPath
     save_transformer(transformer, path)
     loaded_transformer = load_transformer(path)
 
-    new_result = loaded_transformer.transform(artifacts.test)
+    new_result = loaded_transformer.transform(test_df)
     assert sorted(result.columns) == sorted(new_result.columns)
 
 
