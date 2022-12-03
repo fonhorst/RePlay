@@ -19,7 +19,7 @@ from pyarrow import fs
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.types import TimestampType, StructType, StructField, StringType
 
-from replay.model_handler import AbleToSaveAndLoad
+from replay.model_handler import AbleToSaveAndLoad, do_path_exists
 from replay.utils import (
     join_or_return,
     join_with_col_renaming,
@@ -39,7 +39,7 @@ class EmptyFeatureProcessor(AbleToSaveAndLoad):
 
     def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
         spark = spark or self._get_spark_session()
-        spark.createDataFrame([{"data": None, "classname": type(self).__name__}]).write.parquet(
+        spark.createDataFrame([{"data": '', "classname": self.get_classname()}]).write.parquet(
             path,
             mode='overwrite' if overwrite else 'error'
         )
@@ -102,9 +102,7 @@ class LogStatFeaturesProcessor(EmptyFeatureProcessor):
         else:
             item_log_features = None
 
-        processor = LogStatFeaturesProcessor()
-        processor.calc_timestamp_based = row["calc_timestamp_based"]
-        processor.calc_relevance_based = row["calc_relevance_based"]
+        processor = pickle.loads(row["data"])
         processor.user_log_features = user_log_features
         processor.item_log_features = item_log_features
 
@@ -388,7 +386,9 @@ class LogStatFeaturesProcessor(EmptyFeatureProcessor):
         return joined
 
     def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
-        # TODO: make overwrite logic
+        if do_path_exists(path) and not overwrite:
+            raise RuntimeError(f"The path exists and not allowed to overwrite: {path}")
+
         create_folder(path)
 
         if self.user_log_features is not None:
@@ -410,7 +410,7 @@ class LogStatFeaturesProcessor(EmptyFeatureProcessor):
 
         df = spark.createDataFrame([{
             "data": data,
-            "classname": self._get_classname(),
+            "classname": self.get_classname(),
             "has_user_log_features": self.user_log_features is not None,
             "has_item_log_features": self.item_log_features is not None
         }])

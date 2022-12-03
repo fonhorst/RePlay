@@ -20,7 +20,8 @@ from replay.data_preparator import DataPreparator
 from replay.experiment import Experiment
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import MAP, NDCG, HitRate
-from replay.model_handler import save, PopRec, Splitter, load
+from replay.model_handler import save, Splitter, load
+from replay.models import PopRec
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker

@@ -5,13 +5,20 @@ import uuid
 from typing import cast
 
 import pytest
+from pyspark.sql import SparkSession
 
 from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session
-from replay.history_based_fp import LogStatFeaturesProcessor
-from replay.model_handler import load
+from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor
+from replay.model_handler import load, save_transformer, load_transformer
+
+
+@pytest.fixture(scope="session")
+def spark_sess() -> SparkSession:
+    with _init_spark_session() as spark_s:
+        yield spark_s
 
 
 @pytest.fixture
@@ -65,7 +72,7 @@ def artifacts(request, resource_path: str) -> ArtifactPaths:
     # shutil.rmtree(path, ignore_errors=True)
 
 
-def test_data_splitting(artifacts: ArtifactPaths):
+def test_data_splitting(spark_sess: SparkSession, artifacts: ArtifactPaths):
     dataset_splitting.function(
         artifacts,
         partitions_num=4
@@ -79,7 +86,7 @@ def test_data_splitting(artifacts: ArtifactPaths):
 
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
-def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths, resource_path: str, ctx):
+def test_init_refitable_two_stage_scenario(spark_sess: SparkSession, artifacts: ArtifactPaths, resource_path: str, ctx):
     init_refitable_two_stage_scenario.function(
         artifacts
     )
@@ -96,7 +103,7 @@ def test_init_refitable_two_stage_scenario(artifacts: ArtifactPaths, resource_pa
 
 
 @pytest.mark.parametrize('ctx', ['test_init_refitable_two_stage_scenario__out'], indirect=True)
-def test_first_level_fitting(artifacts: ArtifactPaths, ctx):
+def test_first_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
     # alternative
     model_class_name = "replay.models.knn.ItemKNN"
     model_kwargs = {"num_neighbours": 10}
@@ -143,7 +150,7 @@ def test_first_level_fitting(artifacts: ArtifactPaths, ctx):
 
 
 @pytest.mark.parametrize('ctx', ['test_first_level_fitting__out'], indirect=True)
-def test_combine_datasets(artifacts: ArtifactPaths, ctx):
+def test_combine_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
     # the test's preparation
     shutil.rmtree(artifacts.base_path, ignore_errors=True)
     shutil.copytree("/opt/data/test_exp_folder_combine", artifacts.base_path)
@@ -155,7 +162,7 @@ def test_combine_datasets(artifacts: ArtifactPaths, ctx):
 
 
 @pytest.mark.parametrize('ctx', ['test_combine_datasets__out'], indirect=True)
-def test_second_level_fitting(artifacts: ArtifactPaths, ctx):
+def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
     model_name = "test_lama_model"
 
     second_level_fitting(
@@ -179,18 +186,17 @@ def test_second_level_fitting(artifacts: ArtifactPaths, ctx):
 
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
-def test_log_stat_features_processor_save_load(artifacts: ArtifactPaths, ctx):
-    with _init_spark_session():
-        processor = LogStatFeaturesProcessor()
-        processor.fit(artifacts.train)
+@pytest.mark.parametrize('transformer', [EmptyFeatureProcessor(), LogStatFeaturesProcessor()])
+def test_transformer_save_load(spark_sess: SparkSession, artifacts: ArtifactPaths, transformer, ctx):
+    transformer.fit(artifacts.train, artifacts.user_features)
 
-        result = processor.transform(artifacts.test)
-        assert result.count() == artifacts.test.count()
+    result = transformer.transform(artifacts.test)
+    assert result.count() == artifacts.test.count()
 
-        path = os.path.join(artifacts.base_path, "log_stat_processor")
+    path = os.path.join(artifacts.base_path, "some_transformer")
 
-        processor.save(path)
-        loaded_processor = LogStatFeaturesProcessor.load(path)
+    save_transformer(transformer, path)
+    loaded_transformer = load_transformer(path)
 
-        new_result = loaded_processor.transform(artifacts.test)
-        assert sorted(result.columns) == sorted(new_result.columns)
+    new_result = loaded_transformer.transform(artifacts.test)
+    assert sorted(result.columns) == sorted(new_result.columns)

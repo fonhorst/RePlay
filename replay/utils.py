@@ -859,6 +859,15 @@ def get_filesystem(path: str) -> Tuple[int, Optional[str], str]:
             return FileSystem.LOCAL, None, path
 
 
+def delete_folder(path: str):
+    filesystem, uri, prefixless_path = get_filesystem(path)
+
+    if filesystem == FileSystem.HDFS:
+        fs.HadoopFileSystem().delete_dir(path)
+    else:
+        fs.LocalFileSystem().delete_dir(path)
+
+
 def create_folder(path: str):
     filesystem, uri, prefixless_path = get_filesystem(path)
 
