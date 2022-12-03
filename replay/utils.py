@@ -987,6 +987,24 @@ def do_path_exists(path: str) -> bool:
     return is_exists
 
 
+def list_folder(path: str) -> List[str]:
+    """
+        List files in a given directory
+        :path: a directory to list files in
+        :return: names of files from the given directory (not absolute names)
+    """
+    spark = State().session
+    fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+    base_path = spark._jvm.org.apache.hadoop.fs.Path(path)
+
+    if not fs.isDirectory(base_path):
+        raise RuntimeError(f"The path is not directory. Cannot list it. The path: {path}")
+
+    entries = fs.listStatus(base_path)
+    files = [entry.getPath().getName() for entry in entries]
+    return files
+
+
 def save_transformer(
         transformer: AbleToSaveAndLoad,
         path: str,

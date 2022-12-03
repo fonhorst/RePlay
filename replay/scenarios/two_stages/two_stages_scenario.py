@@ -28,7 +28,7 @@ from replay.utils import (
     horizontal_explode,
     join_or_return,
     join_with_col_renaming,
-    unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer,
+    unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder,
 )
 
 
@@ -335,8 +335,10 @@ class TwoStagesScenario(HybridRecommender):
         # load first level models
         first_level_models_path = os.path.join(path, "first_level_models")
         if do_path_exists(first_level_models_path):
-            # TODO: list dirs
-            model_paths = [""]
+            model_paths = [
+                os.path.join(first_level_models_path, model_path)
+                for model_path in list_folder(first_level_models_path)
+            ]
             first_level_models = [load(model_path) for model_path in model_paths]
         else:
             first_level_models = None
