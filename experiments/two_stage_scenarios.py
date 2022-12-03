@@ -32,6 +32,20 @@ logger = logging.getLogger(__name__)
 
 
 class EmptyWrap(ReRanker):
+    @classmethod
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        spark = spark or cls._get_spark_session()
+        row = spark.read.parquet(path).first().asDict()
+        cls._validate_classname(row["classname"])
+        return EmptyWrap()
+
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        spark = spark or self._get_spark_session()
+        spark.createDataFrame([{"data": '', "classname": self.get_classname()}]).write.parquet(
+            path,
+            mode='overwrite' if overwrite else 'error'
+        )
+
     def fit(self, data: DataFrame, fit_params: Optional[Dict] = None) -> None:
         pass
 
