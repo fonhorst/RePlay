@@ -615,25 +615,35 @@ def build_full_dag():
     k = 10
 
     artifacts = ArtifactPaths(
-        base_path="/opt/experiments/two_stage_{{ ds }}_{{ run_id }}",
-        log_path = "/opt/data/ml100k_ratings.parquet",
-        item_features_path = "/opt/data/ml100k_items.parquet",
-        user_features_path = "/opt/data/ml100k_users.parquet"
+        base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
+        log_path = "/opt/spark_data/replay/ml100k_ratings.parquet",
+        item_features_path = "/opt/spark_data/replay/ml100k_items.parquet",
+        user_features_path = "/opt/spark_data/replay/ml100k_users.parquet"
     )
 
-    first_model_class_name = "replay.models.als.ALSWrap"
-    models = {
-        first_model_class_name: {"rank": 128}
+    first_level_models = {
+        "replay.models.als.ALSWrap": {"rank": 10},
+        "replay.models.knn.ItemKNN": {"num_neighbours": 10}
     }
 
     second_level_models = {
         "default_lama": {
             "second_model_type": "lama",
-            "second_model_params": {"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
+            "second_model_params": {
+                "general_params": {"use_algos": [["lgb", "linear_l2"]]},
+                "reader_params": {"cv": 3, "advanced_roles": False}
+            }
+        },
+        "default_slama_2": {
+            "second_model_type": "lama",
+            "second_model_params": {
+                "general_params": {"use_algos": [["lgb"]]},
+                "reader_params": {"cv": 3, "advanced_roles": False}
+            }
         }
     }
 
-    splitting = dataset_splitting(artifacts, partitions_num=4)
+    splitting = dataset_splitting(artifacts, partitions_num=6)
     create_scenario_datasets = init_refitable_two_stage_scenario(artifacts)
     fit_first_level_models = [
         task(task_id=f"first_level_{model_class_name.split('.')[-1]}")(first_level_fitting)(
@@ -642,7 +652,7 @@ def build_full_dag():
             model_kwargs,
             k
         )
-        for model_class_name, model_kwargs in models.items()
+        for model_class_name, model_kwargs in first_level_models.items()
     ]
     combining = combine_train_predicts_for_second_level(artifacts)
     fit_second_level_models = [
