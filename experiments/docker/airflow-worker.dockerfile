@@ -12,6 +12,8 @@ COPY requirements.txt /src
 
 RUN pip install -r /src/requirements.txt
 
+RUN pip install mlflow-skinny
+
 COPY dist/replay_rec-0.10.0-py3-none-any.whl /src
 
 RUN pip install /src/replay_rec-0.10.0-py3-none-any.whl

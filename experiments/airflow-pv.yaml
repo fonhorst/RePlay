@@ -89,4 +89,32 @@ spec:
   resources:
     requests:
       storage: '1000Gi'
-
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: airflow-mlflow-artifacts
+spec:
+  capacity:
+    storage: '1000Gi'
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-hdd
+  hostPath:
+    path: /mnt/ess_storage/DN_1/storage/home/gntv/mlflow_data/artifacts/
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mlflow-artifacts
+spec:
+  volumeName: airflow-mlflow-artifacts
+  storageClassName: local-hdd
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: '1000Gi'

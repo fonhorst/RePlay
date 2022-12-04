@@ -80,10 +80,14 @@ podTemplate: |
             subPath: airflow.cfg
           - name: data
             mountPath: /opt/spark_data/
+          - name: mlflow-artifacts
+            mountPath: /mlflow_data/artifacts
           - name: logs
             mountPath: "/opt/airflow/logs"
           - name: dags
             mountPath: /opt/airflow/dags
+          - name: ephemeral
+            mountPath: "/tmp"
     restartPolicy: Never
     securityContext:
       runAsUser: 50000
@@ -97,9 +101,14 @@ podTemplate: |
         persistentVolumeClaim:
           claimName: spark-lama-data
           readOnly: false
+      - name: mlflow-artifacts
+        persistentVolumeClaim:
+          claimName: mlflow-artifacts
       - name: logs
         persistentVolumeClaim:
           claimName: airflow-logs
       - name: dags
         persistentVolumeClaim:
           claimName: airflow-dags
+      - name: ephemeral
+        emptyDir: {}
