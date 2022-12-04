@@ -31,12 +31,12 @@ packages = [
 python = ">=3.7, <3.10"
 pytorch-ignite = "*"
 lightfm = "*"
-lightautoml = ">=0.3.1, <=0.3.7.1"
+lightautoml = "0.3.7.1"
 numpy = ">=1.20.0"
 optuna = "*"
 pandas = "*"
 psutil = "*"
-pyspark = ">=3.0, <= 3.2"
+pyspark = "3.2"
 scipy = "*"
 scikit-learn = "*"
 torch = "*"
@@ -47,6 +47,7 @@ pyarrow = "*"
 implicit = ">=0.5"
 pyspark-hnsw = "*"
 nmslib = "*"
+torchvision = "0.9.1"
 
 [tool.poetry.dev-dependencies]
 # dev only

@@ -155,3 +155,6 @@ metastore_db/
 .vscode
 
 experiments/tests/mlruns
+requirements.txt
+airflow.yaml
+airflow-values.yaml
