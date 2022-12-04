@@ -1,5 +1,5 @@
 flower:
-  enabled: true
+  enabled: false
 
 workers:
   resources:
@@ -27,14 +27,15 @@ logs:
 dags:
   persistence:
     enabled: true
+    accessMode: "ReadWriteMany"
 
 images:
   airflow:
-    repository: node2.bdcl:5000
-    tag: airflow-worker:latest
+    repository: node2.bdcl:5000/airflow-worker
+    tag: latest
     pullPolicy: Always
 
-executor: CeleryKubernetesExecutor
+executor: KubernetesExecutor
 
 podTemplate: |
   apiVersion: v1
