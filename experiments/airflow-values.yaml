@@ -1,0 +1,108 @@
+flower:
+  enabled: true
+
+workers:
+  resources:
+    requests:
+      memory: "30Gi"
+      cpu: "6"
+    limits:
+      memory: "30Gi"
+      cpu: "6"
+
+  extraVolumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: spark-lama-data
+        readOnly: false
+
+  extraVolumeMounts:
+    - name: data
+      mountPath: /opt/spark_data/
+
+logs:
+  persistence:
+    enabled: true
+
+dags:
+  persistence:
+    enabled: true
+
+images:
+  airflow:
+    repository: node2.bdcl:5000
+    tag: airflow-worker:latest
+    pullPolicy: Always
+
+executor: CeleryKubernetesExecutor
+
+podTemplate: |
+  apiVersion: v1
+  kind: Pod
+  metadata:
+    name: dummy-name
+  spec:
+    containers:
+      - env:
+          - name: AIRFLOW__CORE__EXECUTOR
+            value: LocalExecutor
+          # Hard Coded Airflow Envs
+          - name: AIRFLOW__CORE__FERNET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-fernet-key
+                key: fernet-key
+          - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-airflow-metadata
+                key: connection
+          - name: AIRFLOW_CONN_AIRFLOW_DB
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-airflow-metadata
+                key: connection
+        image: node2.bdcl:5000/airflow-worker:latest
+        imagePullPolicy: Always
+        name: base
+        resources:
+          requests:
+            memory: "30Gi"
+            cpu: "6"
+          limits:
+            memory: "30Gi"
+            cpu: "6"
+        volumeMounts:
+          - mountPath: "/opt/airflow/logs"
+            name: airflow-logs
+          - mountPath: /opt/airflow/airflow.cfg
+            name: airflow-config
+            readOnly: true
+            subPath: airflow.cfg
+          - name: data
+            mountPath: /opt/spark_data/
+          - name: logs
+            mountPath: "/opt/airflow/logs"
+          - name: dags
+            mountPath: /opt/airflow/dags
+    restartPolicy: Never
+    securityContext:
+      runAsUser: 50000
+      fsGroup: 50000
+    serviceAccountName: "RELEASE-NAME-worker-serviceaccount"
+    volumes:
+      - emptyDir: { }
+        name: airflow-logs
+      - configMap:
+          name: RELEASE-NAME-airflow-config
+        name: airflow-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: spark-lama-data
+          readOnly: false
+      - name: logs
+        persistentVolumeClaim:
+          claimName: airflow-logs
+      - name: dags
+        persistentVolumeClaim:
+          claimName: airflow-dags

@@ -157,4 +157,3 @@ metastore_db/
 experiments/tests/mlruns
 requirements.txt
 airflow.yaml
-airflow-values.yaml
