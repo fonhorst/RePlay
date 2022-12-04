@@ -51,17 +51,17 @@ podTemplate: |
           - name: AIRFLOW__CORE__FERNET_KEY
             valueFrom:
               secretKeyRef:
-                name: RELEASE-NAME-fernet-key
+                name: airflow-fernet-key
                 key: fernet-key
           - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
             valueFrom:
               secretKeyRef:
-                name: RELEASE-NAME-airflow-metadata
+                name: airflow-airflow-metadata
                 key: connection
           - name: AIRFLOW_CONN_AIRFLOW_DB
             valueFrom:
               secretKeyRef:
-                name: RELEASE-NAME-airflow-metadata
+                name: airflow-airflow-metadata
                 key: connection
         image: node2.bdcl:5000/airflow-worker:latest
         imagePullPolicy: Always
@@ -74,8 +74,6 @@ podTemplate: |
             memory: "30Gi"
             cpu: "6"
         volumeMounts:
-          - mountPath: "/opt/airflow/logs"
-            name: airflow-logs
           - mountPath: /opt/airflow/airflow.cfg
             name: airflow-config
             readOnly: true
@@ -90,12 +88,10 @@ podTemplate: |
     securityContext:
       runAsUser: 50000
       fsGroup: 50000
-    serviceAccountName: "RELEASE-NAME-worker-serviceaccount"
+    serviceAccountName: "airflow-worker"
     volumes:
-      - emptyDir: { }
-        name: airflow-logs
       - configMap:
-          name: RELEASE-NAME-airflow-config
+          name: airflow-airflow-config
         name: airflow-config
       - name: data
         persistentVolumeClaim:

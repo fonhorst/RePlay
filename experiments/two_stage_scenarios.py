@@ -605,8 +605,6 @@ def second_level_fitting(
         _estimate_and_report_metrics(model_name, artifacts.test, recs)
 
 
-
-
 @dag(
     schedule=None,
     start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
