@@ -13,7 +13,6 @@ import pendulum
 from airflow.decorators import task, dag
 from airflow.utils.helpers import chain, cross_downstream
 from pyspark.sql import functions as sf, SparkSession, DataFrame
-from rs_datasets import MovieLens
 
 import replay
 from replay.data_preparator import DataPreparator
@@ -611,14 +610,17 @@ def second_level_fitting(
     catchup=False,
     tags=['example'],
 )
-def build_full_dag():
+def build_two_stage_scenario_dag():
+    os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
     k = 10
 
+    # TODO: need to replace uid in folder with variable
     artifacts = ArtifactPaths(
-        base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
-        log_path = "/opt/spark_data/replay/ml100k_ratings.parquet",
-        item_features_path = "/opt/spark_data/replay/ml100k_items.parquet",
-        user_features_path = "/opt/spark_data/replay/ml100k_users.parquet"
+        # base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
+        base_path=f"/opt/spark_data/replay/experiments/two_stage_test_run",
+        log_path = "/opt/spark_data/replay/ml100k_ratings.csv",
+        item_features_path = "/opt/spark_data/replay/ml100k_items.csv",
+        user_features_path = "/opt/spark_data/replay/ml100k_users.csv"
     )
 
     first_level_models = {
@@ -670,7 +672,7 @@ def build_full_dag():
     chain(combining, fit_second_level_models)
 
 
-dag = build_full_dag()
+dag = build_two_stage_scenario_dag()
 
 # if __name__ == "__main__":
 #     main()

@@ -2,9 +2,12 @@ FROM apache/airflow:2.4.1-python3.9
 
 USER root
 
-RUN mkdir -p /src && chmod 777 /src
+RUN apt-get update && \
+	apt-get install -y openjdk-11-jre net-tools wget nano iputils-ping curl gcc && \
+	apt-get clean && \
+	rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y gcc
+RUN mkdir -p /src && chmod 777 /src
 
 USER airflow
 
