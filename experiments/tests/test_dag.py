@@ -21,7 +21,7 @@ from replay.utils import save_transformer, load_transformer
 
 @pytest.fixture(scope="session")
 def spark_sess() -> SparkSession:
-    with _init_spark_session() as spark_s:
+    with _init_spark_session(cpu=4) as spark_s:
         os.environ["INIT_SPARK_SESSION_STOP_SESSION"] = "0"
         yield spark_s
         del os.environ["INIT_SPARK_SESSION_STOP_SESSION"]
@@ -123,6 +123,9 @@ def test_first_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths,
     # alternative
     model_class_name = "replay.models.knn.ItemKNN"
     model_kwargs = {"num_neighbours": 10}
+
+    # model_class_name, model_kwargs = "replay.models.ucb.UCB", {"seed": 42}
+    # model_class_name, model_kwargs = "replay.models.word2vec.Word2VecRec", {"rank": 10, "seed": 42}
 
     # alternative
     # model_class_name = "replay.models.als.ALSWrap"

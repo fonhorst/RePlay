@@ -231,7 +231,7 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin):
         self,
         pairs: DataFrame,
         log: DataFrame,
-        k: int,
+        k: int = -1,
     ) -> DataFrame:
         if log is None:
             raise ValueError(

@@ -32,6 +32,8 @@ from kubernetes.client import models as k8s
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CPU = 6
+BIG_CPU = 12
 EXTRA_BIG_CPU = 20
 
 big_executor_config = {
@@ -41,8 +43,8 @@ big_executor_config = {
                 k8s.V1Container(
                     name="base",
                     resources=k8s.V1ResourceRequirements(
-                        requests={"cpu": 12, "memory": "40Gi"},
-                        limits={"cpu": 12, "memory": "40Gi"})
+                        requests={"cpu": BIG_CPU, "memory": "40Gi"},
+                        limits={"cpu": BIG_CPU, "memory": "40Gi"})
                 )
             ],
         )
@@ -406,8 +408,20 @@ class ArtifactPaths:
 
 
 @contextmanager
-def _init_spark_session() -> SparkSession:
-    spark = SparkSession.builder.master("local[4]").getOrCreate()
+def _init_spark_session(cpu: int = 4) -> SparkSession:
+    spark = (
+        SparkSession
+        .builder
+        .config("spark.jars", os.environ.get("REPLAY_JAR_PATH", 'scala/target/scala-2.12/replay_2.12-0.1.jar'))
+        .config("spark.driver.extraJavaOptions", "-Dio.netty.tryReflectionSetAccessible=true")
+        .config("spark.sql.shuffle.partitions", str(cpu * 3))
+        .config("spark.default.parallelism", str(cpu * 3))
+        .config("spark.driver.maxResultSize", "6g")
+        .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .config("spark.kryoserializer.buffer.max", "256m")
+        .master(f"local[{cpu}]")
+        .getOrCreate()
+    )
 
     yield spark
 
@@ -519,7 +533,7 @@ def _log_model_settings(model_name: str,
 
 @task
 def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
-    with _init_spark_session():
+    with _init_spark_session(DEFAULT_CPU):
         data = (
             artifacts.log
             .withColumn('user_id', sf.col('user_id').cast('int'))
@@ -566,7 +580,7 @@ def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
 
 @task
 def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
-    with _init_spark_session():
+    with _init_spark_session(DEFAULT_CPU):
         scenario = RefitableTwoStageScenario(base_path=artifacts.base_path)
 
         scenario.fit(log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features)
@@ -575,8 +589,8 @@ def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
 
 
 # this is @task
-def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict, k: int):
-    with _init_spark_session():
+def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict, k: int, cpu: int = DEFAULT_CPU):
+    with _init_spark_session(cpu):
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
         with mlflow.start_run():
             _log_model_settings(
@@ -648,7 +662,7 @@ def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_k
 
 @task
 def combine_train_predicts_for_second_level(artifacts: ArtifactPaths):
-    with _init_spark_session() as spark:
+    with _init_spark_session(DEFAULT_CPU) as spark:
         _combine_datasets_for_second_level(
             artifacts.partial_train_paths,
             artifacts.full_second_level_train_path,
@@ -668,9 +682,10 @@ def second_level_fitting(
         k: int,
         second_model_type: str = "lama",
         second_model_params: Optional[Union[Dict, str]] = None,
-        second_model_config_path: Optional[str] = None
+        second_model_config_path: Optional[str] = None,
+        cpu: int = DEFAULT_CPU
     ):
-    with _init_spark_session():
+    with _init_spark_session(cpu):
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
         with mlflow.start_run():
             _log_model_settings(
@@ -754,7 +769,8 @@ def build_two_stage_scenario_dag(
                 artifacts,
                 model_class_name,
                 model_kwargs,
-                k
+                k,
+                cpu=BIG_CPU if use_big_exec_config_for_first_level else DEFAULT_CPU
             )
             for model_class_name, model_kwargs in first_level_models.items()
         ]
@@ -767,6 +783,7 @@ def build_two_stage_scenario_dag(
                 artifacts,
                 model_name,
                 k,
+                cpu=EXTRA_BIG_CPU if use_extra_big_exec_config_for_second_level else DEFAULT_CPU,
                 **model_kwargs
             )
             for model_name, model_kwargs in second_level_models.items()

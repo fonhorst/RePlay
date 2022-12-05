@@ -1,3 +1,5 @@
+import os
+
 import joblib
 import math
 
@@ -9,6 +11,7 @@ from pyspark.sql import functions as sf
 
 from replay.metrics import Metric, NDCG
 from replay.models.base_rec import NonPersonalizedRecommender
+from replay.utils import create_folder
 
 
 class UCB(NonPersonalizedRecommender):
@@ -77,6 +80,8 @@ class UCB(NonPersonalizedRecommender):
         }
 
     def _save_model(self, path: str):
+        create_folder(os.path.dirname(path), exists_ok=True)
+        # TODO: need to fix such saving, won't work with HDFS
         joblib.dump({"fill": self.fill}, join(path))
 
     def _load_model(self, path: str):

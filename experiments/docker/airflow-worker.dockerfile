@@ -22,3 +22,7 @@ COPY dist/replay_rec-0.10.0-py3-none-any.whl /src
 RUN pip install /src/replay_rec-0.10.0-py3-none-any.whl
 
 COPY experiments /src/experiments
+
+COPY scala/target/scala-2.12/replay_2.12-0.1.jar /src/
+
+ENV REPLAY_JAR_PATH=/src/replay_2.12-0.1.jar

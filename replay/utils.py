@@ -872,13 +872,13 @@ def delete_folder(path: str):
         fs.LocalFileSystem().delete_dir(path)
 
 
-def create_folder(path: str, delete_if_exists: bool = False):
+def create_folder(path: str, delete_if_exists: bool = False, exists_ok: bool = False):
     filesystem, uri, prefixless_path = get_filesystem(path)
 
     is_exists = do_path_exists(path)
     if is_exists and delete_if_exists:
         delete_folder(path)
-    elif is_exists:
+    elif is_exists and not exists_ok:
         raise FileExistsError(f"The path already exists: {path}")
 
     if filesystem == FileSystem.HDFS:
