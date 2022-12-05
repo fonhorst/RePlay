@@ -10,7 +10,8 @@ from typing import Dict, cast, Optional, List, Union, Tuple, Sequence
 
 import mlflow
 import pendulum
-from airflow.decorators import task, dag
+from airflow import DAG
+from airflow.decorators import task
 from airflow.utils.helpers import chain, cross_downstream
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 
@@ -26,7 +27,7 @@ from replay.scenarios import TwoStagesScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info, save_transformer
+from replay.utils import get_log_info, save_transformer, log_exec_timer
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +134,10 @@ class RefitableTwoStageScenario(TwoStagesScenario):
     def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
         if self._are_split_data_dumped:
             spark = log.sql_ctx.sparkSession
-            return spark.read.parquet(self._first_level_train_path), \
-                   spark.read.parquet(self._second_level_positive_path)
+            return (
+                spark.read.parquet(self._first_level_train_path),
+                spark.read.parquet(self._second_level_positive_path)
+            )
 
         first_level_train, second_level_positive = super()._split_data(log)
 
@@ -184,8 +187,9 @@ class RefitableTwoStageScenario(TwoStagesScenario):
 
     def _add_features_for_second_level(self, log_to_add_features: DataFrame, log_for_first_level_models: DataFrame,
                                        user_features: DataFrame, item_features: DataFrame) -> DataFrame:
-        candidates_with_features = super()._add_features_for_second_level(log_to_add_features, log_for_first_level_models, user_features,
-                                                      item_features)
+        candidates_with_features = super()._add_features_for_second_level(
+            log_to_add_features, log_for_first_level_models, user_features, item_features
+        )
 
         if self._are_candidates_dumped and self.candidates_with_positives:
             assert self._are_split_data_dumped, "Cannot do that without dumped second level positives"
@@ -434,7 +438,7 @@ def _combine_datasets_for_second_level(
 
 
 def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFrame):
-    K_list_metrics = [5, 10]
+    K_list_metrics = [5, 10, 25, 50, 100]
     metrics = ["NDCG", "MAP", "HitRate"]
 
     e = Experiment(
@@ -454,6 +458,23 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
         print(f"Estimated metric {metric_name}={metric_value} for {model_name}")
 
         mlflow.log_metric(metric_name, metric_value)
+
+
+def _log_model_settings(model_name: str,
+                        model_type: str,
+                        k: int,
+                        artifacts: ArtifactPaths,
+                        model_params: Dict,
+                        model_config_path: Optional[str] = None):
+    dataset_name, _ = os.path.splitext(os.path.basename(artifacts.log_path))
+    mlflow.log_param("model", model_name)
+    mlflow.log_param("model_type", model_type)
+    mlflow.log_param("model_config_path", model_config_path)
+    mlflow.log_param("k", k)
+    mlflow.log_param("experiment_path", artifacts.base_path)
+    mlflow.log_param("dataset", dataset_name)
+    mlflow.log_param("dataset_path", artifacts.log_path)
+    mlflow.log_dict(model_params, "model_params.json")
 
 
 @task
@@ -516,49 +537,73 @@ def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
 # this is @task
 def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict, k: int):
     with _init_spark_session():
-        setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
-        setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
-        scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
-        scenario.first_level_models = [_get_model(model_class_name, model_kwargs)]
+        # checks MLFLOW_EXPERIMENT_ID for the experiment id
+        with mlflow.start_run():
+            _log_model_settings(
+                model_name=model_class_name,
+                model_type=model_class_name,
+                k=k,
+                artifacts=artifacts,
+                model_params=model_kwargs,
+                model_config_path=None
+            )
 
-        train = artifacts.train.cache()
-        user_features = artifacts.user_features.cache()
-        item_features = artifacts.item_features.cache()
+            setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
+            setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
 
-        scenario.fit(log=train, user_features=user_features, item_features=item_features)
-        assert len(scenario.first_level_models_relevance_columns) == 1
+            with log_exec_timer("scenario_loading") as timer:
+                scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
 
-        save(scenario.first_level_models[0], artifacts.model_path(model_class_name))
+            mlflow.log_metric(timer.name, timer.duration)
+            scenario.first_level_models = [_get_model(model_class_name, model_kwargs)]
 
-        # because of EmptyWrap this is still predictions from the first level
-        # (though with all prepared features required on the second level)
-        scenario.candidates_with_positives = True
-        recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
-                                filter_seen_items=False, user_features=user_features, item_features=item_features)
-        recs = recs.cache()
-        assert scenario.first_level_models_relevance_columns[0] in recs.columns
-        assert "target" and recs.columns
-        assert recs.select('target').distinct().count() == 2
-        recs.write.parquet(artifacts.partial_train_path(model_class_name))
-        recs.unpersist()
+            train = artifacts.train.cache()
+            user_features = artifacts.user_features.cache()
+            item_features = artifacts.item_features.cache()
 
-        # getting first level predictions that can be re-evaluated by the second model
-        scenario.candidates_with_positives = False
-        recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
-                                filter_seen_items=True, user_features=user_features, item_features=item_features)
-        assert scenario.first_level_models_relevance_columns[0] in recs.columns
-        recs.write.parquet(artifacts.partial_predicts_path(model_class_name))
+            with log_exec_timer("fit") as timer:
+                scenario.fit(log=train, user_features=user_features, item_features=item_features)
 
-        rel_col_name = scenario.first_level_models_relevance_columns[0]
-        _estimate_and_report_metrics(
-            model_class_name,
-            artifacts.test,
-            recs.withColumnRenamed(rel_col_name, 'relevance')
-        )
+            mlflow.log_metric(timer.name, timer.duration)
+            assert len(scenario.first_level_models_relevance_columns) == 1
 
-        train.unpersist()
-        user_features.unpersist()
-        item_features.unpersist()
+            with log_exec_timer("model_saving") as timer:
+                save(scenario.first_level_models[0], artifacts.model_path(model_class_name))
+
+            mlflow.log_metric(timer.name, timer.duration)
+
+            # because of EmptyWrap this is still predictions from the first level
+            # (though with all prepared features required on the second level)
+            scenario.candidates_with_positives = True
+            recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
+                                    filter_seen_items=False, user_features=user_features, item_features=item_features)
+            recs = recs.cache()
+            assert scenario.first_level_models_relevance_columns[0] in recs.columns
+            assert "target" and recs.columns
+            assert recs.select('target').distinct().count() == 2
+            recs.write.parquet(artifacts.partial_train_path(model_class_name))
+            recs.unpersist()
+
+            # getting first level predictions that can be re-evaluated by the second model
+            with log_exec_timer("predict") as timer:
+                scenario.candidates_with_positives = False
+                recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
+                                        filter_seen_items=True, user_features=user_features, item_features=item_features)
+                assert scenario.first_level_models_relevance_columns[0] in recs.columns
+                recs.write.parquet(artifacts.partial_predicts_path(model_class_name))
+
+            mlflow.log_metric(timer.name, timer.duration)
+
+            rel_col_name = scenario.first_level_models_relevance_columns[0]
+            _estimate_and_report_metrics(
+                model_class_name,
+                artifacts.test,
+                recs.withColumnRenamed(rel_col_name, 'relevance')
+            )
+
+            train.unpersist()
+            user_features.unpersist()
+            item_features.unpersist()
 
 
 @task
@@ -572,7 +617,7 @@ def combine_train_predicts_for_second_level(artifacts: ArtifactPaths):
         _combine_datasets_for_second_level(
             artifacts.partial_predicts_paths,
             artifacts.full_second_level_predicts_path,
-            spark
+             spark
         )
 
 
@@ -583,48 +628,107 @@ def second_level_fitting(
         k: int,
         second_model_type: str = "lama",
         second_model_params: Optional[Union[Dict, str]] = None,
-        second_model_config_path: Optional[str] = None):
+        second_model_config_path: Optional[str] = None
+    ):
     with _init_spark_session():
-        setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
-        setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
-        scenario = load(artifacts.two_stage_scenario_path)
+        # checks MLFLOW_EXPERIMENT_ID for the experiment id
+        with mlflow.start_run():
+            _log_model_settings(
+                model_name=model_name,
+                model_type=second_model_type,
+                k=k,
+                artifacts=artifacts,
+                model_params=second_model_params,
+                model_config_path=second_model_config_path
+            )
 
-        if second_model_type == "lama":
-            second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
-        else:
-            raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
+            with log_exec_timer("scenario_loading") as timer:
+                setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
+                setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
+                scenario = load(artifacts.two_stage_scenario_path)
 
-        second_stage_model.fit(artifacts.full_second_level_train)
+            mlflow.log_metric(timer.name, timer.duration)
 
-        second_level_model_path = artifacts.second_level_model_path(model_name)
-        save_transformer(second_stage_model, second_level_model_path)
+            if second_model_type == "lama":
+                second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
+            else:
+                raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
 
-        recs = second_stage_model.predict(artifacts.full_second_level_predicts, k=k)
-        recs = scenario._filter_seen(recs, artifacts.train, k, artifacts.train.select('user_idx').distinct())
-        recs.write.parquet(artifacts.second_level_predicts_path(model_name))
+            with log_exec_timer("fit") as timer:
+                second_stage_model.fit(artifacts.full_second_level_train)
 
-        _estimate_and_report_metrics(model_name, artifacts.test, recs)
+            mlflow.log_metric(timer.name, timer.duration)
+
+            with log_exec_timer("model_saving") as timer:
+                second_level_model_path = artifacts.second_level_model_path(model_name)
+                save_transformer(second_stage_model, second_level_model_path)
+
+            mlflow.log_metric(timer.name, timer.duration)
+
+            with log_exec_timer("predict") as timer:
+                recs = second_stage_model.predict(artifacts.full_second_level_predicts, k=k)
+                recs = scenario._filter_seen(recs, artifacts.train, k, artifacts.train.select('user_idx').distinct())
+                recs.write.parquet(artifacts.second_level_predicts_path(model_name))
+
+            mlflow.log_metric(timer.name, timer.duration)
+
+            _estimate_and_report_metrics(model_name, artifacts.test, recs)
 
 
-@dag(
-    schedule=None,
-    start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
-    catchup=False,
-    tags=['example'],
-)
-def build_two_stage_scenario_dag():
-    os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
-    k = 10
+def build_two_stage_scenario_dag(
+        dag_id: str,
+        first_level_models: Dict[str, Dict],
+        second_level_models: Dict[str, Dict],
+        k: int = 100,
+        mlflow_exp_id: str = "107") -> DAG:
+    with DAG(
+            dag_id=dag_id,
+            schedule=None,
+            start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
+            catchup=False,
+            tags=['two_stage', 'replay', 'slama']
+    ) as dag:
+        os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
+        os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
 
-    # TODO: need to replace uid in folder with variable
-    artifacts = ArtifactPaths(
-        base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
-        # base_path=f"/opt/spark_data/replay/experiments/two_stage_test_run",
-        log_path = "/opt/spark_data/replay/ml100k_ratings.csv",
-        item_features_path = "/opt/spark_data/replay/ml100k_items.csv",
-        user_features_path = "/opt/spark_data/replay/ml100k_users.csv"
-    )
+        artifacts = ArtifactPaths(
+            base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
+            # base_path=f"/opt/spark_data/replay/experiments/two_stage_test_run",
+            log_path = "/opt/spark_data/replay/ml100k_ratings.csv",
+            item_features_path = "/opt/spark_data/replay/ml100k_items.csv",
+            user_features_path = "/opt/spark_data/replay/ml100k_users.csv"
+        )
 
+        splitting = dataset_splitting(artifacts, partitions_num=6)
+        create_scenario_datasets = init_refitable_two_stage_scenario(artifacts)
+        fit_first_level_models = [
+            task(task_id=f"first_level_{model_class_name.split('.')[-1]}")(first_level_fitting)(
+                artifacts,
+                model_class_name,
+                model_kwargs,
+                k
+            )
+            for model_class_name, model_kwargs in first_level_models.items()
+        ]
+        combining = combine_train_predicts_for_second_level(artifacts)
+        fit_second_level_models = [
+            task(task_id=f"second_level_{model_name}")(second_level_fitting)(
+                artifacts,
+                model_name,
+                k,
+                **model_kwargs
+            )
+            for model_name, model_kwargs in second_level_models.items()
+        ]
+
+        chain(splitting, create_scenario_datasets, fit_first_level_models)
+        cross_downstream(fit_first_level_models, combining)
+        chain(combining, fit_second_level_models)
+
+    return dag
+
+
+def build_2stage_integration_test_dag() -> DAG:
     first_level_models = {
         "replay.models.als.ALSWrap": {"rank": 10},
         "replay.models.knn.ItemKNN": {"num_neighbours": 10}
@@ -647,34 +751,11 @@ def build_two_stage_scenario_dag():
         }
     }
 
-    splitting = dataset_splitting(artifacts, partitions_num=6)
-    create_scenario_datasets = init_refitable_two_stage_scenario(artifacts)
-    fit_first_level_models = [
-        task(task_id=f"first_level_{model_class_name.split('.')[-1]}")(first_level_fitting)(
-            artifacts,
-            model_class_name,
-            model_kwargs,
-            k
-        )
-        for model_class_name, model_kwargs in first_level_models.items()
-    ]
-    combining = combine_train_predicts_for_second_level(artifacts)
-    fit_second_level_models = [
-        task(task_id=f"second_level_{model_name}")(second_level_fitting)(
-            artifacts,
-            model_name,
-            k,
-            **model_kwargs
-        )
-        for model_name, model_kwargs in second_level_models.items()
-    ]
-
-    chain(splitting, create_scenario_datasets, fit_first_level_models)
-    cross_downstream(fit_first_level_models, combining)
-    chain(combining, fit_second_level_models)
+    return build_two_stage_scenario_dag(
+        dag_id="2stage_integration_test",
+        first_level_models=first_level_models,
+        second_level_models=second_level_models
+    )
 
 
-dag = build_two_stage_scenario_dag()
-
-# if __name__ == "__main__":
-#     main()
+integration_dag = build_2stage_integration_test_dag()
