@@ -871,8 +871,9 @@ def build_2stage_ml1m_dag() -> DAG:
                 "cpu_limit": EXTRA_BIG_CPU,
                 "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
                 "timeout": 10800,
-                "general_params": {"use_algos": [["lgb"]]},
-                "reader_params": {"cv": 5, "advanced_roles": True}
+                "general_params": {"use_algos": [["lgb_tuned"]]},
+                "reader_params": {"cv": 5, "advanced_roles": True},
+                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
             }
         }
     }
@@ -907,7 +908,8 @@ def build_2stage_ml25m_dag() -> DAG:
                 "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
                 "timeout": 10800,
                 "general_params": {"use_algos": [["tuned_lgb"]]},
-                "reader_params": {"cv": 5, "advanced_roles": True}
+                "reader_params": {"cv": 5, "advanced_roles": True},
+                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
             }
         }
     }
