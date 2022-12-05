@@ -775,7 +775,7 @@ def build_two_stage_scenario_dag(
         os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
 
         artifacts = ArtifactPaths(
-            base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
+            base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id | replace(':', '__') | replace('+', '__') }}",
             log_path=log_path,
             user_features_path=user_features_path,
             item_features_path=item_features_path
