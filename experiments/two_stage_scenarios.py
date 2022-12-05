@@ -36,6 +36,11 @@ DEFAULT_CPU = 6
 BIG_CPU = 12
 EXTRA_BIG_CPU = 20
 
+DEFAULT_MEMORY = 30
+BIG_MEMORY = 40
+EXTRA_BIG_MEMORY = 80
+
+
 big_executor_config = {
     "pod_override": k8s.V1Pod(
         spec=k8s.V1PodSpec(
@@ -43,8 +48,8 @@ big_executor_config = {
                 k8s.V1Container(
                     name="base",
                     resources=k8s.V1ResourceRequirements(
-                        requests={"cpu": BIG_CPU, "memory": "40Gi"},
-                        limits={"cpu": BIG_CPU, "memory": "40Gi"})
+                        requests={"cpu": BIG_CPU, "memory": f"{BIG_MEMORY}Gi"},
+                        limits={"cpu": BIG_CPU, "memory": f"{BIG_MEMORY}Gi"})
                 )
             ],
         )
@@ -59,8 +64,8 @@ extra_big_executor_config = {
                 k8s.V1Container(
                     name="base",
                     resources=k8s.V1ResourceRequirements(
-                        requests={"cpu": EXTRA_BIG_CPU, "memory": "80Gi"},
-                        limits={"cpu": EXTRA_BIG_CPU, "memory": "80Gi"})
+                        requests={"cpu": EXTRA_BIG_CPU, "memory": f"{EXTRA_BIG_MEMORY}Gi"},
+                        limits={"cpu": EXTRA_BIG_CPU, "memory": f"{EXTRA_BIG_MEMORY}Gi"})
                 )
             ],
         )
@@ -214,7 +219,7 @@ class RefitableTwoStageScenario(TwoStagesScenario):
             return first_level_candidates
 
         first_level_candidates = super()._get_first_level_candidates(model, log, k, users,
-                                                                  items, user_features, item_features, log_to_filter)
+                                                                     items, user_features, item_features, log_to_filter)
 
         first_level_candidates.write.parquet(self._first_level_candidates_path)
         self._are_candidates_dumped = True
@@ -408,7 +413,7 @@ class ArtifactPaths:
 
 
 @contextmanager
-def _init_spark_session(cpu: int = 4) -> SparkSession:
+def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) -> SparkSession:
     spark = (
         SparkSession
         .builder
@@ -417,6 +422,8 @@ def _init_spark_session(cpu: int = 4) -> SparkSession:
         .config("spark.sql.shuffle.partitions", str(cpu * 3))
         .config("spark.default.parallelism", str(cpu * 3))
         .config("spark.driver.maxResultSize", "6g")
+        .config("spark.driver.memory", f"{memory}g")
+        .config("spark.executor.memory", f"{memory}g")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         .config("spark.kryoserializer.buffer.max", "256m")
         .master(f"local[{cpu}]")
@@ -533,7 +540,7 @@ def _log_model_settings(model_name: str,
 
 @task
 def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
-    with _init_spark_session(DEFAULT_CPU):
+    with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY):
         data = (
             artifacts.log
             .withColumn('user_id', sf.col('user_id').cast('int'))
@@ -545,7 +552,8 @@ def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
         preparator = DataPreparator()
 
         log = preparator.transform(
-            columns_mapping={"user_id": "user_id", "item_id": "item_id", "relevance": "rating", "timestamp": "timestamp"},
+            columns_mapping={"user_id": "user_id", "item_id": "item_id",
+                             "relevance": "rating", "timestamp": "timestamp"},
             data=data
         ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
 
@@ -580,7 +588,7 @@ def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
 
 @task
 def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
-    with _init_spark_session(DEFAULT_CPU):
+    with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY):
         scenario = RefitableTwoStageScenario(base_path=artifacts.base_path)
 
         scenario.fit(log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features)
@@ -589,8 +597,9 @@ def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
 
 
 # this is @task
-def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict, k: int, cpu: int = DEFAULT_CPU):
-    with _init_spark_session(cpu):
+def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict, k: int,
+                        cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
+    with _init_spark_session(cpu, memory):
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
         with mlflow.start_run():
             _log_model_settings(
@@ -642,7 +651,8 @@ def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_k
             with log_exec_timer("predict") as timer:
                 scenario.candidates_with_positives = False
                 recs = scenario.predict(log=train, k=k, users=train.select('user_idx').distinct(),
-                                        filter_seen_items=True, user_features=user_features, item_features=item_features)
+                                        filter_seen_items=True,
+                                        user_features=user_features, item_features=item_features)
                 assert scenario.first_level_models_relevance_columns[0] in recs.columns
                 recs.write.parquet(artifacts.partial_predicts_path(model_class_name))
 
@@ -662,7 +672,7 @@ def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_k
 
 @task
 def combine_train_predicts_for_second_level(artifacts: ArtifactPaths):
-    with _init_spark_session(DEFAULT_CPU) as spark:
+    with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY) as spark:
         _combine_datasets_for_second_level(
             artifacts.partial_train_paths,
             artifacts.full_second_level_train_path,
@@ -671,7 +681,7 @@ def combine_train_predicts_for_second_level(artifacts: ArtifactPaths):
         _combine_datasets_for_second_level(
             artifacts.partial_predicts_paths,
             artifacts.full_second_level_predicts_path,
-             spark
+            spark
         )
 
 
@@ -683,9 +693,9 @@ def second_level_fitting(
         second_model_type: str = "lama",
         second_model_params: Optional[Union[Dict, str]] = None,
         second_model_config_path: Optional[str] = None,
-        cpu: int = DEFAULT_CPU
-    ):
-    with _init_spark_session(cpu):
+        cpu: int = DEFAULT_CPU,
+        memory: int = DEFAULT_MEMORY):
+    with _init_spark_session(cpu, memory):
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
         with mlflow.start_run():
             _log_model_settings(
@@ -770,7 +780,8 @@ def build_two_stage_scenario_dag(
                 model_class_name,
                 model_kwargs,
                 k,
-                cpu=BIG_CPU if use_big_exec_config_for_first_level else DEFAULT_CPU
+                cpu=BIG_CPU if use_big_exec_config_for_first_level else DEFAULT_CPU,
+                memory=BIG_MEMORY if use_big_exec_config_for_first_level else DEFAULT_MEMORY
             )
             for model_class_name, model_kwargs in first_level_models.items()
         ]
@@ -784,6 +795,7 @@ def build_two_stage_scenario_dag(
                 model_name,
                 k,
                 cpu=EXTRA_BIG_CPU if use_extra_big_exec_config_for_second_level else DEFAULT_CPU,
+                memory=EXTRA_BIG_MEMORY if use_extra_big_exec_config_for_second_level else DEFAULT_MEMORY,
                 **model_kwargs
             )
             for model_name, model_kwargs in second_level_models.items()

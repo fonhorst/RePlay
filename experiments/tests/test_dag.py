@@ -21,7 +21,7 @@ from replay.utils import save_transformer, load_transformer
 
 @pytest.fixture(scope="session")
 def spark_sess() -> SparkSession:
-    with _init_spark_session(cpu=4) as spark_s:
+    with _init_spark_session(cpu=4, memory=4) as spark_s:
         os.environ["INIT_SPARK_SESSION_STOP_SESSION"] = "0"
         yield spark_s
         del os.environ["INIT_SPARK_SESSION_STOP_SESSION"]
