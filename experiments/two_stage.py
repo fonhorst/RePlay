@@ -29,7 +29,7 @@ def main():
     )
     spark.sparkContext.setLogLevel("ERROR")
 
-    data = MovieLens("25m")
+    data = MovieLens("10m")
     preparator = DataPreparator()
 
     log = preparator.transform(

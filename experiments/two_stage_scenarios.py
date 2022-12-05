@@ -769,4 +769,68 @@ def build_2stage_integration_test_dag() -> DAG:
     )
 
 
+def build_2stage_ml1m_dag() -> DAG:
+    first_level_models = {
+        "replay.models.als.ALSWrap": {"rank": 100, "seed": 42},
+        "replay.models.knn.ItemKNN": {"num_neighbours": 1000},
+        "replay.models.cluster.ClusterRec": {"num_clusters": 100},
+        "replay.models.slim.SLIM": {"seed": 42},
+        "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42},
+        "replay.models.ucb.UCB": {"seed": 42}
+    }
+
+    second_level_models = {
+        "default_lama": {
+            "second_model_type": "lama",
+            "second_model_params": {
+                "general_params": {"use_algos": [["lgb", "linear_l2"]]},
+                "reader_params": {"cv": 5, "advanced_roles": False}
+            }
+        }
+    }
+
+    return build_two_stage_scenario_dag(
+        dag_id="2stage_ml1m",
+        first_level_models=first_level_models,
+        second_level_models=second_level_models,
+        log_path="/opt/spark_data/replay/ml1m_ratings.csv",
+        user_features_path="/opt/spark_data/replay/ml1m_users.csv",
+        item_features_path="/opt/spark_data/replay/ml1m_items.csv"
+    )
+
+
+def build_2stage_ml25m_dag() -> DAG:
+    first_level_models = {
+        "replay.models.als.ALSWrap": {"rank": 100, "seed": 42},
+        "replay.models.knn.ItemKNN": {"num_neighbours": 1000},
+        "replay.models.cluster.ClusterRec": {"num_clusters": 100},
+        "replay.models.slim.SLIM": {"seed": 42},
+        "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42},
+        "replay.models.ucb.UCB": {"seed": 42}
+    }
+
+    second_level_models = {
+        "default_lama": {
+            "second_model_type": "lama",
+            "second_model_params": {
+                "general_params": {"use_algos": [["lgb", "linear_l2"]]},
+                "reader_params": {"cv": 5, "advanced_roles": False}
+            }
+        }
+    }
+
+    return build_two_stage_scenario_dag(
+        dag_id="2stage_ml25m",
+        first_level_models=first_level_models,
+        second_level_models=second_level_models,
+        log_path="/opt/spark_data/replay/ml25m_ratings.csv",
+        user_features_path=None,
+        item_features_path=None
+    )
+
+
 integration_dag = build_2stage_integration_test_dag()
+
+ml1m_dag = build_2stage_ml1m_dag()
+
+ml25m_dag = build_2stage_ml25m_dag()
