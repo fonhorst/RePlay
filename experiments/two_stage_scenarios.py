@@ -6,7 +6,7 @@ import os
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, cast, Optional, List, Union, Tuple
+from typing import Dict, cast, Optional, List, Union, Tuple, Sequence
 
 import mlflow
 import pendulum
@@ -250,7 +250,7 @@ class RefitableTwoStageScenario(TwoStagesScenario):
 #     )
 #
 #     return scenario
-@dataclass(frozen=True)
+@dataclass
 class ArtifactPaths:
     base_path: str
     log_path: str
@@ -261,6 +261,8 @@ class ArtifactPaths:
     partial_predict_prefix: str = "partial_predict"
     second_level_model_prefix: str = "second_level_model"
     second_level_predicts_prefix: str = "second_level_predicts"
+
+    template_fields: Sequence[str] = ("base_path",)
 
     @property
     def train_path(self) -> str:
@@ -616,8 +618,8 @@ def build_two_stage_scenario_dag():
 
     # TODO: need to replace uid in folder with variable
     artifacts = ArtifactPaths(
-        # base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
-        base_path=f"/opt/spark_data/replay/experiments/two_stage_test_run",
+        base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
+        # base_path=f"/opt/spark_data/replay/experiments/two_stage_test_run",
         log_path = "/opt/spark_data/replay/ml100k_ratings.csv",
         item_features_path = "/opt/spark_data/replay/ml100k_items.csv",
         user_features_path = "/opt/spark_data/replay/ml100k_users.csv"
