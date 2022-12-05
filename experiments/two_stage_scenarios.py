@@ -20,7 +20,7 @@ from replay.data_preparator import DataPreparator
 from replay.experiment import Experiment
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import MAP, NDCG, HitRate
-from replay.model_handler import save, Splitter, load
+from replay.model_handler import save, Splitter, load, ALSWrap
 from replay.models import PopRec
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
@@ -71,6 +71,18 @@ extra_big_executor_config = {
         )
     ),
 }
+
+# dense_hnsw_params = {
+#     "method": "hnsw",
+#     "space": "negdotprod",
+#     "M": 100,
+#     "efS": 2000,
+#     "efC": 2000,
+#     "post": 0,
+#     # hdfs://node21.bdcl:9000
+#     "index_path": f"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark.sparkContext.applicationId}",
+#     "build_index_on": "driver"
+# }
 
 
 class EmptyWrap(ReRanker):
@@ -132,7 +144,7 @@ class RefitableTwoStageScenario(TwoStagesScenario):
                  ):
         super().__init__(
             train_splitter=train_splitter,
-            first_level_models=[EmptyRecommender()],
+            first_level_models=[ALSWrap(rank=100, seed=42)],
             fallback_model=fallback_model,
             use_first_level_models_feat=use_first_level_models_feat,
             second_model_params=None,
@@ -621,8 +633,8 @@ def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_k
             scenario.first_level_models = [_get_model(model_class_name, model_kwargs)]
 
             train = artifacts.train.cache()
-            user_features = artifacts.user_features.cache()
-            item_features = artifacts.item_features.cache()
+            user_features = artifacts.user_features.cache() if artifacts.user_features is not None else None
+            item_features = artifacts.item_features.cache() if artifacts.item_features is not None else None
 
             with log_exec_timer("fit") as timer:
                 scenario.fit(log=train, user_features=user_features, item_features=item_features)
@@ -810,6 +822,7 @@ def build_two_stage_scenario_dag(
 
 def build_2stage_integration_test_dag() -> DAG:
     first_level_models = {
+        # "replay.models.als.ALSWrap": {"rank": 10, "nmslib_hnsw_params": dense_hnsw_params},
         "replay.models.als.ALSWrap": {"rank": 10},
         "replay.models.knn.ItemKNN": {"num_neighbours": 10}
     }
@@ -847,7 +860,7 @@ def build_2stage_ml1m_dag() -> DAG:
         "replay.models.knn.ItemKNN": {"num_neighbours": 1000},
         "replay.models.cluster.ClusterRec": {"num_clusters": 100},
         "replay.models.slim.SLIM": {"seed": 42},
-        "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42},
+        # "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42},
         "replay.models.ucb.UCB": {"seed": 42}
     }
 
