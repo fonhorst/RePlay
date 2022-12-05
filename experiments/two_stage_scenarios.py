@@ -856,8 +856,9 @@ def build_2stage_ml1m_dag() -> DAG:
             "second_model_type": "lama",
             "second_model_params": {
                 "cpu_limit": EXTRA_BIG_CPU,
+                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
                 "timeout": 10800,
-                "general_params": {"use_algos": [["tuned_lgb"]]},
+                "general_params": {"use_algos": [["lgb"]]},
                 "reader_params": {"cv": 5, "advanced_roles": True}
             }
         }
@@ -890,6 +891,7 @@ def build_2stage_ml25m_dag() -> DAG:
             "second_model_type": "lama",
             "second_model_params": {
                 "cpu_limit": EXTRA_BIG_CPU,
+                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
                 "timeout": 10800,
                 "general_params": {"use_algos": [["tuned_lgb"]]},
                 "reader_params": {"cv": 5, "advanced_roles": True}
