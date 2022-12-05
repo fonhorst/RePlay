@@ -312,6 +312,9 @@ class ArtifactPaths:
 
     @property
     def user_features(self) -> Optional[DataFrame]:
+        if self.user_features_path is None:
+            return None
+
         return (
             self._get_session().read.csv(self.user_features_path, header=True)
             .withColumnRenamed('user_id', 'user_idx')
@@ -321,6 +324,9 @@ class ArtifactPaths:
 
     @property
     def item_features(self) -> Optional[DataFrame]:
+        if self.item_features_path is None:
+            return None
+
         return (
             self._get_session().read.csv(self.item_features_path, header=True)
             .withColumnRenamed('item_id', 'item_idx')
@@ -679,6 +685,9 @@ def build_two_stage_scenario_dag(
         dag_id: str,
         first_level_models: Dict[str, Dict],
         second_level_models: Dict[str, Dict],
+        log_path: str,
+        user_features_path: Optional[str] = None,
+        item_features_path: Optional[str] = None,
         k: int = 100,
         mlflow_exp_id: str = "107") -> DAG:
     with DAG(
@@ -693,10 +702,9 @@ def build_two_stage_scenario_dag(
 
         artifacts = ArtifactPaths(
             base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id }}",
-            # base_path=f"/opt/spark_data/replay/experiments/two_stage_test_run",
-            log_path = "/opt/spark_data/replay/ml100k_ratings.csv",
-            item_features_path = "/opt/spark_data/replay/ml100k_items.csv",
-            user_features_path = "/opt/spark_data/replay/ml100k_users.csv"
+            log_path=log_path,
+            user_features_path=user_features_path,
+            item_features_path=item_features_path
         )
 
         splitting = dataset_splitting(artifacts, partitions_num=6)
@@ -754,7 +762,10 @@ def build_2stage_integration_test_dag() -> DAG:
     return build_two_stage_scenario_dag(
         dag_id="2stage_integration_test",
         first_level_models=first_level_models,
-        second_level_models=second_level_models
+        second_level_models=second_level_models,
+        log_path="/opt/spark_data/replay/ml100k_ratings.csv",
+        user_features_path="/opt/spark_data/replay/ml100k_users.csv",
+        item_features_path="/opt/spark_data/replay/ml100k_items.csv"
     )
 
 
