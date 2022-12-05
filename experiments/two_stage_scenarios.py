@@ -28,8 +28,42 @@ from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import get_log_info, save_transformer, log_exec_timer
+from kubernetes.client import models as k8s
 
 logger = logging.getLogger(__name__)
+
+EXTRA_BIG_CPU = 20
+
+big_executor_config = {
+    "pod_override": k8s.V1Pod(
+        spec=k8s.V1PodSpec(
+            containers=[
+                k8s.V1Container(
+                    name="base",
+                    resources=k8s.V1ResourceRequirements(
+                        requests={"cpu": 12, "memory": "40Gi"},
+                        limits={"cpu": 12, "memory": "40Gi"})
+                )
+            ],
+        )
+    ),
+}
+
+
+extra_big_executor_config = {
+    "pod_override": k8s.V1Pod(
+        spec=k8s.V1PodSpec(
+            containers=[
+                k8s.V1Container(
+                    name="base",
+                    resources=k8s.V1ResourceRequirements(
+                        requests={"cpu": EXTRA_BIG_CPU, "memory": "80Gi"},
+                        limits={"cpu": EXTRA_BIG_CPU, "memory": "80Gi"})
+                )
+            ],
+        )
+    ),
+}
 
 
 class EmptyWrap(ReRanker):
@@ -689,7 +723,10 @@ def build_two_stage_scenario_dag(
         user_features_path: Optional[str] = None,
         item_features_path: Optional[str] = None,
         k: int = 100,
-        mlflow_exp_id: str = "107") -> DAG:
+        mlflow_exp_id: str = "107",
+        use_big_exec_config_for_first_level: bool = False,
+        use_extra_big_exec_config_for_second_level: bool = False
+) -> DAG:
     with DAG(
             dag_id=dag_id,
             schedule=None,
@@ -710,7 +747,10 @@ def build_two_stage_scenario_dag(
         splitting = dataset_splitting(artifacts, partitions_num=6)
         create_scenario_datasets = init_refitable_two_stage_scenario(artifacts)
         fit_first_level_models = [
-            task(task_id=f"first_level_{model_class_name.split('.')[-1]}")(first_level_fitting)(
+            task(
+                task_id=f"first_level_{model_class_name.split('.')[-1]}",
+                executor_config=big_executor_config if use_big_exec_config_for_first_level else None
+            )(first_level_fitting)(
                 artifacts,
                 model_class_name,
                 model_kwargs,
@@ -720,7 +760,10 @@ def build_two_stage_scenario_dag(
         ]
         combining = combine_train_predicts_for_second_level(artifacts)
         fit_second_level_models = [
-            task(task_id=f"second_level_{model_name}")(second_level_fitting)(
+            task(
+                task_id=f"second_level_{model_name}",
+                executor_config=extra_big_executor_config if use_extra_big_exec_config_for_second_level else None
+            )(second_level_fitting)(
                 artifacts,
                 model_name,
                 k,
@@ -783,8 +826,10 @@ def build_2stage_ml1m_dag() -> DAG:
         "default_lama": {
             "second_model_type": "lama",
             "second_model_params": {
-                "general_params": {"use_algos": [["lgb", "linear_l2"]]},
-                "reader_params": {"cv": 5, "advanced_roles": False}
+                "cpu_limit": EXTRA_BIG_CPU,
+                "timeout": 10800,
+                "general_params": {"use_algos": [["tuned_lgb"]]},
+                "reader_params": {"cv": 5, "advanced_roles": True}
             }
         }
     }
@@ -795,7 +840,9 @@ def build_2stage_ml1m_dag() -> DAG:
         second_level_models=second_level_models,
         log_path="/opt/spark_data/replay/ml1m_ratings.csv",
         user_features_path="/opt/spark_data/replay/ml1m_users.csv",
-        item_features_path="/opt/spark_data/replay/ml1m_items.csv"
+        item_features_path="/opt/spark_data/replay/ml1m_items.csv",
+        use_big_exec_config_for_first_level=True,
+        use_extra_big_exec_config_for_second_level=True
     )
 
 
@@ -813,8 +860,10 @@ def build_2stage_ml25m_dag() -> DAG:
         "default_lama": {
             "second_model_type": "lama",
             "second_model_params": {
-                "general_params": {"use_algos": [["lgb", "linear_l2"]]},
-                "reader_params": {"cv": 5, "advanced_roles": False}
+                "cpu_limit": EXTRA_BIG_CPU,
+                "timeout": 10800,
+                "general_params": {"use_algos": [["tuned_lgb"]]},
+                "reader_params": {"cv": 5, "advanced_roles": True}
             }
         }
     }
@@ -825,7 +874,9 @@ def build_2stage_ml25m_dag() -> DAG:
         second_level_models=second_level_models,
         log_path="/opt/spark_data/replay/ml25m_ratings.csv",
         user_features_path=None,
-        item_features_path=None
+        item_features_path=None,
+        use_big_exec_config_for_first_level=True,
+        use_extra_big_exec_config_for_second_level=True
     )
 
 
