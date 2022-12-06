@@ -20,7 +20,7 @@ from replay.data_preparator import DataPreparator
 from replay.experiment import Experiment
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import MAP, NDCG, HitRate
-from replay.model_handler import save, Splitter, load, ALSWrap
+from replay.model_handler import save, Splitter, load, ALSWrap, ItemKNN
 from replay.models import PopRec
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
@@ -144,7 +144,8 @@ class RefitableTwoStageScenario(TwoStagesScenario):
                  ):
         super().__init__(
             train_splitter=train_splitter,
-            first_level_models=[ALSWrap(rank=100, seed=42)],
+            # first_level_models=[ALSWrap(rank=100, seed=42)],
+            first_level_models=[ItemKNN(num_neighbours=1000)],
             fallback_model=fallback_model,
             use_first_level_models_feat=use_first_level_models_feat,
             second_model_params=None,
@@ -890,6 +891,42 @@ def build_2stage_ml1m_dag() -> DAG:
     )
 
 
+def build_2stage_ml1m_itemknn_dag() -> DAG:
+    first_level_models = {
+        # "replay.models.als.ALSWrap": {"rank": 100, "seed": 42},
+        "replay.models.knn.ItemKNN": {"num_neighbours": 1000},
+        # "replay.models.cluster.ClusterRec": {"num_clusters": 100},
+        # "replay.models.slim.SLIM": {"seed": 42},
+        # "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42},
+        # "replay.models.ucb.UCB": {"seed": 42}
+    }
+
+    second_level_models = {
+        "default_lama": {
+            "second_model_type": "lama",
+            "second_model_params": {
+                "cpu_limit": EXTRA_BIG_CPU,
+                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                "timeout": 10800,
+                "general_params": {"use_algos": [["lgb_tuned"]]},
+                "reader_params": {"cv": 5, "advanced_roles": True},
+                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
+            }
+        }
+    }
+
+    return build_two_stage_scenario_dag(
+        dag_id="2stage_ml1m_itemknn",
+        first_level_models=first_level_models,
+        second_level_models=second_level_models,
+        log_path="/opt/spark_data/replay/ml1m_ratings.csv",
+        user_features_path="/opt/spark_data/replay/ml1m_users.csv",
+        item_features_path="/opt/spark_data/replay/ml1m_items.csv",
+        use_big_exec_config_for_first_level=True,
+        use_extra_big_exec_config_for_second_level=True
+    )
+
+
 def build_2stage_ml25m_dag() -> DAG:
     first_level_models = {
         "replay.models.als.ALSWrap": {"rank": 100, "seed": 42},
@@ -925,9 +962,10 @@ def build_2stage_ml25m_dag() -> DAG:
         use_extra_big_exec_config_for_second_level=True
     )
 
-
 integration_dag = build_2stage_integration_test_dag()
 
 ml1m_dag = build_2stage_ml1m_dag()
+
+ml1m_itemknn_dag = build_2stage_ml1m_itemknn_dag()
 
 ml25m_dag = build_2stage_ml25m_dag()
