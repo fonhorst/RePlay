@@ -909,7 +909,7 @@ def build_2stage_ml1m_itemknn_dag() -> DAG:
                 "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
                 "timeout": 10800,
                 "general_params": {"use_algos": [["lgb_tuned"]]},
-                "reader_params": {"cv": 5, "advanced_roles": True},
+                "reader_params": {"cv": 5, "advanced_roles": False},
                 "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
             }
         }
@@ -917,6 +917,42 @@ def build_2stage_ml1m_itemknn_dag() -> DAG:
 
     return build_two_stage_scenario_dag(
         dag_id="2stage_ml1m_itemknn",
+        first_level_models=first_level_models,
+        second_level_models=second_level_models,
+        log_path="/opt/spark_data/replay/ml1m_ratings.csv",
+        user_features_path="/opt/spark_data/replay/ml1m_users.csv",
+        item_features_path="/opt/spark_data/replay/ml1m_items.csv",
+        use_big_exec_config_for_first_level=True,
+        use_extra_big_exec_config_for_second_level=True
+    )
+
+
+def build_2stage_ml1m_alswrap_dag() -> DAG:
+    first_level_models = {
+        "replay.models.als.ALSWrap": {"rank": 100, "seed": 42},
+        # "replay.models.knn.ItemKNN": {"num_neighbours": 1000},
+        # "replay.models.cluster.ClusterRec": {"num_clusters": 100},
+        # "replay.models.slim.SLIM": {"seed": 42},
+        # "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42},
+        # "replay.models.ucb.UCB": {"seed": 42}
+    }
+
+    second_level_models = {
+        "default_lama": {
+            "second_model_type": "lama",
+            "second_model_params": {
+                "cpu_limit": EXTRA_BIG_CPU,
+                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                "timeout": 10800,
+                "general_params": {"use_algos": [["lgb_tuned"]]},
+                "reader_params": {"cv": 5, "advanced_roles": False},
+                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
+            }
+        }
+    }
+
+    return build_two_stage_scenario_dag(
+        dag_id="2stage_ml1m_alswrap",
         first_level_models=first_level_models,
         second_level_models=second_level_models,
         log_path="/opt/spark_data/replay/ml1m_ratings.csv",
@@ -967,5 +1003,7 @@ integration_dag = build_2stage_integration_test_dag()
 ml1m_dag = build_2stage_ml1m_dag()
 
 ml1m_itemknn_dag = build_2stage_ml1m_itemknn_dag()
+
+ml1m_alswrap_dag = build_2stage_ml1m_alswrap_dag()
 
 ml25m_dag = build_2stage_ml25m_dag()
