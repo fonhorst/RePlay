@@ -25,6 +25,7 @@ from replay.models import PopRec
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
+from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import get_log_info, save_transformer, log_exec_timer
@@ -729,6 +730,8 @@ def second_level_fitting(
 
             if second_model_type == "lama":
                 second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
+            elif second_model_type == "slama":
+                second_stage_model = SlamaWrap(params=second_model_params, config_path=second_model_config_path)
             else:
                 raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
 
@@ -948,7 +951,20 @@ def build_2stage_ml1m_alswrap_dag() -> DAG:
                 "reader_params": {"cv": 5, "advanced_roles": False},
                 "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
             }
-        }
+        },
+
+        "lama_single_lgb": {
+            "second_model_type": "lama",
+            "second_model_params": {
+                "cpu_limit": EXTRA_BIG_CPU,
+                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                "timeout": 10800,
+                "general_params": {"use_algos": [["lgb"]]},
+                "reader_params": {"cv": 5, "advanced_roles": False},
+                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
+            }
+        },
+
     }
 
     return build_two_stage_scenario_dag(
