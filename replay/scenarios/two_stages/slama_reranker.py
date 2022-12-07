@@ -63,15 +63,14 @@ class SlamaWrap(ReRanker):
         """
         self.logger.info("Starting re-ranking")
 
-        # TODO: "user_idx", "item_idx" should not be removed fron the base dataframe
-        # TODO: need to test SLAMA on this subject
-        candidates_pred = self.model.predict(data)
-        candidates_pred_sdf = candidates_pred.data.select('user_idx', 'item_idx', 'relevance')
+        sdf = self.model.transformer().transform(data)
+        candidates_pred_sdf = sdf.select('user_idx', 'item_idx', 'relevance')
+        size, users_count = sdf.count(), sdf.select('user_idx').distinct().count()
 
         self.logger.info(
             "%s candidates rated for %s users",
-            candidates_pred.shape[0],
-            candidates_pred.data.select('user_idx').distinct().count()
+            size,
+            users_count
         )
 
         self.logger.info("top-k")
