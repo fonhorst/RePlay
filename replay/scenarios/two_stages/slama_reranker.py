@@ -6,6 +6,7 @@ from sparklightautoml.automl.presets.tabular_presets import SparkTabularAutoML
 from sparklightautoml.tasks.base import SparkTask
 
 from replay.scenarios.two_stages.reranker import ReRanker
+from replay.session_handler import State
 from replay.utils import get_top_k_recs
 
 
@@ -48,6 +49,7 @@ class SlamaWrap(ReRanker):
             self.transformer = transformer
         else:
             self.model = SparkTabularAutoML(
+                spark=State().session,
                 task=SparkTask("binary"),
                 config_path=config_path,
                 **(params if params is not None else {}),
@@ -94,6 +96,8 @@ class SlamaWrap(ReRanker):
         transformer = self.transformer if self.transformer else self.model.transformer()
 
         sdf = transformer.transform(data)
+
+        # TODO: need to convert predict into the relevance
         candidates_pred_sdf = sdf.select('user_idx', 'item_idx', 'relevance')
         size, users_count = sdf.count(), sdf.select('user_idx').distinct().count()
 

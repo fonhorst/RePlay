@@ -1,4 +1,5 @@
 import dataclasses
+import logging.config
 import os
 import shutil
 import uuid
@@ -6,6 +7,7 @@ from typing import cast
 
 import pytest
 from pyspark.sql import SparkSession
+from sparklightautoml.utils import logging_config, VERBOSE_LOGGING_FORMAT
 
 import replay
 from conftest import phase_report_key
@@ -17,6 +19,11 @@ from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProces
     HistoryBasedFeaturesProcessor
 from replay.model_handler import load
 from replay.utils import save_transformer, load_transformer
+
+
+logging.config.dictConfig(logging_config(level=logging.DEBUG, log_filename='/tmp/slama.log'))
+logging.basicConfig(level=logging.DEBUG, format=VERBOSE_LOGGING_FORMAT)
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="session")
@@ -184,7 +191,7 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
         artifacts=artifacts,
         model_name=model_name,
         k=10,
-        second_model_type="lama",
+        second_model_type="slama",
         second_model_params={
             "general_params": {"use_algos": [["lgb"]]},
             # "lgb_params": {

@@ -437,6 +437,8 @@ def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) ->
         SparkSession
         .builder
         .config("spark.jars", ",".join(jars))
+        .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5")
+        .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven")
         .config("spark.driver.extraJavaOptions", "-Dio.netty.tryReflectionSetAccessible=true")
         .config("spark.sql.shuffle.partitions", str(cpu * 3))
         .config("spark.default.parallelism", str(cpu * 3))
@@ -745,16 +747,16 @@ def second_level_fitting(
 
             mlflow.log_metric(timer.name, timer.duration)
 
-            with log_exec_timer("model_saving") as timer:
-                second_level_model_path = artifacts.second_level_model_path(model_name)
-                save_transformer(second_stage_model, second_level_model_path)
-
-            mlflow.log_metric(timer.name, timer.duration)
-
             with log_exec_timer("predict") as timer:
                 recs = second_stage_model.predict(artifacts.full_second_level_predicts, k=k)
                 recs = scenario._filter_seen(recs, artifacts.train, k, artifacts.train.select('user_idx').distinct())
                 recs.write.parquet(artifacts.second_level_predicts_path(model_name))
+
+            mlflow.log_metric(timer.name, timer.duration)
+
+            with log_exec_timer("model_saving") as timer:
+                second_level_model_path = artifacts.second_level_model_path(model_name)
+                save_transformer(second_stage_model, second_level_model_path)
 
             mlflow.log_metric(timer.name, timer.duration)
 
