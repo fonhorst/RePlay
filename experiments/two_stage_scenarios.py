@@ -6,6 +6,7 @@ import os
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Dict, cast, Optional, List, Union, Tuple, Sequence
 
 import mlflow
@@ -428,10 +429,14 @@ class ArtifactPaths:
 
 @contextmanager
 def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) -> SparkSession:
+    jars = [
+        os.environ.get("REPLAY_JAR_PATH", 'scala/target/scala-2.12/replay_2.12-0.1.jar'),
+        os.environ.get("SLAMA_JAR_PATH", '../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar')
+    ]
     spark = (
         SparkSession
         .builder
-        .config("spark.jars", os.environ.get("REPLAY_JAR_PATH", 'scala/target/scala-2.12/replay_2.12-0.1.jar'))
+        .config("spark.jars", ",".join(jars))
         .config("spark.driver.extraJavaOptions", "-Dio.netty.tryReflectionSetAccessible=true")
         .config("spark.sql.shuffle.partitions", str(cpu * 3))
         .config("spark.default.parallelism", str(cpu * 3))
@@ -770,7 +775,7 @@ def build_two_stage_scenario_dag(
 ) -> DAG:
     with DAG(
             dag_id=dag_id,
-            schedule=None,
+            schedule=timedelta(days=10086),
             start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
             catchup=False,
             tags=['two_stage', 'replay', 'slama']
@@ -779,7 +784,8 @@ def build_two_stage_scenario_dag(
         os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
 
         artifacts = ArtifactPaths(
-            base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id | replace(':', '__') | replace('+', '__') }}",
+            # base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id | replace(':', '__') | replace('+', '__') }}",
+            base_path="/opt/spark_data/replay/experiments/two_stage_2022-12-07_manual__2022-12-07T11__55__33.459452__00__00",
             log_path=log_path,
             user_features_path=user_features_path,
             item_features_path=item_features_path
@@ -841,6 +847,13 @@ def build_2stage_integration_test_dag() -> DAG:
         },
         "default_slama_2": {
             "second_model_type": "lama",
+            "second_model_params": {
+                "general_params": {"use_algos": [["lgb"]]},
+                "reader_params": {"cv": 3, "advanced_roles": False}
+            }
+        },
+        "slama_lgb": {
+            "second_model_type": "slama",
             "second_model_params": {
                 "general_params": {"use_algos": [["lgb"]]},
                 "reader_params": {"cv": 3, "advanced_roles": False}

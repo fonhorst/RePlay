@@ -26,3 +26,12 @@ COPY experiments /src/experiments
 COPY scala/target/scala-2.12/replay_2.12-0.1.jar /src/
 
 ENV REPLAY_JAR_PATH=/src/replay_2.12-0.1.jar
+
+COPY spark-lightautoml_2.12-0.1.1.jar /src
+
+ENV SLAMA_JAR_PATH=/src/spark-lightautoml_2.12-0.1.1.jar
+
+COPY SparkLightAutoML_DEV-0.3.2-py3-none-any.whl /src/
+
+#RUN pip install --force-reinstall --no-deps /src/SparkLightAutoML_DEV-0.3.2-py3-none-any.whl
+RUN pip install /src/SparkLightAutoML_DEV-0.3.2-py3-none-any.whl
