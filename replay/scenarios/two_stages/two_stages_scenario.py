@@ -13,7 +13,8 @@ from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import Metric, Precision
 from replay.models import ALSWrap, RandomRec, PopRec
 from replay.models.base_rec import BaseRecommender, HybridRecommender
-from replay.scenarios.two_stages.reranker import LamaWrap
+from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
+
 from replay.session_handler import State
 from replay.splitters import Splitter, UserSplitter
 from replay.utils import (
@@ -168,6 +169,7 @@ class TwoStagesScenario(HybridRecommender):
         ] = ALSWrap(rank=128),
         fallback_model: Optional[BaseRecommender] = PopRec(),
         use_first_level_models_feat: Union[List[bool], bool] = False,
+        second_model: Optional[ReRanker] = None,
         second_model_params: Optional[Union[Dict, str]] = None,
         second_model_config_path: Optional[str] = None,
         num_negatives: int = 100,
@@ -235,9 +237,14 @@ class TwoStagesScenario(HybridRecommender):
 
             self.use_first_level_models_feat = use_first_level_models_feat
 
-        self.second_stage_model = LamaWrap(
-            params=second_model_params, config_path=second_model_config_path
-        )
+        assert (second_model is not None) != (second_model_params or second_model_config_path), \
+            "Either second_model should be defined or params for second models"
+        if second_model:
+            self.second_stage_model = second_model
+        else:
+            self.second_stage_model = LamaWrap(
+                params=second_model_params, config_path=second_model_config_path
+            )
 
         self.num_negatives = num_negatives
         if negatives_type not in ["random", "first_level"]:
