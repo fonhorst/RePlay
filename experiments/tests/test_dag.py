@@ -294,7 +294,7 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     model_class_name = "replay.models.als.ALSWrap"
     model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
 
-    fit_predict_first_level_model.function(
+    fit_predict_first_level_model(
         artifacts=artifacts,
         model_class_name=model_class_name,
         model_kwargs=model_kwargs,
@@ -320,7 +320,7 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     # check the model
     setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
     setattr(replay.model_handler, 'PartialTwoStageScenario', PartialTwoStageScenario)
-    model = load(artifacts.two_stage_scenario_path)
+    model = load(artifacts.partial_two_stage_scenario_path(model_class_name))
     assert model is not None
     assert type(model).__name__ == 'PartialTwoStageScenario'
     model = cast(PartialTwoStageScenario, model)

@@ -105,7 +105,7 @@ DATASETS = {
 
         DatasetInfo(
             name="msd",
-            log_path="/opt/spark_data/replay/msd_ratings.csv"
+            log_path="/opt/spark_data/replay_datasets/MillionSongDataset/original.parquet"
         )
     ]
 }
@@ -490,9 +490,13 @@ class ArtifactPaths:
 
     @property
     def log(self) -> DataFrame:
-        return (
-            self._get_session().read.csv(self.log_path, header=True)
-        )
+        if self.log_path.endswith('.csv'):
+            return self._get_session().read.csv(self.log_path, header=True)
+
+        if self.log_path.endswith('.parquet'):
+            return self._get_session().read.parquet(self.log_path)
+
+        raise Exception("Unsupported format of the file, only csv and parquet are supported")
 
     @property
     def user_features(self) -> Optional[DataFrame]:
@@ -543,6 +547,9 @@ class ArtifactPaths:
     def second_level_positives_path(self) -> str:
         return self.second_level_positives_predefined_path if self.second_level_positives_predefined_path is not None \
             else os.path.join(self.base_path, "second_level_positives.parquet")
+
+    def partial_two_stage_scenario_path(self, model_cls_name: str) -> str:
+        return os.path.join(self.base_path, f"two_stage_scenario_{model_cls_name.split('.')[-1]}_{self.uid}")
 
     def model_path(self, model_cls_name: str) -> str:
         return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
@@ -794,7 +801,6 @@ def presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int 
         scenario._split_data(artifacts.train)
 
 
-@task
 def fit_predict_first_level_model(artifacts: ArtifactPaths,
                                   model_class_name: str,
                                   model_kwargs: Dict,
@@ -824,7 +830,7 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
 
         scenario.fit(log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features)
 
-        save(scenario, artifacts.two_stage_scenario_path)
+        save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name))
 
         test_recs = scenario.predict(
             log=artifacts.test,
@@ -1279,7 +1285,10 @@ def build_fit_predict_first_level_models_dag(
         k = 100
 
         first_level_models = [
-            fit_predict_first_level_model(
+            task(
+                task_id=f"fit_predict_first_level_model_{model_class_name.split('.')[-1]}",
+                executor_config=big_executor_config
+            )(fit_predict_first_level_model)(
                 artifacts=artifacts,
                 model_class_name=model_class_name,
                 model_kwargs=model_kwargs,
@@ -1310,6 +1319,6 @@ ml25m_dag = build_2stage_ml25m_dag()
 ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
     dag_id="ml1m_first_level_dag",
     mlflow_exp_id="107",
-    model_params_map=_get_models_params("als"),
+    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
     dataset=DATASETS["ml1m"]
 )
