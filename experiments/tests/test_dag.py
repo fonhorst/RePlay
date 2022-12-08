@@ -14,7 +14,7 @@ from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session, EmptyRecommender, \
-    presplit_data, fit_predict_first_level_model
+    presplit_data, fit_predict_first_level_model, PartialTwoStageScenario
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
@@ -89,7 +89,8 @@ def artifacts(request, resource_path: str) -> ArtifactPaths:
 def test_data_splitting(spark_sess: SparkSession, artifacts: ArtifactPaths):
     dataset_splitting.function(
         artifacts,
-        partitions_num=4
+        partitions_num=4,
+        dataset_name="ml100k"
     )
 
     assert os.path.exists(artifacts.base_path)
@@ -268,7 +269,7 @@ def test_feature_transformer_save_load(spark_sess: SparkSession, artifacts: Arti
 
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
-def test_simple_dag_presplit_data(spark_sess: SparkSession, artifacts: ArtifactPaths):
+def test_simple_dag_presplit_data(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
     presplit_data.function(artifacts)
 
     assert os.path.exists(artifacts.first_level_train_path)
@@ -311,7 +312,13 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     assert df.count() > 0
 
     # check the model
-    model = load(artifacts.model_path(model_class_name))
+    setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
+    setattr(replay.model_handler, 'PartialTwoStageScenario', PartialTwoStageScenario)
+    model = load(artifacts.two_stage_scenario_path)
     assert model is not None
-    full_type_name = f"{type(model).__module__}.{type(model).__name__}"
+    assert type(model).__name__ == 'PartialTwoStageScenario'
+    model = cast(PartialTwoStageScenario, model)
+    assert len(model.first_level_models) == 1
+    fl_model = model.first_level_models[0]
+    full_type_name = f"{type(fl_model).__module__}.{type(fl_model).__name__}"
     assert full_type_name == model_class_name

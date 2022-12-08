@@ -13,7 +13,6 @@ import mlflow
 import pendulum
 from airflow import DAG
 from airflow.decorators import task
-from airflow.models import Variable
 from airflow.utils.helpers import chain, cross_downstream
 from kubernetes.client import models as k8s
 from pyspark.sql import functions as sf, SparkSession, DataFrame
@@ -199,7 +198,7 @@ class PartialTwoStageScenario(TwoStagesScenario):
                  base_path: str,
                  first_level_train_path: str,
                  second_level_positives_path: str,
-                 second_level_train_path: str,
+                 second_level_train_path: Optional[str] = None,
                  train_splitter: Splitter = UserSplitter(
                      item_test_size=0.5, shuffle=True, seed=42
                  ),
@@ -435,29 +434,6 @@ class RefitableTwoStageScenario(TwoStagesScenario):
         self._are_split_data_dumped = row["_are_split_data_dumped"]
 
 
-# def _get_scenario(
-#         model_class_name: str,
-#         model_kwargs: Dict,
-#         predefined_train_and_positives: Optional[Union[Tuple[DataFrame, DataFrame], Tuple[str, str]]] = None,
-#         predefined_negatives: Optional[Union[DataFrame, str]] = None,
-#         empty_second_stage_params: Optional[Dict] = None,
-# ) -> TwoStagesScenario:
-#     module_name = ".".join(model_class_name.split('.')[:-1])
-#     class_name = model_class_name.split('.')[-1]
-#     module = importlib.import_module(module_name)
-#     clazz = getattr(module, class_name)
-#     base_model = cast(BaseRecommender, clazz(**model_kwargs))
-#
-#     scenario = CustomTwoStageScenario(
-#         predefined_train_and_positives=predefined_train_and_positives,
-#         predefined_negatives=predefined_negatives,
-#         empty_second_stage_params=empty_second_stage_params,
-#         train_splitter=UserSplitter(item_test_size=0.5, shuffle=True, seed=42),
-#         first_level_models=base_model,
-#         second_model_params={"general_params": {"use_algos": [["lgb", "linear_l2"]]}}
-#     )
-#
-#     return scenario
 @dataclass
 class ArtifactPaths:
     base_path: str
@@ -469,7 +445,7 @@ class ArtifactPaths:
     partial_predict_prefix: str = "partial_predict"
     second_level_model_prefix: str = "second_level_model"
     second_level_predicts_prefix: str = "second_level_predicts"
-    first_level_train_predefined_path: Optional[str] = None,
+    first_level_train_predefined_path: Optional[str] = None
     second_level_positives_predefined_path: Optional[str] = None
 
     template_fields: Sequence[str] = ("base_path",)
@@ -720,7 +696,7 @@ def _log_model_settings(model_name: str,
 
 
 @task
-def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
+def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int, dataset_name: str):
     with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY):
         data = (
             artifacts.log
@@ -732,11 +708,14 @@ def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
         # splitting on train and test
         preparator = DataPreparator()
 
-        log = preparator.transform(
-            columns_mapping={"user_id": "user_id", "item_id": "item_id",
-                             "relevance": "rating", "timestamp": "timestamp"},
-            data=data
-        ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
+        if dataset_name.startswith('ml'):
+            log = preparator.transform(
+                columns_mapping={"user_id": "user_id", "item_id": "item_id",
+                                 "relevance": "rating", "timestamp": "timestamp"},
+                data=data
+            ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
+        else:
+            raise Exception(f"Unsupported dataset name: {dataset_name}")
 
         print(get_log_info(log))
 
@@ -799,7 +778,8 @@ def presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int 
             second_level_positives_path=artifacts.second_level_positives_path,
             presplitted_data=False
         )
-        scenario._split_data(artifacts.log)
+
+        scenario._split_data(artifacts.train)
 
 
 @task
@@ -842,7 +822,7 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
             filter_seen_items=True
         )
 
-        test_recs.write.parquet(artifacts.partial_train_path(model_class_name))
+        test_recs.write.parquet(artifacts.partial_predicts_path(model_class_name))
 
 
 # this is @task
@@ -1022,7 +1002,7 @@ def build_two_stage_scenario_dag(
             item_features_path=item_features_path
         )
 
-        splitting = dataset_splitting(artifacts, partitions_num=6)
+        splitting = dataset_splitting(artifacts, partitions_num=6, dataset_name="ml1m")
         create_scenario_datasets = init_refitable_two_stage_scenario(artifacts)
         fit_first_level_models = [
             task(
@@ -1275,7 +1255,9 @@ def build_fit_predict_first_level_models_dag(
         os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
         os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
 
-        path_suffix = Variable.get(f'{dataset.name}_artefacts_dir_suffix', 'default')
+        # TODO: fix it later
+        # path_suffix = Variable.get(f'{dataset.name}_artefacts_dir_suffix', 'default')
+        path_suffix = 'default'
         artifacts = ArtifactPaths(
             base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
             log_path=dataset.log_path,
@@ -1296,7 +1278,9 @@ def build_fit_predict_first_level_models_dag(
             for model_class_name, model_kwargs in model_params_map.items()
         ]
 
-        dataset_splitting(artifacts, partitions_num=100) >> presplit_data(artifacts) >> first_level_models
+        dataset_splitting(artifacts, partitions_num=100, dataset_name=dataset.name) \
+            >> presplit_data(artifacts) \
+            >> first_level_models
 
     return dag
 
