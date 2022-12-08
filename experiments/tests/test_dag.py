@@ -13,7 +13,8 @@ import replay
 from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
-    combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session, EmptyRecommender
+    combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session, EmptyRecommender, \
+    presplit_data, fit_predict_first_level_model
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
@@ -264,3 +265,53 @@ def test_feature_transformer_save_load(spark_sess: SparkSession, artifacts: Arti
 
     new_result = loaded_transformer.transform(artifacts.user_features)
     assert sorted(result.columns) == sorted(new_result.columns)
+
+
+@pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
+def test_simple_dag_presplit_data(spark_sess: SparkSession, artifacts: ArtifactPaths):
+    presplit_data.function(artifacts)
+
+    assert os.path.exists(artifacts.first_level_train_path)
+    assert os.path.exists(artifacts.second_level_positives_path)
+
+    df = spark_sess.read.parquet(artifacts.first_level_train_path)
+    assert 'user_idx' in df.columns and 'item_idx' in df.columns
+    assert df.count() > 0
+
+    df = spark_sess.read.parquet(artifacts.second_level_positives_path)
+    assert 'user_idx' in df.columns and 'item_idx' in df.columns
+    assert df.count() > 0
+
+
+@pytest.mark.parametrize('ctx', ['test_simple_dag_presplit_data__out'], indirect=True)
+def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
+    model_class_name = "replay.models.knn.ItemKNN"
+    model_kwargs = {"num_neighbours": 10}
+    fit_predict_first_level_model.function(
+        artifacts=artifacts,
+        model_class_name=model_class_name,
+        model_kwargs=model_kwargs,
+        k=10
+    )
+
+    assert artifacts.partial_train_path(model_class_name)
+    assert artifacts.model_path(model_class_name)
+    assert artifacts.partial_predicts_path(model_class_name)
+
+    # check train properties
+    df = spark_sess.read.parquet(artifacts.partial_train_path(model_class_name))
+    assert 'user_idx' in df.columns and 'item_idx' in df.columns and 'target' in df.columns
+    assert len([c for c in df.columns if c.startswith('rel_')]) == 1
+    assert df.count() > 0
+
+    # check predict properties
+    df = spark_sess.read.parquet(artifacts.partial_predicts_path(model_class_name))
+    assert 'user_idx' in df.columns and 'item_idx' in df.columns and 'target' not in df.columns
+    assert len([c for c in df.columns if c.startswith('rel_')]) == 1
+    assert df.count() > 0
+
+    # check the model
+    model = load(artifacts.model_path(model_class_name))
+    assert model is not None
+    full_type_name = f"{type(model).__module__}.{type(model).__name__}"
+    assert full_type_name == model_class_name

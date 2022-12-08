@@ -157,6 +157,9 @@ class EmptyWrap(ReRanker):
         cls._validate_classname(row["classname"])
         return EmptyWrap()
 
+    def __init__(self, dump_path: Optional[str] = None):
+        self.dump_path = dump_path
+
     def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
         spark = spark or self._get_spark_session()
         spark.createDataFrame([{"data": '', "classname": self.get_classname()}]).write.parquet(
@@ -165,7 +168,8 @@ class EmptyWrap(ReRanker):
         )
 
     def fit(self, data: DataFrame, fit_params: Optional[Dict] = None) -> None:
-        pass
+        if self.dump_path is not None:
+            data.write.parquet(self.dump_path)
 
     def predict(self, data, k) -> DataFrame:
         return data
@@ -195,10 +199,11 @@ class PartialTwoStageScenario(TwoStagesScenario):
                  base_path: str,
                  first_level_train_path: str,
                  second_level_positives_path: str,
+                 second_level_train_path: str,
                  train_splitter: Splitter = UserSplitter(
                      item_test_size=0.5, shuffle=True, seed=42
                  ),
-                 first_level_models: Optional[Union[List[BaseRecommender], BaseRecommender]] = None,
+                 first_level_models: Optional[BaseRecommender] = None,
                  fallback_model: Optional[BaseRecommender] = PopRec(),
                  use_first_level_models_feat: Union[List[bool], bool] = True,
                  num_negatives: int = 100,
@@ -228,7 +233,7 @@ class PartialTwoStageScenario(TwoStagesScenario):
             custom_features_processor=custom_features_processor,
             seed=seed
         )
-        self.second_stage_model = EmptyWrap()
+        self.second_stage_model = EmptyWrap(dump_path=second_level_train_path)
         self._base_path = base_path
         self._first_level_train_path = first_level_train_path
         self._second_level_positives_path = second_level_positives_path
@@ -252,8 +257,8 @@ class PartialTwoStageScenario(TwoStagesScenario):
         if self._presplitted_data:
             spark = log.sql_ctx.sparkSession
             return (
-                spark.read.parquet(self._first_level_train_path),
-                spark.read.parquet(self._second_level_positives_path)
+                spark.read.parquet(self._first_level_train_path).repartition(spark.sparkContext.defaultParallelism),
+                spark.read.parquet(self._second_level_positives_path).repartition(spark.sparkContext.defaultParallelism)
             )
 
         first_level_train, second_level_positive = super()._split_data(log)
@@ -820,6 +825,7 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
             base_path=artifacts.base_path,
             first_level_train_path=artifacts.first_level_train_path,
             second_level_positives_path=artifacts.second_level_positives_path,
+            second_level_train_path=artifacts.partial_train_path(model_class_name),
             first_level_models=first_level_model,
             presplitted_data=True
         )
@@ -1290,7 +1296,7 @@ def build_fit_predict_first_level_models_dag(
             for model_class_name, model_kwargs in model_params_map.items()
         ]
 
-        presplit_data(artifacts) >> first_level_models
+        dataset_splitting(artifacts, partitions_num=100) >> presplit_data(artifacts) >> first_level_models
 
     return dag
 
