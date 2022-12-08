@@ -570,6 +570,9 @@ class ArtifactPaths:
 
 @contextmanager
 def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) -> SparkSession:
+    if os.environ.get('SCRIPT_ENV', 'local') == 'cluster':
+        return SparkSession.builder.getOrCreate()
+
     jars = [
         os.environ.get("REPLAY_JAR_PATH", 'scala/target/scala-2.12/replay_2.12-0.1.jar'),
         os.environ.get("SLAMA_JAR_PATH", '../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar')

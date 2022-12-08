@@ -3,6 +3,7 @@
 set -ex
 
 BASE_IMAGE_TAG="slama-replay-3.2.0"
+REPO="node2.bdcl:5000"
 
 if [[ -z "${KUBE_NAMESPACE}" ]]
 then
@@ -17,12 +18,12 @@ fi
 
 if [[ -z "${REPO}" ]]
 then
-  REPO="node2.bdcl:5000"
+  REPO=""
   echo "REPO var is not defined! Setting it to ${REPO}"
-  IMAGE=spark-py-lama:${IMAGE_TAG}
+  IMAGE=spark-py-replay:${IMAGE_TAG}
   BASE_SPARK_IMAGE=spark-py:${BASE_IMAGE_TAG}
 else
-  IMAGE=${REPO}/spark-py:${IMAGE_TAG}
+  IMAGE=${REPO}/spark-py-replay:${IMAGE_TAG}
   BASE_SPARK_IMAGE=${REPO}/spark-py:${BASE_IMAGE_TAG}
 fi
 
@@ -32,9 +33,9 @@ function build_airflow_image() {
 
   cp ../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar .
 
-  #poetry build
+  poetry build
 
-  #poetry export --without-hashes -f requirements.txt > requirements.txt
+  poetry export --without-hashes -f requirements.txt > requirements.txt
 
   docker build -t node2.bdcl:5000/airflow-worker:latest -f experiments/docker/airflow-worker.dockerfile .
 
@@ -81,6 +82,30 @@ function build_spark_executor_image() {
   fi
 }
 
+function build_spark_replay_image() {
+  cp ../LightAutoML/dist/SparkLightAutoML_DEV-0.3.2-py3-none-any.whl .
+
+  cp ../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar .
+
+  poetry build
+
+  poetry export --without-hashes -f requirements.txt > requirements.txt
+
+  docker build \
+    --build-arg base_image=${BASE_SPARK_IMAGE} \
+    -t ${IMAGE} \
+    -f experiments/docker/spark-py-replay.dockerfile \
+    .
+
+  if [[ ! -z "${REPO}" ]]
+  then
+    docker push ${IMAGE}
+  fi
+
+  rm SparkLightAutoML_DEV-0.3.2-py3-none-any.whl
+  rm spark-lightautoml_2.12-0.1.1.jar
+}
+
 function help() {
   echo "
   List of commands.
@@ -118,6 +143,10 @@ function main () {
 
     "build-spark-executor-image")
         build_spark_executor_image
+        ;;
+
+    "build-spark-replay-image")
+        build_spark_replay_image
         ;;
 
     *)

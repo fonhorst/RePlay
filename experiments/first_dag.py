@@ -125,7 +125,7 @@ def build_full_dag():
 
 def build_spark_dag():
     os.environ["AIRFLOW_CONN_SPARK_DEFAULT"] = \
-        'k8s://https://node2.bdcl:6443?deploy-mode=cluster&namespace=spark-lama-exps'
+        'k8s://https://node2.bdcl:6443?deploy-mode=cluster&namespace=airflow'
 
     with DAG(
             dag_id="spark_submit_dag",
@@ -135,18 +135,52 @@ def build_spark_dag():
             tags=["example", "spark_submit", "spark"],
     ) as dag:
         # [START howto_operator_spark_submit]
-        submit_job = SparkSubmitOperator(
-            application="${SPARK_HOME}/examples/src/main/python/pi.py",
-            task_id="submit_job",
-            conf={
-                "spark.kubernetes.namespace": "spark-lama-exps",
-                "spark.kubernetes.container.image": "",
-                "spark.kubernetes.container.image.pullPolicy": "Always",
-                "spark.kubernetes.authenticate.driver.serviceAccountName": "spark",
-                "spark.kubernetes.executor.deleteOnTermination": "false",
-                "spark.kubernetes.executor.label": "test_airflow"
+        pass
+    submit_job = SparkSubmitOperator(
+        application="/src/experiments/pi.py",
+        task_id="submit_job",
+        conf={
+            "spark.kryoserializer.buffer.max": "512m",
+            "spark.scheduler.minRegisteredResourcesRatio": 1.0,
+            "spark.scheduler.maxRegisteredResourcesWaitingTime": "180s",
+            "spark.executor.extraClassPath": "/root/.ivy2/jars/*",
+            "spark.driver.extraClassPath": "/root/.ivy2/jars/*",
+            "spark.jars": "/src/replay_2.12-0.1.jar,/src/spark-lightautoml_2.12-0.1.1.jar",
+            "spark.driver.cores": 4,
+            "spark.driver.memory": "4g",
+            "spark.driver.maxResultSize": "4g",
+            "spark.executor.instances": 1,
+            "spark.executor.cores": 6,
+            "spark.executor.memory": "16g",
+            "spark.cores.max": 6,
+            "spark.memory.fraction": 0.8,
+            "spark.memory.storageFraction": 0.5,
+            "spark.sql.autoBroadcastJoinThreshold": "500MB",
+            "spark.sql.execution.arrow.pyspark.enabled": True,
+            "spark.kubernetes.namespace": "airflow",
+            "spark.kubernetes.container.image": "node2.bdcl:5000/spark-py-replay:slama-replay-3.2.0",
+            "spark.kubernetes.container.image.pullPolicy": "Always",
+            "spark.kubernetes.authenticate.driver.serviceAccountName": "spark",
+            "spark.kubernetes.executor.deleteOnTermination": "false",
+            "spark.kubernetes.memoryOverheadFactor": 0.2,
+            "spark.kubernetes.driver.label.appname": "test_airflow",
+            "spark.kubernetes.executor.label.appname": "test_airflow",
+            # env vars
+            "spark.kubernetes.driverEnv.SCRIPT_ENV": "cluster",
+            # upload dir
+            "spark.kubernetes.file.upload.path": "/opt/spark_data/spark_upload_dir",
+            # driver - mount /opt/spark_data
+            "spark.kubernetes.driver.volumes.persistentVolumeClaim.spark-lama-data.options.claimName": "spark-lama-data",
+            "spark.kubernetes.driver.volumes.persistentVolumeClaim.spark-lama-data.options.storageClass": "local-hdd",
+            "spark.kubernetes.driver.volumes.persistentVolumeClaim.spark-lama-data.mount.path": "/opt/spark_data/",
+            "spark.kubernetes.driver.volumes.persistentVolumeClaim.spark-lama-data.mount.readOnly": "false",
+            # executor - mount /opt/spark_data
+            "spark.kubernetes.executor.volumes.persistentVolumeClaim.spark-lama-data.options.claimName": "spark-lama-data",
+            "spark.kubernetes.executor.volumes.persistentVolumeClaim.spark-lama-data.options.storageClass": "local-hdd",
+            "spark.kubernetes.executor.volumes.persistentVolumeClaim.spark-lama-data.mount.path": "/opt/spark_data/",
+            "spark.kubernetes.executor.volumes.persistentVolumeClaim.spark-lama-data.mount.readOnly": "false"
             }
-        )
+    )
 
     return dag
 
