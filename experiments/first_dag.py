@@ -7,7 +7,8 @@ import mlflow
 import pendulum
 from airflow.decorators import task
 
-from airflow.models.dag import dag
+from airflow.models.dag import dag, DAG
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from kubernetes.client import models as k8s
 import pandas as pd
 from lightautoml.automl.presets.tabular_presets import TabularAutoML
@@ -122,4 +123,33 @@ def build_full_dag():
     check_lama()
 
 
-dag = build_full_dag()
+def build_spark_dag():
+    os.environ["AIRFLOW_CONN_SPARK_DEFAULT"] = \
+        'k8s://https://node2.bdcl:6443?deploy-mode=cluster&namespace=spark-lama-exps'
+
+    with DAG(
+            dag_id="spark_submit_dag",
+            schedule=None,
+            start_date=pendulum.datetime(2021, 1, 1),
+            catchup=False,
+            tags=["example", "spark_submit", "spark"],
+    ) as dag:
+        # [START howto_operator_spark_submit]
+        submit_job = SparkSubmitOperator(
+            application="${SPARK_HOME}/examples/src/main/python/pi.py",
+            task_id="submit_job",
+            conf={
+                "spark.kubernetes.namespace": "spark-lama-exps",
+                "spark.kubernetes.container.image": "",
+                "spark.kubernetes.container.image.pullPolicy": "Always",
+                "spark.kubernetes.authenticate.driver.serviceAccountName": "spark",
+                "spark.kubernetes.executor.deleteOnTermination": "false",
+                "spark.kubernetes.executor.label": "test_airflow"
+            }
+        )
+
+    return dag
+
+# dag = build_full_dag()
+
+spark_submit_dag = build_spark_dag()
