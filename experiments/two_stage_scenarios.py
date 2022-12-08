@@ -7,13 +7,15 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Dict, cast, Optional, List, Union, Tuple, Sequence
+from typing import Dict, cast, Optional, List, Union, Tuple, Sequence, Any
 
 import mlflow
 import pendulum
 from airflow import DAG
 from airflow.decorators import task
+from airflow.models import Variable
 from airflow.utils.helpers import chain, cross_downstream
+from kubernetes.client import models as k8s
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 
 import replay
@@ -21,7 +23,7 @@ from replay.data_preparator import DataPreparator
 from replay.experiment import Experiment
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import MAP, NDCG, HitRate
-from replay.model_handler import save, Splitter, load, ALSWrap, ItemKNN
+from replay.model_handler import save, Splitter, load, ALSWrap
 from replay.models import PopRec
 from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
@@ -29,8 +31,7 @@ from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info, save_transformer, log_exec_timer
-from kubernetes.client import models as k8s
+from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,67 @@ EXTRA_BIG_CPU = 20
 DEFAULT_MEMORY = 30
 BIG_MEMORY = 40
 EXTRA_BIG_MEMORY = 80
+
+
+@dataclass(frozen=True)
+class DatasetInfo:
+    name: str
+    log_path: str
+    user_features_path: Optional[str] = None
+    item_features_path: Optional[str] = None
+
+
+FIRST_LEVELS_MODELS_PARAMS = {
+    "replay.models.als.ALSWrap": {"rank": 100, "seed": 42},
+    "replay.models.knn.ItemKNN": {"num_neighbours": 1000},
+    "replay.models.cluster.ClusterRec": {"num_clusters": 100},
+    "replay.models.slim.SLIM": {"seed": 42},
+    "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42},
+    "replay.models.ucb.UCB": {"seed": 42}
+}
+
+MODELNAME2FULLNAME = {
+    "als": "replay.models.als.ALSWrap",
+    "itemknn": "replay.models.knn.ItemKNN",
+    "cluster": "replay.models.cluster.ClusterRec",
+    "slim": "replay.models.slim.SLIM",
+    "word2vec": "replay.models.word2vec.Word2VecRec",
+    "ucb": "replay.models.ucb.UCB"
+}
+
+DATASETS = {
+    dataset.name: dataset  for dataset in [
+        DatasetInfo(
+            name="ml100k",
+            log_path="/opt/spark_data/replay/ml100k_ratings.csv",
+            user_features_path="/opt/spark_data/replay/ml100k_users.csv",
+            item_features_path="/opt/spark_data/replay/ml100k_items.csv"
+        ),
+
+        DatasetInfo(
+            name="ml1m",
+            log_path="/opt/spark_data/replay/ml1m_ratings.csv",
+            user_features_path="/opt/spark_data/replay/ml1m_users.csv",
+            item_features_path="/opt/spark_data/replay/ml1m_items.csv"
+        ),
+
+        DatasetInfo(
+            name="ml25m",
+            log_path="/opt/spark_data/replay/ml25m_ratings.csv"
+        ),
+
+        DatasetInfo(
+            name="msd",
+            log_path="/opt/spark_data/replay/msd_ratings.csv"
+        )
+    ]
+}
+
+def _get_models_params(*model_names: str) -> Dict[str, Any]:
+    return {
+        MODELNAME2FULLNAME[model_name]: FIRST_LEVELS_MODELS_PARAMS[MODELNAME2FULLNAME[model_name]]
+        for model_name in model_names
+    }
 
 
 big_executor_config = {
@@ -128,12 +190,15 @@ class EmptyRecommender(BaseRecommender):
         return None
 
 
-class RefitableTwoStageScenario(TwoStagesScenario):
+class PartialTwoStageScenario(TwoStagesScenario):
     def __init__(self,
                  base_path: str,
+                 first_level_train_path: str,
+                 second_level_positives_path: str,
                  train_splitter: Splitter = UserSplitter(
                      item_test_size=0.5, shuffle=True, seed=42
                  ),
+                 first_level_models: Optional[Union[List[BaseRecommender], BaseRecommender]] = None,
                  fallback_model: Optional[BaseRecommender] = PopRec(),
                  use_first_level_models_feat: Union[List[bool], bool] = True,
                  num_negatives: int = 100,
@@ -141,13 +206,91 @@ class RefitableTwoStageScenario(TwoStagesScenario):
                  use_generated_features: bool = True,
                  user_cat_features_list: Optional[List] = None,
                  item_cat_features_list: Optional[List] = None,
-                 custom_features_processor: HistoryBasedFeaturesProcessor = None,
+                 custom_features_processor: Optional[HistoryBasedFeaturesProcessor] = None,
                  seed: int = 123,
+                 presplitted_data: bool = False
                  ):
+        if first_level_models is None:
+            first_level_models = ALSWrap(rank=100, seed=42)
+
         super().__init__(
             train_splitter=train_splitter,
-            # first_level_models=[ALSWrap(rank=100, seed=42)],
-            first_level_models=[ItemKNN(num_neighbours=1000)],
+            first_level_models=first_level_models,
+            fallback_model=fallback_model,
+            use_first_level_models_feat=use_first_level_models_feat,
+            second_model_params=None,
+            second_model_config_path=None,
+            num_negatives=num_negatives,
+            negatives_type=negatives_type,
+            use_generated_features=use_generated_features,
+            user_cat_features_list=user_cat_features_list,
+            item_cat_features_list=item_cat_features_list,
+            custom_features_processor=custom_features_processor,
+            seed=seed
+        )
+        self.second_stage_model = EmptyWrap()
+        self._base_path = base_path
+        self._first_level_train_path = first_level_train_path
+        self._second_level_positives_path = second_level_positives_path
+        self._presplitted_data = presplitted_data
+
+    @property
+    def _init_args(self):
+        return {
+            **super()._init_args,
+            "base_path": self._base_path,
+            "first_level_train_path": self._first_level_train_path,
+            "second_level_positives_path": self._second_level_positives_path,
+            "presplitted_data": self._presplitted_data
+        }
+
+    @property
+    def first_level_models_relevance_columns(self) -> List[str]:
+        return [f"rel_{idx}_{model}" for idx, model in enumerate(self.first_level_models)]
+
+    def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
+        if self._presplitted_data:
+            spark = log.sql_ctx.sparkSession
+            return (
+                spark.read.parquet(self._first_level_train_path),
+                spark.read.parquet(self._second_level_positives_path)
+            )
+
+        first_level_train, second_level_positive = super()._split_data(log)
+
+        first_level_train.write.parquet(self._first_level_train_path)
+        second_level_positive.write.parquet(self._second_level_positives_path)
+
+        return first_level_train, second_level_positive
+
+    def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
+                           candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:
+        raise NotImplementedError("Unsupported method")
+
+
+class RefitableTwoStageScenario(TwoStagesScenario):
+    def __init__(self,
+                 base_path: str,
+                 train_splitter: Splitter = UserSplitter(
+                     item_test_size=0.5, shuffle=True, seed=42
+                 ),
+                 first_level_models: Optional[Union[List[BaseRecommender], BaseRecommender]] = None,
+                 fallback_model: Optional[BaseRecommender] = PopRec(),
+                 use_first_level_models_feat: Union[List[bool], bool] = True,
+                 num_negatives: int = 100,
+                 negatives_type: str = "first_level",
+                 use_generated_features: bool = True,
+                 user_cat_features_list: Optional[List] = None,
+                 item_cat_features_list: Optional[List] = None,
+                 custom_features_processor: Optional[HistoryBasedFeaturesProcessor] = None,
+                 seed: int = 123,
+                 ):
+        if first_level_models is None:
+            first_level_models = ALSWrap(rank=100, seed=42)
+
+        super().__init__(
+            train_splitter=train_splitter,
+            first_level_models=first_level_models,
             fallback_model=fallback_model,
             use_first_level_models_feat=use_first_level_models_feat,
             second_model_params=None,
@@ -321,6 +464,8 @@ class ArtifactPaths:
     partial_predict_prefix: str = "partial_predict"
     second_level_model_prefix: str = "second_level_model"
     second_level_predicts_prefix: str = "second_level_predicts"
+    first_level_train_predefined_path: Optional[str] = None,
+    second_level_positives_predefined_path: Optional[str] = None
 
     template_fields: Sequence[str] = ("base_path",)
 
@@ -405,6 +550,16 @@ class ArtifactPaths:
     @property
     def full_second_level_predicts(self) -> DataFrame:
         return self._get_session().read.parquet(self.full_second_level_predicts_path)
+
+    @property
+    def first_level_train_path(self) -> str:
+        return self.first_level_train_predefined_path if self.first_level_train_predefined_path is not None \
+            else os.path.join(self.base_path, "first_level_train.parquet")
+
+    @property
+    def second_level_positives_path(self) -> str:
+        return self.second_level_positives_predefined_path if self.second_level_positives_predefined_path is not None \
+            else os.path.join(self.base_path, "second_level_positives.parquet")
 
     def model_path(self, model_cls_name: str) -> str:
         return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
@@ -617,8 +772,76 @@ def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
         save(scenario, artifacts.two_stage_scenario_path)
 
 
+@task
+def presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
+    with _init_spark_session(cpu, memory):
+        flt_exists = do_path_exists(artifacts.first_level_train_path)
+        slp_exists = do_path_exists(artifacts.second_level_positives_path)
+
+        if flt_exists != slp_exists:
+            raise Exception(
+                f"The paths should be both either existing or absent. "
+                f"But: {artifacts.first_level_train_path} exists == {flt_exists}, "
+                f"{artifacts.second_level_positives_path} exists == {slp_exists}."
+            )
+
+        if flt_exists and slp_exists:
+            return
+
+        scenario = PartialTwoStageScenario(
+            base_path=artifacts.base_path,
+            first_level_train_path=artifacts.first_level_train_path,
+            second_level_positives_path=artifacts.second_level_positives_path,
+            presplitted_data=False
+        )
+        scenario._split_data(artifacts.log)
+
+
+@task
+def fit_predict_first_level_model(artifacts: ArtifactPaths,
+                                  model_class_name: str,
+                                  model_kwargs: Dict,
+                                  k: int,
+                                  cpu: int = DEFAULT_CPU,
+                                  memory: int = DEFAULT_MEMORY):
+    with _init_spark_session(cpu, memory):
+        _log_model_settings(
+            model_name=model_class_name,
+            model_type=model_class_name,
+            k=k,
+            artifacts=artifacts,
+            model_params=model_kwargs,
+            model_config_path=None
+        )
+
+        first_level_model = _get_model(model_class_name, model_kwargs)
+
+        scenario = PartialTwoStageScenario(
+            base_path=artifacts.base_path,
+            first_level_train_path=artifacts.first_level_train_path,
+            second_level_positives_path=artifacts.second_level_positives_path,
+            first_level_models=first_level_model,
+            presplitted_data=True
+        )
+
+        scenario.fit(log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features)
+
+        save(scenario, artifacts.two_stage_scenario_path)
+
+        test_recs = scenario.predict(
+            log=artifacts.test,
+            k=k,
+            user_features=artifacts.user_features,
+            item_features=artifacts.item_features,
+            filter_seen_items=True
+        )
+
+        test_recs.write.parquet(artifacts.partial_train_path(model_class_name))
+
+
 # this is @task
-def first_level_fitting(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict, k: int,
+def first_level_fitting(artifacts: ArtifactPaths,
+                        model_class_name: str, model_kwargs: Dict, k: int,
                         cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
     with _init_spark_session(cpu, memory):
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
@@ -1029,6 +1252,49 @@ def build_2stage_ml25m_dag() -> DAG:
         use_extra_big_exec_config_for_second_level=True
     )
 
+
+def build_fit_predict_first_level_models_dag(
+        dag_id: str,
+        mlflow_exp_id: str,
+        model_params_map: Dict[str, Dict[str, Any]],
+        dataset: DatasetInfo
+):
+    with DAG(
+            dag_id=dag_id,
+            schedule=timedelta(days=10086),
+            start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
+            catchup=False,
+            tags=['two_stage', 'replay', 'first level']
+    ) as dag:
+        os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
+        os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
+
+        path_suffix = Variable.get(f'{dataset.name}_artefacts_dir_suffix', 'default')
+        artifacts = ArtifactPaths(
+            base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
+            log_path=dataset.log_path,
+            user_features_path=dataset.user_features_path,
+            item_features_path=dataset.item_features_path
+        )
+        k = 100
+
+        first_level_models = [
+            fit_predict_first_level_model(
+                artifacts=artifacts,
+                model_class_name=model_class_name,
+                model_kwargs=model_kwargs,
+                k=k,
+                cpu=BIG_CPU,
+                memory=BIG_MEMORY
+            )
+            for model_class_name, model_kwargs in model_params_map.items()
+        ]
+
+        presplit_data(artifacts) >> first_level_models
+
+    return dag
+
+
 integration_dag = build_2stage_integration_test_dag()
 
 ml1m_dag = build_2stage_ml1m_dag()
@@ -1038,3 +1304,10 @@ ml1m_itemknn_dag = build_2stage_ml1m_itemknn_dag()
 ml1m_alswrap_dag = build_2stage_ml1m_alswrap_dag()
 
 ml25m_dag = build_2stage_ml25m_dag()
+
+ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="ml1m_first_level_dag",
+    mlflow_exp_id="107",
+    model_params_map=_get_models_params("als"),
+    dataset=DATASETS["ml1m"]
+)

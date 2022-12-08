@@ -192,12 +192,13 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
         model_name=model_name,
         k=10,
         second_model_type="slama",
+        # second_model_type="lama",
         second_model_params={
             "general_params": {"use_algos": [["lgb"]]},
             # "lgb_params": {
             #     'default_params': {'numIteration': 10}
             # },
-            "reader_params": {"cv": 3, "advanced_roles": False}
+            "reader_params": {"cv": 5, "advanced_roles": False}
         },
         second_model_config_path=None
     )
