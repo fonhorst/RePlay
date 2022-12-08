@@ -159,3 +159,5 @@ requirements.txt
 airflow.yaml
 
 *.orig
+
+rsync-repo.sh

@@ -11,6 +11,9 @@ RUN mkdir -p /src && chmod 777 /src
 
 USER airflow
 
+RUN pip install "apache-airflow-providers-apache-spark" \
+--constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.4.1/constraints-3.7.txt"
+
 COPY requirements.txt /src
 
 RUN pip install -r /src/requirements.txt
@@ -35,3 +38,5 @@ COPY SparkLightAutoML_DEV-0.3.2-py3-none-any.whl /src/
 
 #RUN pip install --force-reinstall --no-deps /src/SparkLightAutoML_DEV-0.3.2-py3-none-any.whl
 RUN pip install /src/SparkLightAutoML_DEV-0.3.2-py3-none-any.whl
+
+RUN pip install pyspark==3.2.0
