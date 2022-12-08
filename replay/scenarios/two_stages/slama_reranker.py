@@ -1,13 +1,18 @@
 from typing import Optional, Dict
 
 from pyspark.ml import PipelineModel, Transformer
+from pyspark.ml.functions import vector_to_array
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql.pandas.functions import pandas_udf
 from sparklightautoml.automl.presets.tabular_presets import SparkTabularAutoML
 from sparklightautoml.tasks.base import SparkTask
 
 from replay.scenarios.two_stages.reranker import ReRanker
 from replay.session_handler import State
 from replay.utils import get_top_k_recs
+
+import pandas as pd
+import numpy as np
 
 
 class SlamaWrap(ReRanker):
@@ -97,9 +102,17 @@ class SlamaWrap(ReRanker):
 
         sdf = transformer.transform(data)
 
-        # TODO: need to convert predict into the relevance
-        candidates_pred_sdf = sdf.select('user_idx', 'item_idx', 'relevance')
-        size, users_count = sdf.count(), sdf.select('user_idx').distinct().count()
+        @pandas_udf("double")
+        def argmax(vec: pd.Series) -> pd.Series:
+            return vec.transform(lambda x: np.argmax(x))
+
+        candidates_pred_sdf = sdf.select(
+            'user_idx',
+            'item_idx',
+            vector_to_array('prediction').getItem(1).alias('relevance')
+        )
+
+        size, users_count = candidates_pred_sdf.count(), candidates_pred_sdf.select('user_idx').distinct().count()
 
         self.logger.info(
             "%s candidates rated for %s users",
