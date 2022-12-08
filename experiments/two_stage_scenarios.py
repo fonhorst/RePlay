@@ -51,12 +51,25 @@ class DatasetInfo:
     item_features_path: Optional[str] = None
 
 
+dense_hnsw_params = {
+    "method": "hnsw",
+    "space": "negdotprod",
+    "M": 100,
+    "efS": 2000,
+    "efC": 2000,
+    "post": 0,
+    # hdfs://node21.bdcl:9000
+    # "index_path": f"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark.sparkContext.applicationId}",
+    "build_index_on": "executor"
+}
+
+
 FIRST_LEVELS_MODELS_PARAMS = {
-    "replay.models.als.ALSWrap": {"rank": 100, "seed": 42},
+    "replay.models.als.ALSWrap": {"rank": 100, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params},
     "replay.models.knn.ItemKNN": {"num_neighbours": 1000},
     "replay.models.cluster.ClusterRec": {"num_clusters": 100},
     "replay.models.slim.SLIM": {"seed": 42},
-    "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42},
+    "replay.models.word2vec.Word2VecRec": {"rank": 100, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params},
     "replay.models.ucb.UCB": {"seed": 42}
 }
 
@@ -97,6 +110,7 @@ DATASETS = {
     ]
 }
 
+
 def _get_models_params(*model_names: str) -> Dict[str, Any]:
     return {
         MODELNAME2FULLNAME[model_name]: FIRST_LEVELS_MODELS_PARAMS[MODELNAME2FULLNAME[model_name]]
@@ -134,18 +148,6 @@ extra_big_executor_config = {
         )
     ),
 }
-
-# dense_hnsw_params = {
-#     "method": "hnsw",
-#     "space": "negdotprod",
-#     "M": 100,
-#     "efS": 2000,
-#     "efC": 2000,
-#     "post": 0,
-#     # hdfs://node21.bdcl:9000
-#     "index_path": f"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark.sparkContext.applicationId}",
-#     "build_index_on": "driver"
-# }
 
 
 class EmptyWrap(ReRanker):
@@ -545,6 +547,9 @@ class ArtifactPaths:
     def model_path(self, model_cls_name: str) -> str:
         return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
 
+    def hnsw_index_path(self, model_cls_name: str) -> str:
+        return os.path.join(self.base_path, f"hnsw_model_index_{model_cls_name.replace('.', '__')}_{self.uid}")
+
     def partial_train_path(self, model_cls_name: str) -> str:
         return os.path.join(self.base_path,
                             f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
@@ -593,11 +598,15 @@ def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) ->
         spark.stop()
 
 
-def _get_model(model_class_name: str, model_kwargs: Dict) -> BaseRecommender:
+def _get_model(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Dict) -> BaseRecommender:
     module_name = ".".join(model_class_name.split('.')[:-1])
     class_name = model_class_name.split('.')[-1]
     module = importlib.import_module(module_name)
     clazz = getattr(module, class_name)
+
+    if class_name in ['ALSWrap', 'Word2VecRec'] and 'nmslib_hnsw_params' in model_kwargs:
+        model_kwargs['nmslib_hnsw_params']["index_path"] = artifacts.hnsw_index_path(model_class_name)
+
     base_model = cast(BaseRecommender, clazz(**model_kwargs))
 
     return base_model
@@ -799,7 +808,7 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
             model_config_path=None
         )
 
-        first_level_model = _get_model(model_class_name, model_kwargs)
+        first_level_model = _get_model(artifacts, model_class_name, model_kwargs)
 
         scenario = PartialTwoStageScenario(
             base_path=artifacts.base_path,
@@ -848,7 +857,7 @@ def first_level_fitting(artifacts: ArtifactPaths,
                 scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
 
             mlflow.log_metric(timer.name, timer.duration)
-            scenario.first_level_models = [_get_model(model_class_name, model_kwargs)]
+            scenario.first_level_models = [_get_model(artifacts, model_class_name, model_kwargs)]
 
             train = artifacts.train.cache()
             user_features = artifacts.user_features.cache() if artifacts.user_features is not None else None

@@ -14,7 +14,7 @@ from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session, EmptyRecommender, \
-    presplit_data, fit_predict_first_level_model, PartialTwoStageScenario
+    presplit_data, fit_predict_first_level_model, PartialTwoStageScenario, dense_hnsw_params
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
@@ -286,8 +286,14 @@ def test_simple_dag_presplit_data(spark_sess: SparkSession, artifacts: ArtifactP
 
 @pytest.mark.parametrize('ctx', ['test_simple_dag_presplit_data__out'], indirect=True)
 def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
-    model_class_name = "replay.models.knn.ItemKNN"
-    model_kwargs = {"num_neighbours": 10}
+    # # alternative 1
+    # model_class_name = "replay.models.knn.ItemKNN"
+    # model_kwargs = {"num_neighbours": 10}
+
+    # alternative 2
+    model_class_name = "replay.models.als.ALSWrap"
+    model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
+
     fit_predict_first_level_model.function(
         artifacts=artifacts,
         model_class_name=model_class_name,
@@ -322,3 +328,6 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     fl_model = model.first_level_models[0]
     full_type_name = f"{type(fl_model).__module__}.{type(fl_model).__name__}"
     assert full_type_name == model_class_name
+
+    if model_class_name.split('.')[-1] in ['ALSWrap', 'Word2VecRec'] and "nmslib_hnsw_params" in model_kwargs:
+        assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
