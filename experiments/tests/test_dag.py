@@ -12,13 +12,15 @@ import replay
 from conftest import phase_report_key
 from experiments.dag_entities import ArtifactPaths, DatasetInfo
 from experiments.dag_utils import _init_spark_session, do_dataset_splitting, do_init_refitable_two_stage_scenario, \
-    EmptyRecommender, RefitableTwoStageScenario, _combine_datasets_for_second_level, do_second_level_fitting, \
+    EmptyRecommender, RefitableTwoStageScenario, _combine_datasets_for_second_level, do_fit_predict_second_level, \
     do_presplit_data, do_fit_feature_transformers, do_fit_predict_first_level_model, PartialTwoStageScenario
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
 from replay.model_handler import load
 from replay.model_handler import load
+from replay.scenarios.two_stages.reranker import LamaWrap
+from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.utils import save_transformer, load_transformer
 
 logging.config.dictConfig(logging_config(level=logging.DEBUG, log_filename='/tmp/slama.log'))
@@ -191,31 +193,6 @@ def test_combine_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, ct
     assert os.path.exists(artifacts.full_second_level_predicts_path)
 
 
-@pytest.mark.parametrize('ctx', ['test_combine_datasets__out'], indirect=True)
-def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
-    model_name = "test_lama_model"
-
-    do_second_level_fitting(
-        artifacts=artifacts,
-        model_name=model_name,
-        k=10,
-        second_model_type="slama",
-        # second_model_type="lama",
-        second_model_params={
-            "general_params": {"use_algos": [["lgb"]]},
-            # "lgb_params": {
-            #     'default_params': {'numIteration': 10}
-            # },
-            "reader_params": {"cv": 5, "advanced_roles": False}
-        },
-        second_model_config_path=None
-    )
-
-    # TODO: restore this test later
-    assert os.path.exists(artifacts.second_level_predicts_path(model_name))
-    assert os.path.exists(artifacts.second_level_model_path(model_name))
-
-
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
 @pytest.mark.parametrize('transformer', [
     EmptyFeatureProcessor(),
@@ -354,3 +331,40 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
 
     if model_class_name.split('.')[-1] in ['ALSWrap', 'Word2VecRec'] and "nmslib_hnsw_params" in model_kwargs:
         assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
+
+
+# @pytest.mark.parametrize('second_model_type', ['lama', 'slama'])
+@pytest.mark.parametrize('second_model_type', ['slama'])
+@pytest.mark.parametrize('ctx', ['test_simple_dag_fit_predict_first_level_model__out'], indirect=True)
+def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths, second_model_type: str, ctx):
+    model_name = "test_lama_model"
+
+    train_path, first_level_predicts_path = artifacts.partial_train_paths[0], artifacts.partial_predicts_paths[0]
+
+    do_fit_predict_second_level(
+        artifacts=artifacts,
+        model_name=model_name,
+        k=10,
+        train_path=train_path,
+        first_level_predicts_path=first_level_predicts_path,
+        second_model_type=second_model_type,
+        second_model_params={
+            "general_params": {"use_algos": [["lgb"]]},
+            # "lgb_params": {
+            #     'default_params': {'numIteration': 10}
+            # },
+            "reader_params": {"cv": 5, "advanced_roles": False}
+        },
+        second_model_config_path=None
+    )
+
+    assert os.path.exists(artifacts.second_level_predicts_path(model_name))
+    assert os.path.exists(artifacts.second_level_model_path(model_name))
+
+    if second_model_type == "lama":
+        model = LamaWrap.load(artifacts.second_level_model_path(model_name))
+    else:
+        model = SlamaWrap.load(artifacts.second_level_model_path(model_name))
+
+    assert model is not None
+

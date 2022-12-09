@@ -167,19 +167,19 @@ class ArtifactPaths:
 
     @property
     def partial_train_paths(self) -> List[str]:
-        return [
+        return sorted([
             self._fs_prefix(os.path.join(self.base_path, path))
             for path in os.listdir(self.base_path)
             if path.startswith(self.partial_train_prefix)
-        ]
+        ])
 
     @property
     def partial_predicts_paths(self) -> List[str]:
-        return [
+        return sorted([
             self._fs_prefix(os.path.join(self.base_path, path))
             for path in os.listdir(self.base_path)
             if path.startswith(self.partial_predict_prefix)
-        ]
+        ])
 
     @property
     def full_second_level_train_path(self) -> str:

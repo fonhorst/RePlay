@@ -357,8 +357,8 @@ def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) ->
         return SparkSession.builder.getOrCreate()
 
     jars = [
-        os.environ.get("REPLAY_JAR_PATH", 'scala/target/scala-2.12/replay_2.12-0.1.jar'),
-        os.environ.get("SLAMA_JAR_PATH", '../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar')
+        os.environ.get("REPLAY_JAR_PATH", '../../scala/target/scala-2.12/replay_2.12-0.1.jar'),
+        os.environ.get("SLAMA_JAR_PATH", '../../../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar')
     ]
     spark = (
         SparkSession
@@ -712,16 +712,18 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
 
 
 # this is @task
-def do_second_level_fitting(
+def do_fit_predict_second_level(
         artifacts: ArtifactPaths,
         model_name: str,
         k: int,
+        train_path: str,
+        first_level_predicts_path: str,
         second_model_type: str = "lama",
         second_model_params: Optional[Union[Dict, str]] = None,
         second_model_config_path: Optional[str] = None,
         cpu: int = DEFAULT_CPU,
         memory: int = DEFAULT_MEMORY):
-    with _init_spark_session(cpu, memory):
+    with _init_spark_session(cpu, memory) as spark:
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
         with mlflow.start_run():
             _log_model_settings(
@@ -733,12 +735,12 @@ def do_second_level_fitting(
                 model_config_path=second_model_config_path
             )
 
-            with log_exec_timer("scenario_loading") as timer:
-                setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
-                setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
-                scenario = load(artifacts.two_stage_scenario_path)
-
-            mlflow.log_metric(timer.name, timer.duration)
+            scenario = PartialTwoStageScenario(
+                base_path=artifacts.base_path,
+                first_level_train_path=artifacts.first_level_train_path,
+                second_level_positives_path=artifacts.second_level_positives_path,
+                presplitted_data=True
+            )
 
             if second_model_type == "lama":
                 second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
@@ -748,12 +750,12 @@ def do_second_level_fitting(
                 raise RuntimeError(f"Currently supported model types: {['lama']}, but received {second_model_type}")
 
             with log_exec_timer("fit") as timer:
-                second_stage_model.fit(artifacts.full_second_level_train)
+                second_stage_model.fit(spark.read.parquet(train_path))
 
             mlflow.log_metric(timer.name, timer.duration)
 
             with log_exec_timer("predict") as timer:
-                recs = second_stage_model.predict(artifacts.full_second_level_predicts, k=k)
+                recs = second_stage_model.predict(spark.read.parquet(first_level_predicts_path), k=k)
                 recs = scenario._filter_seen(recs, artifacts.train, k, artifacts.train.select('user_idx').distinct())
                 recs.write.parquet(artifacts.second_level_predicts_path(model_name))
 
