@@ -84,6 +84,18 @@ SECOND_LEVELS_MODELS_PARAMS = {
             #     'default_params': {'numIteration': 10}
             # },
             "reader_params": {"cv": 2, "advanced_roles": False}
+    },
+
+    "lama_default": {
+        "second_model_type": "lama",
+        "second_model_params": {
+            "cpu_limit": EXTRA_BIG_CPU,
+            "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+            "timeout": 10800,
+            "general_params": {"use_algos": [["lgb_tuned"]]},
+            "reader_params": {"cv": 5, "advanced_roles": False},
+            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
+        }
     }
 }
 
@@ -179,6 +191,9 @@ class ArtifactPaths:
 
     @property
     def partial_train_paths(self) -> List[str]:
+        if not os.path.exists(self.base_path):
+            return []
+
         return sorted([
             self._fs_prefix(os.path.join(self.base_path, path))
             for path in os.listdir(self.base_path)
@@ -187,6 +202,9 @@ class ArtifactPaths:
 
     @property
     def partial_predicts_paths(self) -> List[str]:
+        if not os.path.exists(self.base_path):
+            return []
+
         return sorted([
             self._fs_prefix(os.path.join(self.base_path, path))
             for path in os.listdir(self.base_path)

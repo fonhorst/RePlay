@@ -1,6 +1,6 @@
 import os
 from datetime import timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Union
 
 import pendulum
 from airflow import DAG
@@ -9,7 +9,6 @@ from airflow.decorators import task
 from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, BIG_CPU, BIG_MEMORY, \
     big_executor_config, _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS
 from experiments.dag_entities import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS
-from experiments.dag_utils import do_fit_predict_second_level
 
 
 @task
@@ -44,6 +43,32 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
                                   memory: int = DEFAULT_MEMORY):
     from dag_utils import do_fit_predict_first_level_model
     do_fit_predict_first_level_model(artifacts, model_class_name, model_kwargs, k, cpu, memory)
+
+
+def fit_predict_second_level_model(
+        artifacts: ArtifactPaths,
+        model_name: str,
+        k: int,
+        train_path: str,
+        first_level_predicts_path: str,
+        second_model_type: str = "lama",
+        second_model_params: Optional[Union[Dict, str]] = None,
+        second_model_config_path: Optional[str] = None,
+        cpu: int = DEFAULT_CPU,
+        memory: int = DEFAULT_MEMORY):
+    from experiments.dag_utils import do_fit_predict_second_level
+    do_fit_predict_second_level(
+        artifacts,
+        model_name,
+        k,
+        train_path,
+        first_level_predicts_path,
+        second_model_type,
+        second_model_params,
+        second_model_config_path,
+        cpu,
+        memory
+    )
 
 
 def build_fit_predict_first_level_models_dag(
@@ -98,8 +123,7 @@ def build_fit_predict_second_level(
         dag_id: str,
         mlflow_exp_id: str,
         model_name: str,
-        dataset: DatasetInfo,
-        second_model_type: str = "lama"
+        dataset: DatasetInfo
 ) -> DAG:
     with DAG(
             dag_id=dag_id,
@@ -123,14 +147,14 @@ def build_fit_predict_second_level(
             task(
                 task_id=f"2lvl_{model_name.split('.')[-1]}",
                 executor_config=big_executor_config
-            )(do_fit_predict_second_level)(
+            )(fit_predict_second_level_model)(
                 artifacts=artifacts,
                 model_name=model_name,
                 k=k,
                 train_path=train_path,
                 first_level_predicts_path=first_level_predicts_path,
-                second_model_type=second_model_type,
-                second_model_params=SECOND_LEVELS_MODELS_PARAMS[model_name],
+                second_model_type=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_type"],
+                second_model_params=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_params"],
                 second_model_config_path=SECOND_LEVELS_MODELS_CONFIGS.get(model_name, None),
                 cpu=EXTRA_BIG_CPU,
                 memory=EXTRA_BIG_MEMORY
@@ -153,8 +177,7 @@ ml1m_second_level_dag = build_fit_predict_second_level(
     dag_id="ml1m_second_level_dag",
     mlflow_exp_id="111",
     model_name="lama_default",
-    dataset=DATASETS["ml1m"],
-    second_model_type="lama"
+    dataset=DATASETS["ml1m"]
 )
 
 
