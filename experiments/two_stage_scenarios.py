@@ -49,6 +49,8 @@ class DatasetInfo:
     log_path: str
     user_features_path: Optional[str] = None
     item_features_path: Optional[str] = None
+    user_cat_features: Optional[List[str]] = None
+    item_cat_features: Optional[List[str]] = None
 
 
 dense_hnsw_params = {
@@ -88,14 +90,26 @@ DATASETS = {
             name="ml100k",
             log_path="/opt/spark_data/replay/ml100k_ratings.csv",
             user_features_path="/opt/spark_data/replay/ml100k_users.csv",
-            item_features_path="/opt/spark_data/replay/ml100k_items.csv"
+            item_features_path="/opt/spark_data/replay/ml100k_items.csv",
+            user_cat_features=["gender", "age", "occupation", "zip_code"],
+            item_cat_features=['title', 'release_date', 'imdb_url', 'unknown',
+                               'Action', 'Adventure', 'Animation', "Children's",
+                               'Comedy', 'Crime', 'Documentary', 'Drama', 'Fantasy',
+                               'Film-Noir', 'Horror', 'Musical', 'Mystery', 'Romance',
+                               'Sci-Fi', 'Thriller', 'War', 'Western']
         ),
 
         DatasetInfo(
             name="ml1m",
             log_path="/opt/spark_data/replay/ml1m_ratings.csv",
             user_features_path="/opt/spark_data/replay/ml1m_users.csv",
-            item_features_path="/opt/spark_data/replay/ml1m_items.csv"
+            item_features_path="/opt/spark_data/replay/ml1m_items.csv",
+            user_cat_features=["gender", "age", "occupation", "zip_code"],
+            item_cat_features=['title', 'release_date', 'imdb_url', 'unknown',
+                               'Action', 'Adventure', 'Animation', "Children's",
+                               'Comedy', 'Crime', 'Documentary', 'Drama', 'Fantasy',
+                               'Film-Noir', 'Horror', 'Musical', 'Mystery', 'Romance',
+                               'Sci-Fi', 'Thriller', 'War', 'Western']
         ),
 
         DatasetInfo(
@@ -445,9 +459,7 @@ class RefitableTwoStageScenario(TwoStagesScenario):
 @dataclass
 class ArtifactPaths:
     base_path: str
-    log_path: str
-    user_features_path: Optional[str] = None
-    item_features_path: Optional[str] = None
+    dataset: DatasetInfo
     uid: str = f"{uuid.uuid4()}".replace('-', '')
     partial_train_prefix: str = "partial_train"
     partial_predict_prefix: str = "partial_predict"
@@ -496,21 +508,21 @@ class ArtifactPaths:
 
     @property
     def log(self) -> DataFrame:
-        if self.log_path.endswith('.csv'):
-            return self._get_session().read.csv(self.log_path, header=True)
+        if self.dataset.log_path.endswith('.csv'):
+            return self._get_session().read.csv(self.dataset.log_path, header=True)
 
-        if self.log_path.endswith('.parquet'):
-            return self._get_session().read.parquet(self.log_path)
+        if self.dataset.log_path.endswith('.parquet'):
+            return self._get_session().read.parquet(self.dataset.log_path)
 
         raise Exception("Unsupported format of the file, only csv and parquet are supported")
 
     @property
     def user_features(self) -> Optional[DataFrame]:
-        if self.user_features_path is None:
+        if self.dataset.user_features_path is None:
             return None
 
         return (
-            self._get_session().read.csv(self.user_features_path, header=True)
+            self._get_session().read.csv(self.dataset.user_features_path, header=True)
             .withColumnRenamed('user_id', 'user_idx')
             .withColumn('user_idx', sf.col('user_idx').cast('int'))
             .drop('_c0')
@@ -518,11 +530,11 @@ class ArtifactPaths:
 
     @property
     def item_features(self) -> Optional[DataFrame]:
-        if self.item_features_path is None:
+        if self.dataset.item_features_path is None:
             return None
 
         return (
-            self._get_session().read.csv(self.item_features_path, header=True)
+            self._get_session().read.csv(self.dataset.item_features_path, header=True)
             .withColumnRenamed('item_id', 'item_idx')
             .withColumn('item_idx', sf.col('item_idx').cast('int'))
             .drop('_c0')
@@ -721,19 +733,19 @@ def _log_model_settings(model_name: str,
                         artifacts: ArtifactPaths,
                         model_params: Dict,
                         model_config_path: Optional[str] = None):
-    dataset_name, _ = os.path.splitext(os.path.basename(artifacts.log_path))
+    dataset_name, _ = os.path.splitext(os.path.basename(artifacts.dataset.log_path))
     mlflow.log_param("model", model_name)
     mlflow.log_param("model_type", model_type)
     mlflow.log_param("model_config_path", model_config_path)
     mlflow.log_param("k", k)
     mlflow.log_param("experiment_path", artifacts.base_path)
     mlflow.log_param("dataset", dataset_name)
-    mlflow.log_param("dataset_path", artifacts.log_path)
+    mlflow.log_param("dataset_path", artifacts.dataset.log_path)
     mlflow.log_dict(model_params, "model_params.json")
 
 
 @task
-def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int, dataset_name: str):
+def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
     with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY):
         data = (
             artifacts.log
@@ -742,19 +754,19 @@ def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int, dataset_nam
         )
 
         if 'timestamp' in data.columns:
-            data = data.log.withColumn('timestamp', sf.col('timestamp').cast('long'))
+            data = data.withColumn('timestamp', sf.col('timestamp').cast('long'))
 
         # splitting on train and test
         preparator = DataPreparator()
 
-        if dataset_name.startswith('ml'):
+        if artifacts.dataset.name.startswith('ml'):
             log = preparator.transform(
                 columns_mapping={"user_id": "user_id", "item_id": "item_id",
                                  "relevance": "rating", "timestamp": "timestamp"},
                 data=data
             ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
         else:
-            raise Exception(f"Unsupported dataset name: {dataset_name}")
+            raise Exception(f"Unsupported dataset name: {artifacts.dataset.name}")
 
         print(get_log_info(log))
 
@@ -823,13 +835,17 @@ def fit_feature_transformers(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, m
         first_level_user_features_transformer = ToNumericFeatureTransformer()
         first_level_item_features_transformer = ToNumericFeatureTransformer()
         hbt_transformer = HistoryBasedFeaturesProcessor(
-            user_cat_features_list=None,
-            item_cat_features_list=None,
+            user_cat_features_list=artifacts.dataset.user_cat_features,
+            item_cat_features_list=artifacts.dataset.item_cat_features,
         )
 
         first_level_user_features_transformer.fit(artifacts.user_features)
         first_level_item_features_transformer.fit(artifacts.item_features)
-        hbt_transformer.fit(spark.read.parquet(artifacts.first_level_train_path))
+        hbt_transformer.fit(
+            log=spark.read.parquet(artifacts.first_level_train_path),
+            user_features=artifacts.user_features,
+            item_features=artifacts.item_features
+        )
 
         save_transformer(first_level_item_features_transformer, artifacts.item_features_transformer_path)
         save_transformer(first_level_user_features_transformer, artifacts.user_features_transformer_path)
@@ -1077,9 +1093,7 @@ def build_two_stage_scenario_dag(
         dag_id: str,
         first_level_models: Dict[str, Dict],
         second_level_models: Dict[str, Dict],
-        log_path: str,
-        user_features_path: Optional[str] = None,
-        item_features_path: Optional[str] = None,
+        dataset: DatasetInfo,
         k: int = 100,
         mlflow_exp_id: str = "107",
         use_big_exec_config_for_first_level: bool = False,
@@ -1098,12 +1112,10 @@ def build_two_stage_scenario_dag(
         artifacts = ArtifactPaths(
             # base_path="/opt/spark_data/replay/experiments/two_stage_{{ ds }}_{{ run_id | replace(':', '__') | replace('+', '__') }}",
             base_path="/opt/spark_data/replay/experiments/two_stage_2022-12-07_manual__2022-12-07T11__55__33.459452__00__00",
-            log_path=log_path,
-            user_features_path=user_features_path,
-            item_features_path=item_features_path
+            dataset=dataset
         )
 
-        splitting = dataset_splitting(artifacts, partitions_num=6, dataset_name="ml1m")
+        splitting = dataset_splitting(artifacts, partitions_num=6)
         create_scenario_datasets = init_refitable_two_stage_scenario(artifacts)
         fit_first_level_models = [
             task(
@@ -1177,9 +1189,7 @@ def build_2stage_integration_test_dag() -> DAG:
         dag_id="2stage_integration_test",
         first_level_models=first_level_models,
         second_level_models=second_level_models,
-        log_path="/opt/spark_data/replay/ml100k_ratings.csv",
-        user_features_path="/opt/spark_data/replay/ml100k_users.csv",
-        item_features_path="/opt/spark_data/replay/ml100k_items.csv"
+        dataset=DATASETS["ml100k"]
     )
 
 
@@ -1211,9 +1221,7 @@ def build_2stage_ml1m_dag() -> DAG:
         dag_id="2stage_ml1m",
         first_level_models=first_level_models,
         second_level_models=second_level_models,
-        log_path="/opt/spark_data/replay/ml1m_ratings.csv",
-        user_features_path="/opt/spark_data/replay/ml1m_users.csv",
-        item_features_path="/opt/spark_data/replay/ml1m_items.csv",
+        dataset=DATASETS["ml1m"],
         use_big_exec_config_for_first_level=True,
         use_extra_big_exec_config_for_second_level=True
     )
@@ -1247,9 +1255,7 @@ def build_2stage_ml1m_itemknn_dag() -> DAG:
         dag_id="2stage_ml1m_itemknn",
         first_level_models=first_level_models,
         second_level_models=second_level_models,
-        log_path="/opt/spark_data/replay/ml1m_ratings.csv",
-        user_features_path="/opt/spark_data/replay/ml1m_users.csv",
-        item_features_path="/opt/spark_data/replay/ml1m_items.csv",
+        dataset=DATASETS["ml1m"],
         use_big_exec_config_for_first_level=True,
         use_extra_big_exec_config_for_second_level=True
     )
@@ -1296,9 +1302,7 @@ def build_2stage_ml1m_alswrap_dag() -> DAG:
         dag_id="2stage_ml1m_alswrap",
         first_level_models=first_level_models,
         second_level_models=second_level_models,
-        log_path="/opt/spark_data/replay/ml1m_ratings.csv",
-        user_features_path="/opt/spark_data/replay/ml1m_users.csv",
-        item_features_path="/opt/spark_data/replay/ml1m_items.csv",
+        dataset=DATASETS["ml1m"],
         use_big_exec_config_for_first_level=True,
         use_extra_big_exec_config_for_second_level=True
     )
@@ -1332,9 +1336,7 @@ def build_2stage_ml25m_dag() -> DAG:
         dag_id="2stage_ml25m",
         first_level_models=first_level_models,
         second_level_models=second_level_models,
-        log_path="/opt/spark_data/replay/ml25m_ratings.csv",
-        user_features_path=None,
-        item_features_path=None,
+        dataset=DATASETS["ml25m"],
         use_big_exec_config_for_first_level=True,
         use_extra_big_exec_config_for_second_level=True
     )
@@ -1361,9 +1363,7 @@ def build_fit_predict_first_level_models_dag(
         path_suffix = 'default'
         artifacts = ArtifactPaths(
             base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
-            log_path=dataset.log_path,
-            user_features_path=dataset.user_features_path,
-            item_features_path=dataset.item_features_path
+            dataset=dataset
         )
         k = 100
 
@@ -1382,7 +1382,7 @@ def build_fit_predict_first_level_models_dag(
             for model_class_name, model_kwargs in model_params_map.items()
         ]
 
-        dataset_splitting(artifacts, partitions_num=100, dataset_name=dataset.name) \
+        dataset_splitting(artifacts, partitions_num=100) \
             >> presplit_data(artifacts) \
             >> fit_feature_transformers(artifacts) \
             >> first_level_models

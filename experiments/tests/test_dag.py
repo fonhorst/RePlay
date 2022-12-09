@@ -14,13 +14,13 @@ from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session, EmptyRecommender, \
-    presplit_data, fit_predict_first_level_model, PartialTwoStageScenario, dense_hnsw_params, fit_feature_transformers
+    presplit_data, fit_predict_first_level_model, PartialTwoStageScenario, fit_feature_transformers, \
+    DatasetInfo
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
 from replay.model_handler import load
 from replay.utils import save_transformer, load_transformer
-
 
 logging.config.dictConfig(logging_config(level=logging.DEBUG, log_filename='/tmp/slama.log'))
 logging.basicConfig(level=logging.DEBUG, format=VERBOSE_LOGGING_FORMAT)
@@ -58,12 +58,20 @@ def artifacts(request, resource_path: str) -> ArtifactPaths:
     shutil.rmtree(path, ignore_errors=True)
     os.makedirs(path)
 
-    yield ArtifactPaths(
-        base_path=path,
+    dataset = DatasetInfo(
+        name="ml100k_test",
         log_path=os.path.join(data_base_path, "ml100k_ratings.csv"),
         user_features_path=os.path.join(data_base_path, "ml100k_users.csv"),
-        item_features_path=os.path.join(data_base_path, "ml100k_items.csv")
+        item_features_path=os.path.join(data_base_path, "ml100k_items.csv"),
+        user_cat_features=["gender", "age", "occupation", "zip_code"],
+        item_cat_features=['title', 'release_date', 'imdb_url', 'unknown',
+                           'Action', 'Adventure', 'Animation', "Children's",
+                           'Comedy', 'Crime', 'Documentary', 'Drama', 'Fantasy',
+                           'Film-Noir', 'Horror', 'Musical', 'Mystery', 'Romance',
+                           'Sci-Fi', 'Thriller', 'War', 'Western']
     )
+
+    yield ArtifactPaths(base_path=path, dataset=dataset)
 
     report = request.node.stash[phase_report_key]
     if report["setup"].failed:
@@ -89,8 +97,7 @@ def artifacts(request, resource_path: str) -> ArtifactPaths:
 def test_data_splitting(spark_sess: SparkSession, artifacts: ArtifactPaths):
     dataset_splitting.function(
         artifacts,
-        partitions_num=4,
-        dataset_name="ml100k"
+        partitions_num=4
     )
 
     assert os.path.exists(artifacts.base_path)
