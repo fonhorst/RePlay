@@ -373,6 +373,7 @@ def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) ->
         .config("spark.driver.memory", f"10g")
         .config("spark.executor.memory", f"{int(memory * 0.9)}g")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .config("spark.sql.warehouse.dir", "/tmp/current-spark-warehouse")
         .config("spark.kryoserializer.buffer.max", "256m")
         .master(f"local[{cpu}]")
         .getOrCreate()

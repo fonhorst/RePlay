@@ -150,22 +150,25 @@ class ArtifactPaths:
 
     template_fields: Sequence[str] = ("base_path",)
 
+    def _fs_prefix(self, path: str) -> str:
+        return path
+
     @property
     def train_path(self) -> str:
-        return os.path.join(self.base_path, "train.parquet")
+        return self._fs_prefix(os.path.join(self.base_path, "train.parquet"))
 
     @property
     def test_path(self) -> str:
-        return os.path.join(self.base_path, "test.parquet")
+        return self._fs_prefix(os.path.join(self.base_path, "test.parquet"))
 
     @property
     def two_stage_scenario_path(self) -> str:
-        return os.path.join(self.base_path, "two_stage_scenario")
+        return self._fs_prefix(os.path.join(self.base_path, "two_stage_scenario"))
 
     @property
     def partial_train_paths(self) -> List[str]:
         return [
-            os.path.join(self.base_path, path)
+            self._fs_prefix(os.path.join(self.base_path, path))
             for path in os.listdir(self.base_path)
             if path.startswith(self.partial_train_prefix)
         ]
@@ -173,18 +176,18 @@ class ArtifactPaths:
     @property
     def partial_predicts_paths(self) -> List[str]:
         return [
-            os.path.join(self.base_path, path)
+            self._fs_prefix(os.path.join(self.base_path, path))
             for path in os.listdir(self.base_path)
             if path.startswith(self.partial_predict_prefix)
         ]
 
     @property
     def full_second_level_train_path(self) -> str:
-        return os.path.join(self.base_path, "full_second_level_train.parquet")
+        return self._fs_prefix(os.path.join(self.base_path, "full_second_level_train.parquet"))
 
     @property
     def full_second_level_predicts_path(self) -> str:
-        return os.path.join(self.base_path, "full_second_level_predicts.parquet")
+        return self._fs_prefix(os.path.join(self.base_path, "full_second_level_predicts.parquet"))
 
     @property
     def log(self) -> DataFrame:
@@ -238,48 +241,52 @@ class ArtifactPaths:
 
     @property
     def first_level_train_path(self) -> str:
-        return self.first_level_train_predefined_path if self.first_level_train_predefined_path is not None \
+        path = self.first_level_train_predefined_path if self.first_level_train_predefined_path is not None \
             else os.path.join(self.base_path, "first_level_train.parquet")
+
+        return self._fs_prefix(path)
 
     @property
     def second_level_positives_path(self) -> str:
-        return self.second_level_positives_predefined_path if self.second_level_positives_predefined_path is not None \
+        path = self.second_level_positives_predefined_path if self.second_level_positives_predefined_path is not None \
             else os.path.join(self.base_path, "second_level_positives.parquet")
+
+        return self._fs_prefix(path)
 
     @property
     def user_features_transformer_path(self) -> str:
-        return os.path.join(self.base_path, "user_features_transformer")
+        return self._fs_prefix(os.path.join(self.base_path, "user_features_transformer"))
 
     @property
     def item_features_transformer_path(self) -> str:
-        return os.path.join(self.base_path, "item_features_transformer")
+        return self._fs_prefix(os.path.join(self.base_path, "item_features_transformer"))
 
     @property
     def history_based_transformer_path(self):
-        return os.path.join(self.base_path, "history_based_transformer")
+        return self._fs_prefix(os.path.join(self.base_path, "history_based_transformer"))
 
     def partial_two_stage_scenario_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"two_stage_scenario_{model_cls_name.split('.')[-1]}_{self.uid}")
+        return self._fs_prefix(os.path.join(self.base_path, f"two_stage_scenario_{model_cls_name.split('.')[-1]}_{self.uid}"))
 
     def model_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
+        return self._fs_prefix(os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}"))
 
     def hnsw_index_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path, f"hnsw_model_index_{model_cls_name.replace('.', '__')}_{self.uid}")
+        return self._fs_prefix(os.path.join(self.base_path, f"hnsw_model_index_{model_cls_name.replace('.', '__')}_{self.uid}"))
 
     def partial_train_path(self, model_cls_name: str) -> str:
-        return os.path.join(self.base_path,
-                            f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
+        return self._fs_prefix(os.path.join(self.base_path,
+                            f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet"))
 
     def partial_predicts_path(self, model_cls_name: str):
-        return os.path.join(self.base_path,
-                            f"{self.partial_predict_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet")
+        return self._fs_prefix(os.path.join(self.base_path,
+                            f"{self.partial_predict_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet"))
 
     def second_level_model_path(self, model_name: str) -> str:
-        return os.path.join(self.base_path, f"{self.second_level_model_prefix}_{model_name}")
+        return self._fs_prefix(os.path.join(self.base_path, f"{self.second_level_model_prefix}_{model_name}"))
 
     def second_level_predicts_path(self, model_name: str) -> str:
-        return os.path.join(self.base_path, f"{self.second_level_predicts_prefix}_{model_name}.parquet")
+        return self._fs_prefix(os.path.join(self.base_path, f"{self.second_level_predicts_prefix}_{model_name}.parquet"))
 
     def _get_session(self) -> SparkSession:
         return SparkSession.getActiveSession()

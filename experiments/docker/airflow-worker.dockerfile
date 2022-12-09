@@ -20,6 +20,8 @@ RUN pip install -r /src/requirements.txt
 
 RUN pip install mlflow-skinny
 
+RUN python3 -c 'from pyspark.sql import SparkSession; SparkSession.builder.config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5").config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven").getOrCreate()'
+
 COPY dist/replay_rec-0.10.0-py3-none-any.whl /src
 
 RUN pip install /src/replay_rec-0.10.0-py3-none-any.whl
