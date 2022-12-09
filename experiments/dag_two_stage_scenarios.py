@@ -8,7 +8,7 @@ from airflow.decorators import task
 
 from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, BIG_CPU, BIG_MEMORY, \
     big_executor_config, _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS
-from experiments.dag_entities import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS
+from dag_entities import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS
 
 
 @task
@@ -56,7 +56,7 @@ def fit_predict_second_level_model(
         second_model_config_path: Optional[str] = None,
         cpu: int = DEFAULT_CPU,
         memory: int = DEFAULT_MEMORY):
-    from experiments.dag_utils import do_fit_predict_second_level
+    from dag_utils import do_fit_predict_second_level
     do_fit_predict_second_level(
         artifacts,
         model_name,
@@ -143,9 +143,36 @@ def build_fit_predict_second_level(
         )
         k = 100
 
+        flvl_model_names = [
+            "ALSWrap",
+            "ClusterRec",
+            "ItemKNN",
+            "SLIM",
+            "UCB"
+        ]
+
+        train_paths = [
+            "partial_train_replay__models__als__ALSWrap_b07691ef15114b9687126ee64a3bc8cf.parquet",
+            "partial_train_replay__models__cluster__ClusterRec_717251fdc4ff4d63b52badff93331bd2.parquet",
+            "partial_train_replay__models__knn__ItemKNN_372668465d6a4537b43173379109a66c.parquet",
+            "partial_train_replay__models__slim__SLIM_b77f553e2ff94556ad24d640f4b1dee3.parquet",
+            "partial_train_replay__models__ucb__UCB_43a7c02276d84b0f828f89b96ded5241.parquet"
+        ]
+
+        predicts_paths = [
+            "partial_predict_replay__models__als__ALSWrap_b07691ef15114b9687126ee64a3bc8cf.parquet",
+            "partial_predict_replay__models__cluster__ClusterRec_717251fdc4ff4d63b52badff93331bd2.parquet",
+            "partial_predict_replay__models__knn__ItemKNN_372668465d6a4537b43173379109a66c.parquet",
+            "partial_predict_replay__models__slim__SLIM_b77f553e2ff94556ad24d640f4b1dee3.parquet",
+            "partial_predict_replay__models__ucb__UCB_43a7c02276d84b0f828f89b96ded5241.parquet"
+        ]
+
+        train_paths = [os.path.join(artifacts.base_path, train_path) for train_path in train_paths]
+        predicts_paths = [os.path.join(artifacts.base_path, predicts_path) for predicts_path in predicts_paths]
+
         second_level_models = [
             task(
-                task_id=f"2lvl_{model_name.split('.')[-1]}",
+                task_id=f"2lvl_{model_name.split('.')[-1]}_{flvl_model_name}",
                 executor_config=big_executor_config
             )(fit_predict_second_level_model)(
                 artifacts=artifacts,
@@ -159,8 +186,8 @@ def build_fit_predict_second_level(
                 cpu=EXTRA_BIG_CPU,
                 memory=EXTRA_BIG_MEMORY
             )
-            for train_path, first_level_predicts_path in
-            zip(artifacts.partial_train_paths, artifacts.partial_predicts_paths)
+            for flvl_model_name, train_path, first_level_predicts_path in
+            zip(flvl_model_names, train_paths, predicts_paths)
         ]
 
     return dag
