@@ -176,7 +176,7 @@ def build_fit_predict_second_level(
                 executor_config=big_executor_config
             )(fit_predict_second_level_model)(
                 artifacts=artifacts,
-                model_name=model_name,
+                model_name=f"{model_name}_{flvl_model_name}",
                 k=k,
                 train_path=train_path,
                 first_level_predicts_path=first_level_predicts_path,
