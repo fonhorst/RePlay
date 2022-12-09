@@ -7,7 +7,9 @@ from airflow import DAG
 from airflow.decorators import task
 
 from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, BIG_CPU, BIG_MEMORY, \
-    big_executor_config, _get_models_params, DATASETS
+    big_executor_config, _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS
+from experiments.dag_entities import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS
+from experiments.dag_utils import do_fit_predict_second_level
 
 
 @task
@@ -92,11 +94,67 @@ def build_fit_predict_first_level_models_dag(
     return dag
 
 
+def build_fit_predict_second_level(
+        dag_id: str,
+        mlflow_exp_id: str,
+        model_name: str,
+        dataset: DatasetInfo,
+        second_model_type: str = "lama"
+) -> DAG:
+    with DAG(
+            dag_id=dag_id,
+            schedule=timedelta(days=10086),
+            start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
+            catchup=False,
+            tags=['two_stage', 'replay', 'first level']
+    ) as dag:
+        os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
+        os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
+        # TODO: fix it later
+        # path_suffix = Variable.get(f'{dataset.name}_artefacts_dir_suffix', 'default')
+        path_suffix = 'default'
+        artifacts = ArtifactPaths(
+            base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
+            dataset=dataset
+        )
+        k = 100
+
+        second_level_models = [
+            task(
+                task_id=f"2lvl_{model_name.split('.')[-1]}",
+                executor_config=big_executor_config
+            )(do_fit_predict_second_level)(
+                artifacts=artifacts,
+                model_name=model_name,
+                k=k,
+                train_path=train_path,
+                first_level_predicts_path=first_level_predicts_path,
+                second_model_type=second_model_type,
+                second_model_params=SECOND_LEVELS_MODELS_PARAMS[model_name],
+                second_model_config_path=SECOND_LEVELS_MODELS_CONFIGS.get(model_name, None),
+                cpu=EXTRA_BIG_CPU,
+                memory=EXTRA_BIG_MEMORY
+            )
+            for train_path, first_level_predicts_path in
+            zip(artifacts.partial_train_paths, artifacts.partial_predicts_paths)
+        ]
+
+    return dag
+
+
 ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
     dag_id="ml1m_first_level_dag",
     mlflow_exp_id="111",
     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
     dataset=DATASETS["ml1m"]
+)
+
+ml1m_second_level_dag = build_fit_predict_second_level(
+    dag_id="ml1m_second_level_dag",
+    mlflow_exp_id="111",
+    model_name="lama_default",
+    dataset=DATASETS["ml1m"],
+    second_model_type="lama"
 )
 
 

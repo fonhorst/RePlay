@@ -77,6 +77,18 @@ MODELNAME2FULLNAME = {
     "ucb": "replay.models.ucb.UCB"
 }
 
+SECOND_LEVELS_MODELS_PARAMS = {
+    "test": {
+            "general_params": {"use_algos": [["lgb"]]},
+            # "lgb_params": {
+            #     'default_params': {'numIteration': 10}
+            # },
+            "reader_params": {"cv": 2, "advanced_roles": False}
+    }
+}
+
+SECOND_LEVELS_MODELS_CONFIGS = dict()
+
 
 def _get_models_params(*model_names: str) -> Dict[str, Any]:
     return {
