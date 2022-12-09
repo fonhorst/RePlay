@@ -333,8 +333,7 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
         assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
 
 
-# @pytest.mark.parametrize('second_model_type', ['lama', 'slama'])
-@pytest.mark.parametrize('second_model_type', ['slama'])
+@pytest.mark.parametrize('second_model_type', ['lama', 'slama'])
 @pytest.mark.parametrize('ctx', ['test_simple_dag_fit_predict_first_level_model__out'], indirect=True)
 def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths, second_model_type: str, ctx):
     model_name = "test_lama_model"
