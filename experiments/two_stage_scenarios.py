@@ -30,7 +30,7 @@ from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists
+from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists, JobGroup
 
 logger = logging.getLogger(__name__)
 
@@ -594,8 +594,8 @@ def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) ->
         .config("spark.sql.shuffle.partitions", str(cpu * 3))
         .config("spark.default.parallelism", str(cpu * 3))
         .config("spark.driver.maxResultSize", "6g")
-        .config("spark.driver.memory", f"{memory}g")
-        .config("spark.executor.memory", f"{memory}g")
+        .config("spark.driver.memory", f"10g")
+        .config("spark.executor.memory", f"{int(memory * 0.9)}g")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         .config("spark.kryoserializer.buffer.max", "256m")
         .master(f"local[{cpu}]")
@@ -721,8 +721,10 @@ def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int, dataset_nam
             artifacts.log
             .withColumn('user_id', sf.col('user_id').cast('int'))
             .withColumn('item_id', sf.col('item_id').cast('int'))
-            .withColumn('timestamp', sf.col('timestamp').cast('int'))
         )
+
+        if 'timestamp' in data.columns:
+            data = data.log.withColumn('timestamp', sf.col('timestamp').cast('long'))
 
         # splitting on train and test
         preparator = DataPreparator()
@@ -828,19 +830,34 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
             presplitted_data=True
         )
 
-        scenario.fit(log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features)
+        with JobGroup("fit", "fitting of two stage"):
+            scenario.fit(log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features)
 
-        save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name))
+        logger.info("Fit is ended. Predicting...")
+        with JobGroup("save", "saving the model"):
+            save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name))
 
-        test_recs = scenario.predict(
-            log=artifacts.test,
-            k=k,
-            user_features=artifacts.user_features,
-            item_features=artifacts.item_features,
-            filter_seen_items=True
-        )
+        with JobGroup("predict", "predicting the test"):
+            test_recs = scenario.predict(
+                log=artifacts.train,
+                k=k,
+                user_features=artifacts.user_features,
+                item_features=artifacts.item_features,
+                filter_seen_items=True
+            ).cache()
 
         test_recs.write.parquet(artifacts.partial_predicts_path(model_class_name))
+
+        logger.info("Estimating metrics...")
+
+        rel_cols = [c for c in test_recs.columns if c.startswith('rel_')]
+        assert len(rel_cols) == 1
+
+        test_recs = test_recs.withColumnRenamed(rel_cols[0], 'relevance')
+
+        _estimate_and_report_metrics(model_class_name, artifacts.test, test_recs)
+
+        test_recs.unpersist()
 
 
 # this is @task
@@ -1321,4 +1338,20 @@ ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
     mlflow_exp_id="107",
     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
     dataset=DATASETS["ml1m"]
+)
+
+
+ml25m_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="ml25m_first_level_dag",
+    mlflow_exp_id="107",
+    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
+    dataset=DATASETS["ml25m"]
+)
+
+
+msd_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="msd_first_level_dag",
+    mlflow_exp_id="107",
+    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
+    dataset=DATASETS["msd"]
 )

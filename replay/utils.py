@@ -787,7 +787,8 @@ class log_exec_timer:
             if self.name
             else f"Exec time: {self._duration}"
         )
-        logger.info(msg)
+        logger.warning(msg)
+        print(msg)
 
     @property
     def duration(self):
@@ -798,7 +799,8 @@ class log_exec_timer:
 def JobGroup(group_id: str, description: str):
     sc = SparkSession.getActiveSession().sparkContext
     sc.setJobGroup(group_id, description)
-    yield
+    with log_exec_timer(f"{group_id} / {description}") as timer:
+        yield
     sc._jsc.clearJobGroup()
 
 

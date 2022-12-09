@@ -27,7 +27,7 @@ from replay.utils import (
     horizontal_explode,
     join_or_return,
     join_with_col_renaming,
-    unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder,
+    unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
 )
 
 
@@ -665,11 +665,13 @@ class TwoStagesScenario(HybridRecommender):
             item_features.cache()
             self.cached_list.append(item_features)
 
-        if not self.first_level_item_features_transformer.fitted:
-            self.first_level_item_features_transformer.fit(item_features)
+        with JobGroup("fit", "item_features_transformer fit"):
+            if not self.first_level_item_features_transformer.fitted:
+                self.first_level_item_features_transformer.fit(item_features)
 
-        if not self.first_level_user_features_transformer.fitted:
-            self.first_level_user_features_transformer.fit(user_features)
+        with JobGroup("fit", "user_features_transformer fit"):
+            if not self.first_level_user_features_transformer.fitted:
+                self.first_level_user_features_transformer.fit(user_features)
 
         first_level_item_features = cache_if_exists(
             self.first_level_item_features_transformer.transform(item_features)
@@ -689,11 +691,12 @@ class TwoStagesScenario(HybridRecommender):
             self.random_model,
             self.fallback_model,
         ]:
-            base_model._fit_wrap(
-                log=first_level_train,
-                user_features=first_level_user_features,
-                item_features=first_level_item_features,
-            )
+            with JobGroup("fit", f"first level model fit: {type(base_model).__name__}"):
+                base_model._fit_wrap(
+                    log=first_level_train,
+                    user_features=first_level_user_features,
+                    item_features=first_level_item_features,
+                )
 
         self.logger.info("Generate negative examples")
         negatives_source = (
@@ -702,16 +705,17 @@ class TwoStagesScenario(HybridRecommender):
             else self.random_model
         )
 
-        first_level_candidates = self._get_first_level_candidates(
-            model=negatives_source,
-            log=first_level_train,
-            k=self.num_negatives,
-            users=log.select("user_idx").distinct(),
-            items=log.select("item_idx").distinct(),
-            user_features=first_level_user_features,
-            item_features=first_level_item_features,
-            log_to_filter=first_level_train,
-        ).select("user_idx", "item_idx")
+        with JobGroup("fit", "get first level candidates"):
+            first_level_candidates = self._get_first_level_candidates(
+                model=negatives_source,
+                log=first_level_train,
+                k=self.num_negatives,
+                users=log.select("user_idx").distinct(),
+                items=log.select("item_idx").distinct(),
+                user_features=first_level_user_features,
+                item_features=first_level_item_features,
+                log_to_filter=first_level_train,
+            ).select("user_idx", "item_idx")
 
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
@@ -739,23 +743,29 @@ class TwoStagesScenario(HybridRecommender):
             ),
         )
 
-        if not self.features_processor.fitted:
-            self.features_processor.fit(
-                log=first_level_train,
-                user_features=user_features,
-                item_features=item_features,
-            )
+        with JobGroup("fit", "feature processor fit"):
+            if not self.features_processor.fitted:
+                self.features_processor.fit(
+                    log=first_level_train,
+                    user_features=user_features,
+                    item_features=item_features,
+                )
 
         self.logger.info("Adding features to second-level train dataset")
-        second_level_train_to_convert = self._add_features_for_second_level(
-            log_to_add_features=second_level_train,
-            log_for_first_level_models=first_level_train,
-            user_features=user_features,
-            item_features=item_features,
-        ).cache()
+
+        with JobGroup("fit", "_add_features_for_second_level"):
+            second_level_train_to_convert = self._add_features_for_second_level(
+                log_to_add_features=second_level_train,
+                log_for_first_level_models=first_level_train,
+                user_features=user_features,
+                item_features=item_features,
+            ).cache()
 
         self.cached_list.append(second_level_train_to_convert)
-        self.second_stage_model.fit(second_level_train_to_convert)
+
+        with JobGroup("fit", "second_stage_model fit"):
+            self.second_stage_model.fit(second_level_train_to_convert)
+
         for dataframe in self.cached_list:
             unpersist_if_exists(dataframe)
 

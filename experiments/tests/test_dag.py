@@ -287,12 +287,12 @@ def test_simple_dag_presplit_data(spark_sess: SparkSession, artifacts: ArtifactP
 @pytest.mark.parametrize('ctx', ['test_simple_dag_presplit_data__out'], indirect=True)
 def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
     # # alternative 1
-    # model_class_name = "replay.models.knn.ItemKNN"
-    # model_kwargs = {"num_neighbours": 10}
+    model_class_name = "replay.models.knn.ItemKNN"
+    model_kwargs = {"num_neighbours": 10}
 
     # alternative 2
-    model_class_name = "replay.models.als.ALSWrap"
-    model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
+    # model_class_name = "replay.models.als.ALSWrap"
+    # model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
 
     fit_predict_first_level_model(
         artifacts=artifacts,
@@ -318,16 +318,16 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     assert df.count() > 0
 
     # check the model
-    setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
-    setattr(replay.model_handler, 'PartialTwoStageScenario', PartialTwoStageScenario)
-    model = load(artifacts.partial_two_stage_scenario_path(model_class_name))
-    assert model is not None
-    assert type(model).__name__ == 'PartialTwoStageScenario'
-    model = cast(PartialTwoStageScenario, model)
-    assert len(model.first_level_models) == 1
-    fl_model = model.first_level_models[0]
-    full_type_name = f"{type(fl_model).__module__}.{type(fl_model).__name__}"
-    assert full_type_name == model_class_name
-
-    if model_class_name.split('.')[-1] in ['ALSWrap', 'Word2VecRec'] and "nmslib_hnsw_params" in model_kwargs:
-        assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
+    # setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
+    # setattr(replay.model_handler, 'PartialTwoStageScenario', PartialTwoStageScenario)
+    # model = load(artifacts.partial_two_stage_scenario_path(model_class_name))
+    # assert model is not None
+    # assert type(model).__name__ == 'PartialTwoStageScenario'
+    # model = cast(PartialTwoStageScenario, model)
+    # assert len(model.first_level_models) == 1
+    # fl_model = model.first_level_models[0]
+    # full_type_name = f"{type(fl_model).__module__}.{type(fl_model).__name__}"
+    # assert full_type_name == model_class_name
+    #
+    # if model_class_name.split('.')[-1] in ['ALSWrap', 'Word2VecRec'] and "nmslib_hnsw_params" in model_kwargs:
+    #     assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
