@@ -758,6 +758,7 @@ def do_fit_predict_second_level(
                 recs = second_stage_model.predict(spark.read.parquet(first_level_predicts_path), k=k)
                 recs = scenario._filter_seen(recs, artifacts.train, k, artifacts.train.select('user_idx').distinct())
                 recs.write.parquet(artifacts.second_level_predicts_path(model_name))
+                # recs.write.mode('overwrite').format('noop').save()
 
             mlflow.log_metric(timer.name, timer.duration)
 

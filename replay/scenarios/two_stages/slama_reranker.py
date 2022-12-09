@@ -6,6 +6,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.pandas.functions import pandas_udf
 from sparklightautoml.automl.presets.tabular_presets import SparkTabularAutoML
 from sparklightautoml.tasks.base import SparkTask
+from sparklightautoml.utils import WrappingSelectingPipelineModel
 
 from replay.scenarios.two_stages.reranker import ReRanker
 from replay.session_handler import State
@@ -102,25 +103,31 @@ class SlamaWrap(ReRanker):
 
         sdf = transformer.transform(data)
 
-        @pandas_udf("double")
-        def argmax(vec: pd.Series) -> pd.Series:
-            return vec.transform(lambda x: np.argmax(x))
-
         candidates_pred_sdf = sdf.select(
             'user_idx',
             'item_idx',
             vector_to_array('prediction').getItem(1).alias('relevance')
         )
 
-        size, users_count = candidates_pred_sdf.count(), candidates_pred_sdf.select('user_idx').distinct().count()
+        # size, users_count = candidates_pred_sdf.count(), candidates_pred_sdf.select('user_idx').distinct().count()
 
-        self.logger.info(
-            "%s candidates rated for %s users",
-            size,
-            users_count
-        )
+        self.logger.info("Re-ranking is finished")
+
+        # TODO: strange, but the further process would hang without maetrialization
+        # TODO: probably, it may be related to optimization and lightgbm models
+        # TODO: need to dig deeper later
+        candidates_pred_sdf = candidates_pred_sdf.cache()
+        candidates_pred_sdf.write.mode('overwrite').format('noop').save()
 
         self.logger.info("top-k")
-        return get_top_k_recs(
+        top_k_recs = get_top_k_recs(
             recs=candidates_pred_sdf, k=k, id_type="idx"
         )
+
+        # top_k_recs = candidates_pred_sdf.cache()
+        # top_k_recs.write.mode('overwrite').format('noop').save()
+
+        # candidates_pred_sdf.write.mode('overwrite').format('noop').save()
+        # raise Exception("------")
+
+        return top_k_recs

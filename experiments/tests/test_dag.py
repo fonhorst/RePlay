@@ -353,7 +353,7 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
             # "lgb_params": {
             #     'default_params': {'numIteration': 10}
             # },
-            "reader_params": {"cv": 5, "advanced_roles": False}
+            "reader_params": {"cv": 2, "advanced_roles": False}
         },
         second_model_config_path=None
     )
@@ -362,9 +362,9 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
     assert os.path.exists(artifacts.second_level_model_path(model_name))
 
     if second_model_type == "lama":
-        model = LamaWrap.load(artifacts.second_level_model_path(model_name))
+        model = load_transformer(artifacts.second_level_model_path(model_name))
     else:
-        model = SlamaWrap.load(artifacts.second_level_model_path(model_name))
+        model = load_transformer(artifacts.second_level_model_path(model_name))
 
     assert model is not None
 
