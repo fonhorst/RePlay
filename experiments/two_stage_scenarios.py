@@ -807,7 +807,7 @@ def fit_feature_transformers(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, m
         uft_exists = do_path_exists(artifacts.user_features_transformer_path)
         hbt_exists = do_path_exists(artifacts.history_based_transformer_path)
 
-        if any(ift_exists, uft_exists, hbt_exists) or not all(ift_exists, uft_exists, hbt_exists):
+        if any([ift_exists, uft_exists, hbt_exists]) and not all([ift_exists, uft_exists, hbt_exists]):
             raise Exception(
                 f"The paths should be all either existing or absent. "
                 f"But: {artifacts.item_features_transformer_path} exists == {ift_exists}, "
@@ -815,7 +815,7 @@ def fit_feature_transformers(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, m
                 f"{artifacts.history_based_transformer_path} exists == {hbt_exists}."
             )
 
-        if all(ift_exists, uft_exists, hbt_exists):
+        if all([ift_exists, uft_exists, hbt_exists]):
             return
 
         first_level_user_features_transformer = ToNumericFeatureTransformer()

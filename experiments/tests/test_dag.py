@@ -335,16 +335,16 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     assert df.count() > 0
 
     # check the model
-    # setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
-    # setattr(replay.model_handler, 'PartialTwoStageScenario', PartialTwoStageScenario)
-    # model = load(artifacts.partial_two_stage_scenario_path(model_class_name))
-    # assert model is not None
-    # assert type(model).__name__ == 'PartialTwoStageScenario'
-    # model = cast(PartialTwoStageScenario, model)
-    # assert len(model.first_level_models) == 1
-    # fl_model = model.first_level_models[0]
-    # full_type_name = f"{type(fl_model).__module__}.{type(fl_model).__name__}"
-    # assert full_type_name == model_class_name
-    #
-    # if model_class_name.split('.')[-1] in ['ALSWrap', 'Word2VecRec'] and "nmslib_hnsw_params" in model_kwargs:
-    #     assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
+    setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
+    setattr(replay.model_handler, 'PartialTwoStageScenario', PartialTwoStageScenario)
+    model = load(artifacts.partial_two_stage_scenario_path(model_class_name))
+    assert model is not None
+    assert type(model).__name__ == 'PartialTwoStageScenario'
+    model = cast(PartialTwoStageScenario, model)
+    assert len(model.first_level_models) == 1
+    fl_model = model.first_level_models[0]
+    full_type_name = f"{type(fl_model).__module__}.{type(fl_model).__name__}"
+    assert full_type_name == model_class_name
+
+    if model_class_name.split('.')[-1] in ['ALSWrap', 'Word2VecRec'] and "nmslib_hnsw_params" in model_kwargs:
+        assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
