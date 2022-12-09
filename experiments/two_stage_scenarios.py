@@ -18,7 +18,7 @@ from kubernetes.client import models as k8s
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 
 import replay
-from replay.data_preparator import DataPreparator
+from replay.data_preparator import DataPreparator, ToNumericFeatureTransformer
 from replay.experiment import Experiment
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import MAP, NDCG, HitRate
@@ -30,7 +30,7 @@ from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists, JobGroup
+from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists, JobGroup, load_transformer
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +210,8 @@ class PartialTwoStageScenario(TwoStagesScenario):
                  num_negatives: int = 100,
                  negatives_type: str = "first_level",
                  use_generated_features: bool = True,
+                 first_level_user_features_transformer: Optional[ToNumericFeatureTransformer] = None,
+                 first_level_item_features_transformer: Optional[ToNumericFeatureTransformer] = None,
                  user_cat_features_list: Optional[List] = None,
                  item_cat_features_list: Optional[List] = None,
                  custom_features_processor: Optional[HistoryBasedFeaturesProcessor] = None,
@@ -239,6 +241,8 @@ class PartialTwoStageScenario(TwoStagesScenario):
         self._first_level_train_path = first_level_train_path
         self._second_level_positives_path = second_level_positives_path
         self._presplitted_data = presplitted_data
+        self.first_level_item_features_transformer = first_level_item_features_transformer
+        self.first_level_user_features_transformer = first_level_user_features_transformer
 
     @property
     def _init_args(self):
@@ -548,6 +552,18 @@ class ArtifactPaths:
         return self.second_level_positives_predefined_path if self.second_level_positives_predefined_path is not None \
             else os.path.join(self.base_path, "second_level_positives.parquet")
 
+    @property
+    def user_features_transformer_path(self) -> str:
+        return os.path.join(self.base_path, "user_features_transformer")
+
+    @property
+    def item_features_transformer_path(self) -> str:
+        return os.path.join(self.base_path, "item_features_transformer")
+
+    @property
+    def history_based_transformer_path(self):
+        return os.path.join(self.base_path, "history_based_transformer")
+
     def partial_two_stage_scenario_path(self, model_cls_name: str) -> str:
         return os.path.join(self.base_path, f"two_stage_scenario_{model_cls_name.split('.')[-1]}_{self.uid}")
 
@@ -778,6 +794,47 @@ def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
 
 
 @task
+def fit_feature_transformers(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
+    with _init_spark_session(cpu, memory) as spark:
+        if artifacts.user_features is None and artifacts.item_features is None:
+            return
+
+        assert (artifacts.user_features is not None and artifacts.item_features is not None) \
+               or (artifacts.user_features is None and not artifacts.item_features is None),\
+            "Cannot handle when only user or item features is defined"
+
+        ift_exists = do_path_exists(artifacts.item_features_transformer_path)
+        uft_exists = do_path_exists(artifacts.user_features_transformer_path)
+        hbt_exists = do_path_exists(artifacts.history_based_transformer_path)
+
+        if any(ift_exists, uft_exists, hbt_exists) or not all(ift_exists, uft_exists, hbt_exists):
+            raise Exception(
+                f"The paths should be all either existing or absent. "
+                f"But: {artifacts.item_features_transformer_path} exists == {ift_exists}, "
+                f"{artifacts.user_features_transformer_path} exists == {uft_exists}, "
+                f"{artifacts.history_based_transformer_path} exists == {hbt_exists}."
+            )
+
+        if all(ift_exists, uft_exists, hbt_exists):
+            return
+
+        first_level_user_features_transformer = ToNumericFeatureTransformer()
+        first_level_item_features_transformer = ToNumericFeatureTransformer()
+        hbt_transformer = HistoryBasedFeaturesProcessor(
+            user_cat_features_list=None,
+            item_cat_features_list=None,
+        )
+
+        first_level_user_features_transformer.fit(artifacts.user_features)
+        first_level_item_features_transformer.fit(artifacts.item_features)
+        hbt_transformer.fit(spark.read.parquet(artifacts.first_level_train_path))
+
+        save_transformer(first_level_item_features_transformer, artifacts.item_features_transformer_path)
+        save_transformer(first_level_user_features_transformer, artifacts.user_features_transformer_path)
+        save_transformer(hbt_transformer, artifacts.history_based_transformer_path)
+
+
+@task
 def presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
     with _init_spark_session(cpu, memory):
         flt_exists = do_path_exists(artifacts.first_level_train_path)
@@ -821,12 +878,19 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
 
         first_level_model = _get_model(artifacts, model_class_name, model_kwargs)
 
+        user_feature_transformer = load_transformer(artifacts.user_features_transformer_path)
+        item_feature_transformer = load_transformer(artifacts.item_features_transformer_path)
+        history_based_transformer = load_transformer(artifacts.history_based_transformer_path)
+
         scenario = PartialTwoStageScenario(
             base_path=artifacts.base_path,
             first_level_train_path=artifacts.first_level_train_path,
             second_level_positives_path=artifacts.second_level_positives_path,
             second_level_train_path=artifacts.partial_train_path(model_class_name),
             first_level_models=first_level_model,
+            first_level_item_features_transformer=item_feature_transformer,
+            first_level_user_features_transformer=user_feature_transformer,
+            custom_features_processor=history_based_transformer,
             presplitted_data=True
         )
 
@@ -1318,6 +1382,7 @@ def build_fit_predict_first_level_models_dag(
 
         dataset_splitting(artifacts, partitions_num=100, dataset_name=dataset.name) \
             >> presplit_data(artifacts) \
+            >> fit_feature_transformers(artifacts) \
             >> first_level_models
 
     return dag

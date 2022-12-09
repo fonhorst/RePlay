@@ -14,7 +14,7 @@ from conftest import phase_report_key
 from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
     second_level_fitting, init_refitable_two_stage_scenario, \
     combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session, EmptyRecommender, \
-    presplit_data, fit_predict_first_level_model, PartialTwoStageScenario, dense_hnsw_params
+    presplit_data, fit_predict_first_level_model, PartialTwoStageScenario, dense_hnsw_params, fit_feature_transformers
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
@@ -285,6 +285,23 @@ def test_simple_dag_presplit_data(spark_sess: SparkSession, artifacts: ArtifactP
 
 
 @pytest.mark.parametrize('ctx', ['test_simple_dag_presplit_data__out'], indirect=True)
+def test_simple_dag_fit_feature_transformers(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
+    fit_feature_transformers.function(artifacts)
+
+    assert os.path.exists(artifacts.item_features_transformer_path)
+    assert os.path.exists(artifacts.user_features_transformer_path)
+    assert os.path.exists(artifacts.history_based_transformer_path)
+
+    item_features_transformer = load_transformer(artifacts.item_features_transformer_path)
+    user_features_transformer = load_transformer(artifacts.user_features_transformer_path)
+    history_based_transformer = load_transformer(artifacts.history_based_transformer_path)
+
+    assert item_features_transformer is not None
+    assert user_features_transformer is not None
+    assert history_based_transformer is not None
+
+
+@pytest.mark.parametrize('ctx', ['test_simple_dag_fit_feature_transformers__out'], indirect=True)
 def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
     # # alternative 1
     model_class_name = "replay.models.knn.ItemKNN"
