@@ -1,8 +1,7 @@
-import dataclasses
+import logging.config
 import logging.config
 import os
 import shutil
-import uuid
 from typing import cast
 
 import pytest
@@ -11,14 +10,14 @@ from sparklightautoml.utils import logging_config, VERBOSE_LOGGING_FORMAT
 
 import replay
 from conftest import phase_report_key
-from experiments.two_stage_scenarios import dataset_splitting, first_level_fitting, ArtifactPaths, \
-    second_level_fitting, init_refitable_two_stage_scenario, \
-    combine_train_predicts_for_second_level, RefitableTwoStageScenario, _init_spark_session, EmptyRecommender, \
-    presplit_data, fit_predict_first_level_model, PartialTwoStageScenario, fit_feature_transformers, \
-    DatasetInfo
+from experiments.dag_entities import ArtifactPaths, DatasetInfo
+from experiments.dag_utils import _init_spark_session, do_dataset_splitting, do_init_refitable_two_stage_scenario, \
+    EmptyRecommender, RefitableTwoStageScenario, _combine_datasets_for_second_level, do_second_level_fitting, \
+    do_presplit_data, do_fit_feature_transformers, do_fit_predict_first_level_model, PartialTwoStageScenario
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
+from replay.model_handler import load
 from replay.model_handler import load
 from replay.utils import save_transformer, load_transformer
 
@@ -95,7 +94,7 @@ def artifacts(request, resource_path: str) -> ArtifactPaths:
 
 
 def test_data_splitting(spark_sess: SparkSession, artifacts: ArtifactPaths):
-    dataset_splitting.function(
+    do_dataset_splitting(
         artifacts,
         partitions_num=4
     )
@@ -109,7 +108,7 @@ def test_data_splitting(spark_sess: SparkSession, artifacts: ArtifactPaths):
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
 def test_init_refitable_two_stage_scenario(spark_sess: SparkSession, artifacts: ArtifactPaths, resource_path: str, ctx):
-    init_refitable_two_stage_scenario.function(
+    do_init_refitable_two_stage_scenario(
         artifacts
     )
 
@@ -134,59 +133,59 @@ def test_init_refitable_two_stage_scenario(spark_sess: SparkSession, artifacts: 
     assert result.count() > 0
 
 
-@pytest.mark.parametrize('ctx', ['test_init_refitable_two_stage_scenario__out'], indirect=True)
-def test_first_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
-    # alternative
-    model_class_name = "replay.models.knn.ItemKNN"
-    model_kwargs = {"num_neighbours": 10}
-
-    # model_class_name, model_kwargs = "replay.models.ucb.UCB", {"seed": 42}
-    # model_class_name, model_kwargs = "replay.models.word2vec.Word2VecRec", {"rank": 10, "seed": 42}
-
-    # alternative
-    # model_class_name = "replay.models.als.ALSWrap"
-    # model_kwargs={"rank": 10}
-
-    first_level_fitting(artifacts, model_class_name, model_kwargs, k=10)
-
-    assert os.path.exists(artifacts.model_path(model_class_name))
-    assert os.path.exists(artifacts.partial_train_path(model_class_name))
-    assert os.path.exists(artifacts.partial_predicts_path(model_class_name))
-
-    # second model (use)
-    next_artifacts = dataclasses.replace(artifacts, uid=str(uuid.uuid4()).replace('-', ''))
-    next_model_class_name = "replay.models.als.ALSWrap"
-    next_model_kwargs = {"rank": 10}
-
-    first_level_fitting(next_artifacts, next_model_class_name, next_model_kwargs, k=10)
-
-    assert os.path.exists(next_artifacts.model_path(next_model_class_name))
-    assert os.path.exists(next_artifacts.partial_train_path(next_model_class_name))
-    assert os.path.exists(next_artifacts.partial_predicts_path(next_model_class_name))
-
-    # TODO: restore this checking later
-    # spark = _get_spark_session()
-    #
-    # ptrain_1_df = spark.read.parquet(artifacts.partial_train_path(model_class_name))
-    # ppreds_1_df = spark.read.parquet(artifacts.predictions_path(model_class_name))
-    # ptrain_2_df = spark.read.parquet(new_artifacts.partial_train_path(next_model_class_name))
-    # ppreds_2_df = spark.read.parquet(new_artifacts.predictions_path(next_model_class_name))
-    #
-    # assert ptrain_1_df.count() == ptrain_2_df.count()
-    # assert ppreds_1_df.count() == ppreds_2_df.count()
-    #
-    # pt_uniques_1_df = ptrain_1_df.select("user_idx", "item_idx").distinct()
-    # pt_uniques_2_df = ptrain_2_df.select("user_idx", "item_idx").distinct()
-    #
-    # assert ptrain_1_df.count() == pt_uniques_1_df.join(pt_uniques_2_df, on=["user_idx", "item_idx"]).count()
-    #
-    # spark.stop()
-    # TODO: both datasets can be combined
+# @pytest.mark.parametrize('ctx', ['test_init_refitable_two_stage_scenario__out'], indirect=True)
+# def test_first_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
+#     # alternative
+#     model_class_name = "replay.models.knn.ItemKNN"
+#     model_kwargs = {"num_neighbours": 10}
+#
+#     # model_class_name, model_kwargs = "replay.models.ucb.UCB", {"seed": 42}
+#     # model_class_name, model_kwargs = "replay.models.word2vec.Word2VecRec", {"rank": 10, "seed": 42}
+#
+#     # alternative
+#     # model_class_name = "replay.models.als.ALSWrap"
+#     # model_kwargs={"rank": 10}
+#
+#     do_first_level_fitting(artifacts, model_class_name, model_kwargs, k=10)
+#
+#     assert os.path.exists(artifacts.model_path(model_class_name))
+#     assert os.path.exists(artifacts.partial_train_path(model_class_name))
+#     assert os.path.exists(artifacts.partial_predicts_path(model_class_name))
+#
+#     # second model (use)
+#     next_artifacts = dataclasses.replace(artifacts, uid=str(uuid.uuid4()).replace('-', ''))
+#     next_model_class_name = "replay.models.als.ALSWrap"
+#     next_model_kwargs = {"rank": 10}
+#
+#     first_level_fitting(next_artifacts, next_model_class_name, next_model_kwargs, k=10)
+#
+#     assert os.path.exists(next_artifacts.model_path(next_model_class_name))
+#     assert os.path.exists(next_artifacts.partial_train_path(next_model_class_name))
+#     assert os.path.exists(next_artifacts.partial_predicts_path(next_model_class_name))
+#
+#     # TODO: restore this checking later
+#     # spark = _get_spark_session()
+#     #
+#     # ptrain_1_df = spark.read.parquet(artifacts.partial_train_path(model_class_name))
+#     # ppreds_1_df = spark.read.parquet(artifacts.predictions_path(model_class_name))
+#     # ptrain_2_df = spark.read.parquet(new_artifacts.partial_train_path(next_model_class_name))
+#     # ppreds_2_df = spark.read.parquet(new_artifacts.predictions_path(next_model_class_name))
+#     #
+#     # assert ptrain_1_df.count() == ptrain_2_df.count()
+#     # assert ppreds_1_df.count() == ppreds_2_df.count()
+#     #
+#     # pt_uniques_1_df = ptrain_1_df.select("user_idx", "item_idx").distinct()
+#     # pt_uniques_2_df = ptrain_2_df.select("user_idx", "item_idx").distinct()
+#     #
+#     # assert ptrain_1_df.count() == pt_uniques_1_df.join(pt_uniques_2_df, on=["user_idx", "item_idx"]).count()
+#     #
+#     # spark.stop()
+#     # TODO: both datasets can be combined
 
 
 @pytest.mark.parametrize('ctx', ['test_first_level_fitting__out'], indirect=True)
 def test_combine_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
-    combine_train_predicts_for_second_level.function(artifacts)
+    _combine_datasets_for_second_level(artifacts)
 
     assert os.path.exists(artifacts.full_second_level_train_path)
     assert os.path.exists(artifacts.full_second_level_predicts_path)
@@ -196,7 +195,7 @@ def test_combine_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, ct
 def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
     model_name = "test_lama_model"
 
-    second_level_fitting(
+    do_second_level_fitting(
         artifacts=artifacts,
         model_name=model_name,
         k=10,
@@ -277,7 +276,7 @@ def test_feature_transformer_save_load(spark_sess: SparkSession, artifacts: Arti
 
 @pytest.mark.parametrize('ctx', ['test_data_splitting__out'], indirect=True)
 def test_simple_dag_presplit_data(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
-    presplit_data.function(artifacts)
+    do_presplit_data(artifacts)
 
     assert os.path.exists(artifacts.first_level_train_path)
     assert os.path.exists(artifacts.second_level_positives_path)
@@ -293,7 +292,7 @@ def test_simple_dag_presplit_data(spark_sess: SparkSession, artifacts: ArtifactP
 
 @pytest.mark.parametrize('ctx', ['test_simple_dag_presplit_data__out'], indirect=True)
 def test_simple_dag_fit_feature_transformers(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
-    fit_feature_transformers.function(artifacts)
+    do_fit_feature_transformers(artifacts)
 
     assert os.path.exists(artifacts.item_features_transformer_path)
     assert os.path.exists(artifacts.user_features_transformer_path)
@@ -318,7 +317,7 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     # model_class_name = "replay.models.als.ALSWrap"
     # model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
 
-    fit_predict_first_level_model(
+    do_fit_predict_first_level_model(
         artifacts=artifacts,
         model_class_name=model_class_name,
         model_kwargs=model_kwargs,
