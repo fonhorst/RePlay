@@ -75,7 +75,9 @@ def build_fit_predict_first_level_models_dag(
         dag_id: str,
         mlflow_exp_id: str,
         model_params_map: Dict[str, Dict[str, Any]],
-        dataset: DatasetInfo
+        dataset: DatasetInfo,
+        cpu: int = BIG_CPU,
+        memory: int = BIG_MEMORY
 ):
     with DAG(
             dag_id=dag_id,
@@ -105,8 +107,8 @@ def build_fit_predict_first_level_models_dag(
                 model_class_name=model_class_name,
                 model_kwargs=model_kwargs,
                 k=k,
-                cpu=BIG_CPU,
-                memory=BIG_MEMORY
+                cpu=cpu,
+                memory=memory
             )
             for model_class_name, model_kwargs in model_params_map.items()
         ]
@@ -199,6 +201,17 @@ ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
     dataset=DATASETS["ml1m"]
 )
+
+
+ml25m_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="ml25m_first_level_dag",
+    mlflow_exp_id="111",
+    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim"),
+    dataset=DATASETS["ml25m"],
+    cpu=EXTRA_BIG_CPU,
+    memory=EXTRA_BIG_MEMORY
+)
+
 
 ml1m_second_level_dag = build_fit_predict_second_level(
     dag_id="ml1m_second_level_dag",

@@ -3,6 +3,7 @@ import importlib
 import itertools
 import logging
 import os
+import uuid
 from contextlib import contextmanager
 from typing import Dict, cast, Optional, List, Union, Tuple
 
@@ -725,6 +726,7 @@ def do_fit_predict_second_level(
         memory: int = DEFAULT_MEMORY):
     with _init_spark_session(cpu, memory) as spark:
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
+        model_name = f"{model_name}_{str(uuid.uuid4()).replace('-', '')}"
         with mlflow.start_run():
             _log_model_settings(
                 model_name=model_name,
