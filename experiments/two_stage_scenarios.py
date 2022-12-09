@@ -105,11 +105,11 @@ DATASETS = {
             user_features_path="/opt/spark_data/replay/ml1m_users.csv",
             item_features_path="/opt/spark_data/replay/ml1m_items.csv",
             user_cat_features=["gender", "age", "occupation", "zip_code"],
-            item_cat_features=['title', 'release_date', 'imdb_url', 'unknown',
-                               'Action', 'Adventure', 'Animation', "Children's",
-                               'Comedy', 'Crime', 'Documentary', 'Drama', 'Fantasy',
-                               'Film-Noir', 'Horror', 'Musical', 'Mystery', 'Romance',
-                               'Sci-Fi', 'Thriller', 'War', 'Western']
+            item_cat_features=['Crime', 'Romance', 'Thriller', 'Adventure',
+                               "Children's", 'Drama', 'War', 'Documentary',
+                               'Fantasy', 'Mystery', 'Musical', 'Animation',
+                               'Film-Noir', 'Horror', 'Western', 'Comedy',
+                               'Action', 'Sci-Fi']
         ),
 
         DatasetInfo(
@@ -1444,35 +1444,35 @@ def build_fit_predict_first_level_models_dag(
     return dag
 
 
-integration_dag = build_2stage_integration_test_dag()
-
-ml1m_dag = build_2stage_ml1m_dag()
-
-ml1m_itemknn_dag = build_2stage_ml1m_itemknn_dag()
-
-ml1m_alswrap_dag = build_2stage_ml1m_alswrap_dag()
-
-ml25m_dag = build_2stage_ml25m_dag()
+# integration_dag = build_2stage_integration_test_dag()
+#
+# ml1m_dag = build_2stage_ml1m_dag()
+#
+# ml1m_itemknn_dag = build_2stage_ml1m_itemknn_dag()
+#
+# ml1m_alswrap_dag = build_2stage_ml1m_alswrap_dag()
+#
+# ml25m_dag = build_2stage_ml25m_dag()
 
 ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
     dag_id="ml1m_first_level_dag",
-    mlflow_exp_id="107",
+    mlflow_exp_id="111",
     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
     dataset=DATASETS["ml1m"]
 )
 
 
-ml25m_first_level_dag = build_fit_predict_first_level_models_dag(
-    dag_id="ml25m_first_level_dag",
-    mlflow_exp_id="107",
-    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
-    dataset=DATASETS["ml25m"]
-)
-
-
-msd_first_level_dag = build_fit_predict_first_level_models_dag(
-    dag_id="msd_first_level_dag",
-    mlflow_exp_id="107",
-    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
-    dataset=DATASETS["msd"]
-)
+# ml25m_first_level_dag = build_fit_predict_first_level_models_dag(
+#     dag_id="ml25m_first_level_dag",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
+#     dataset=DATASETS["ml25m"]
+# )
+#
+#
+# msd_first_level_dag = build_fit_predict_first_level_models_dag(
+#     dag_id="msd_first_level_dag",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
+#     dataset=DATASETS["msd"]
+# )
