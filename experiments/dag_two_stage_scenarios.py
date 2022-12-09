@@ -6,31 +6,31 @@ import pendulum
 from airflow import DAG
 from airflow.decorators import task
 
-from experiments.dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, BIG_CPU, BIG_MEMORY, \
+from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, BIG_CPU, BIG_MEMORY, \
     big_executor_config, _get_models_params, DATASETS
 
 
 @task
 def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
-    from experiments.dag_utils import do_dataset_splitting
-    do_dataset_splitting()
+    from dag_utils import do_dataset_splitting
+    do_dataset_splitting(artifacts, partitions_num)
 
 
 @task
 def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
-    from experiments.dag_utils import do_init_refitable_two_stage_scenario
+    from dag_utils import do_init_refitable_two_stage_scenario
     do_init_refitable_two_stage_scenario(artifacts)
 
 
 @task
 def fit_feature_transformers(artifacts: 'ArtifactPaths', cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
-    from experiments.dag_utils import do_fit_feature_transformers
+    from dag_utils import do_fit_feature_transformers
     do_fit_feature_transformers(artifacts, cpu, memory)
 
 
 @task
 def presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
-    from experiments.dag_utils import do_presplit_data
+    from dag_utils import do_presplit_data
     do_presplit_data(artifacts, cpu, memory)
 
 
@@ -40,7 +40,7 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
                                   k: int,
                                   cpu: int = DEFAULT_CPU,
                                   memory: int = DEFAULT_MEMORY):
-    from experiments.dag_utils import do_fit_predict_first_level_model
+    from dag_utils import do_fit_predict_first_level_model
     do_fit_predict_first_level_model(artifacts, model_class_name, model_kwargs, k, cpu, memory)
 
 

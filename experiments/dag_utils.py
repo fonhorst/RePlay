@@ -10,7 +10,7 @@ import mlflow
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 
 import replay
-from experiments.dag_entities import DatasetInfo, ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY
+from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.model_handler import save, Splitter, load, ALSWrap
 from replay.models import PopRec
