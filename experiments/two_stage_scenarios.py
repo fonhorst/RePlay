@@ -241,8 +241,10 @@ class PartialTwoStageScenario(TwoStagesScenario):
         self._first_level_train_path = first_level_train_path
         self._second_level_positives_path = second_level_positives_path
         self._presplitted_data = presplitted_data
-        self.first_level_item_features_transformer = first_level_item_features_transformer
-        self.first_level_user_features_transformer = first_level_user_features_transformer
+        if first_level_item_features_transformer:
+            self.first_level_item_features_transformer = first_level_item_features_transformer
+        if first_level_user_features_transformer:
+            self.first_level_user_features_transformer = first_level_user_features_transformer
 
     @property
     def _init_args(self):
