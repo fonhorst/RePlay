@@ -161,3 +161,5 @@ airflow.yaml
 *.orig
 
 rsync-repo.sh
+
+**/spark-warehouse/

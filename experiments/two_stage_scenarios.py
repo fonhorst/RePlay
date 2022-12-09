@@ -132,6 +132,32 @@ def _get_models_params(*model_names: str) -> Dict[str, Any]:
     }
 
 
+def _get_bucketing_key(default: str = 'user_idx') -> str:
+    key = os.environ.get("REPLAY_BUCKETING_KEY", default)
+    assert key in ['user_idx', 'item_idx']
+    return key
+
+
+def _make_bucketing(df: DataFrame, bucketing_key: str, name: str) -> DataFrame:
+    spark = State().session
+    table_name = f"bucketed_df_{spark.sparkContext.applicationId.replace('-', '__')}_{name}"
+    partition_num = spark.sparkContext.defaultParallelism
+
+    logger.info(f"Bucketing of the dataset: name={name}, table_name={table_name}")
+
+    (
+        df.repartition(partition_num, bucketing_key)
+        .write.mode("overwrite")
+        .bucketBy(partition_num, bucketing_key)
+        .sortBy(bucketing_key)
+        .saveAsTable(table_name, format="parquet")
+    )
+
+    logger.info(f"Bucketing of the dataset is finished: name={name}, table_name={table_name}")
+
+    return spark.table(table_name)
+
+
 big_executor_config = {
     "pod_override": k8s.V1Pod(
         spec=k8s.V1PodSpec(
@@ -277,10 +303,18 @@ class PartialTwoStageScenario(TwoStagesScenario):
     def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
         if self._presplitted_data:
             spark = log.sql_ctx.sparkSession
-            return (
+            first_level_train = _make_bucketing(
                 spark.read.parquet(self._first_level_train_path).repartition(spark.sparkContext.defaultParallelism),
-                spark.read.parquet(self._second_level_positives_path).repartition(spark.sparkContext.defaultParallelism)
+                bucketing_key=_get_bucketing_key(default='user_idx'),
+                name="first_level_train"
             )
+            second_level_positive = _make_bucketing(
+                spark.read.parquet(self._second_level_positives_path).repartition(spark.sparkContext.defaultParallelism),
+                bucketing_key=_get_bucketing_key(default='user_idx'),
+                name="second_level_positive"
+            )
+
+            return first_level_train, second_level_positive
 
         first_level_train, second_level_positive = super()._split_data(log)
 
@@ -912,8 +946,28 @@ def fit_predict_first_level_model(artifacts: ArtifactPaths,
             presplitted_data=True
         )
 
+        bucketing_key = _get_bucketing_key(default='user_idx')
+
+        if bucketing_key == "user_idx" and artifacts.user_features is not None:
+            user_features = _make_bucketing(
+                artifacts.user_features,
+                bucketing_key=bucketing_key,
+                name="user_features"
+            )
+            item_features = artifacts.item_features
+        elif bucketing_key == "item_idx" and artifacts.item_features is not None:
+            user_features = artifacts.user_features
+            item_features = _make_bucketing(
+                artifacts.item_features,
+                bucketing_key=bucketing_key,
+                name="item_features"
+            )
+        else:
+            user_features = artifacts.user_features
+            item_features = artifacts.item_features
+
         with JobGroup("fit", "fitting of two stage"):
-            scenario.fit(log=artifacts.train, user_features=artifacts.user_features, item_features=artifacts.item_features)
+            scenario.fit(log=artifacts.train, user_features=user_features, item_features=item_features)
 
         logger.info("Fit is ended. Predicting...")
         with JobGroup("save", "saving the model"):
