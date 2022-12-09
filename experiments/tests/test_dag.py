@@ -10,7 +10,7 @@ from sparklightautoml.utils import logging_config, VERBOSE_LOGGING_FORMAT
 
 import replay
 from conftest import phase_report_key
-from experiments.dag_entities import ArtifactPaths, DatasetInfo
+from experiments.dag_entities import ArtifactPaths, DatasetInfo, dense_hnsw_params
 from experiments.dag_utils import _init_spark_session, do_dataset_splitting, do_init_refitable_two_stage_scenario, \
     EmptyRecommender, RefitableTwoStageScenario, _combine_datasets_for_second_level, do_fit_predict_second_level, \
     do_presplit_data, do_fit_feature_transformers, do_fit_predict_first_level_model, PartialTwoStageScenario
@@ -331,6 +331,17 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
 
     if model_class_name.split('.')[-1] in ['ALSWrap', 'Word2VecRec'] and "nmslib_hnsw_params" in model_kwargs:
         assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
+
+    # alternative 2
+    model_class_name = "replay.models.als.ALSWrap"
+    model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
+
+    do_fit_predict_first_level_model(
+        artifacts=artifacts,
+        model_class_name=model_class_name,
+        model_kwargs=model_kwargs,
+        k=10
+    )
 
 
 @pytest.mark.parametrize('second_model_type', ['lama', 'slama'])

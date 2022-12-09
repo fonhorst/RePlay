@@ -474,7 +474,7 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
 
         print(f"Estimated metric {metric_name}={metric_value} for {model_name}")
 
-        mlflow.log_metric(metric_name, metric_value)
+        # mlflow.log_metric(metric_name, metric_value)
 
 
 def _log_model_settings(model_name: str,
@@ -634,14 +634,14 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                                   cpu: int = DEFAULT_CPU,
                                   memory: int = DEFAULT_MEMORY):
     with _init_spark_session(cpu, memory):
-        _log_model_settings(
-            model_name=model_class_name,
-            model_type=model_class_name,
-            k=k,
-            artifacts=artifacts,
-            model_params=model_kwargs,
-            model_config_path=None
-        )
+        # _log_model_settings(
+        #     model_name=model_class_name,
+        #     model_type=model_class_name,
+        #     k=k,
+        #     artifacts=artifacts,
+        #     model_params=model_kwargs,
+        #     model_config_path=None
+        # )
 
         first_level_model = _get_model(artifacts, model_class_name, model_kwargs)
 
