@@ -96,6 +96,18 @@ SECOND_LEVELS_MODELS_PARAMS = {
             "reader_params": {"cv": 5, "advanced_roles": False},
             "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 3600}
         }
+    },
+
+    "longer_lama_default": {
+        "second_model_type": "lama",
+        "second_model_params": {
+            "cpu_limit": EXTRA_BIG_CPU,
+            "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+            "timeout": 10800,
+            "general_params": {"use_algos": [["lgb_tuned"]]},
+            "reader_params": {"cv": 5, "advanced_roles": False},
+            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 7200}
+        }
     }
 }
 

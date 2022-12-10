@@ -1,6 +1,6 @@
 import os
 from datetime import timedelta
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 
 import pendulum
 from airflow import DAG
@@ -70,6 +70,23 @@ def fit_predict_second_level_model(
     )
 
 
+def combine_1lvl_datasets(
+        artifacts: ArtifactPaths,
+        combined_train_path: str,
+        combined_predicts_path: str,
+        desired_models: Optional[List[str]] = None,
+        mode: str = 'union'
+):
+    from dag_utils import DatasetCombiner
+    DatasetCombiner.do_combine_datasets(
+        artifacts=artifacts,
+        combined_train_path=combined_train_path,
+        combined_predicts_path=combined_predicts_path,
+        desired_models=desired_models,
+        mode=mode
+    )
+
+
 def build_fit_predict_first_level_models_dag(
         dag_id: str,
         mlflow_exp_id: str,
@@ -118,6 +135,44 @@ def build_fit_predict_first_level_models_dag(
             >> first_level_models
 
     return dag
+
+
+def _make_combined_2lvl(artifacts: ArtifactPaths,
+                        model_name: str,
+                        combiner_suffix: str,
+                        k: int,
+                        mode: str = 'union',
+                        desired_1lvl_models: Optional[List[str]] = None):
+    combined_train_path = artifacts.make_path("combined_train.parquet")
+    combined_predicts_path = artifacts.make_path("combined_predicts.parquet")
+
+    combiner = task(
+        task_id=f"combiner_{combiner_suffix}"
+    )(combine_1lvl_datasets)(
+        artifacts=artifacts,
+        combined_train_path=combined_train_path,
+        combined_predicts_path=combined_predicts_path,
+        desired_models=desired_1lvl_models,
+        mode=mode
+    )
+
+    second_level_model = task(
+        task_id=f"2lvl_{model_name.split('.')[-1]}_{combiner_suffix}",
+        executor_config=big_executor_config
+    )(fit_predict_second_level_model)(
+        artifacts=artifacts,
+        model_name=f"{model_name}_{combiner_suffix}",
+        k=k,
+        train_path=combined_train_path,
+        first_level_predicts_path=combined_predicts_path,
+        second_model_type=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_type"],
+        second_model_params=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_params"],
+        second_model_config_path=SECOND_LEVELS_MODELS_CONFIGS.get(model_name, None),
+        cpu=EXTRA_BIG_CPU,
+        memory=EXTRA_BIG_MEMORY
+    )
+
+    return combiner >> second_level_model
 
 
 def build_fit_predict_second_level(
@@ -194,6 +249,71 @@ def build_fit_predict_second_level(
     return dag
 
 
+def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
+    os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
+    os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
+
+    dag_id = "ml1m_combined_second_level_dag"
+    path_suffix = 'default'
+    dataset = DATASETS['ml1m']
+    artifacts = ArtifactPaths(
+        base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
+        dataset=dataset
+    )
+    std_model_name = 'lama_default'
+    k = 100
+
+    with DAG(
+            dag_id=dag_id,
+            schedule=timedelta(days=10086),
+            start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
+            catchup=False,
+            tags=['two_stage', 'replay', 'first level']
+    ) as dag:
+        _make_combined_2lvl(
+            artifacts=artifacts,
+            model_name=std_model_name,
+            combiner_suffix="all_models_union",
+            k=k,
+            mode='union'
+        )
+
+        _make_combined_2lvl(
+            artifacts=artifacts,
+            model_name=std_model_name,
+            combiner_suffix="all_models_leading_itemknn",
+            k=k,
+            mode='leading_itemknn'
+        )
+
+        _make_combined_2lvl(
+            artifacts=artifacts,
+            model_name=std_model_name,
+            combiner_suffix="itemknn_slim",
+            k=k,
+            mode='union',
+            desired_1lvl_models=['itemknn', 'slim']
+        )
+
+        _make_combined_2lvl(
+            artifacts=artifacts,
+            model_name=std_model_name,
+            combiner_suffix="itemknn_alswrap",
+            k=k,
+            mode='union',
+            desired_1lvl_models=['itemknn', 'alswrap']
+        )
+
+        _make_combined_2lvl(
+            artifacts=artifacts,
+            model_name=std_model_name,
+            combiner_suffix="itemknn_alswrap",
+            k=k,
+            mode='union',
+            desired_1lvl_models=['alswrap', 'cluster']
+        )
+
+
 ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
     dag_id="ml1m_first_level_dag",
     mlflow_exp_id="111",
@@ -218,6 +338,9 @@ ml1m_second_level_dag = build_fit_predict_second_level(
     model_name="lama_default",
     dataset=DATASETS["ml1m"]
 )
+
+
+ml1m_combined_second_level_dag = build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id="111")
 
 #####
 
