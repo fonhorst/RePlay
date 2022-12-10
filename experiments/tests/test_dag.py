@@ -2,7 +2,7 @@ import logging.config
 import logging.config
 import os
 import shutil
-from typing import cast
+from typing import cast, List
 
 import mlflow
 import pytest
@@ -393,13 +393,19 @@ def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, 
         combined_predicts_path=combined_predicts_path
     )
 
-    def check_combined_dataset(combined_df: DataFrame):
+    def check_combined_dataset(combined_df: DataFrame, original_partial_paths: List[str]):
         rel_cols = [c for c in combined_df.columns if c.startswith('rel_')]
 
         assert set(rel_cols) == 2
         assert set(c.split('_')[-1].lower() for c in rel_cols) == {'alswrap', 'itemknn'}
         assert len(set(combined_df.columns).difference(['user_idx', 'item_idx', 'target', *rel_cols])) > 1
         assert combined_df.count() > 0
+
+        for partial_path in original_partial_paths:
+            df = spark_sess.read.parquet(partial_path)
+            not_present_columns = set(df.columns).difference(combined_train_df.columns)
+            assert len(not_present_columns) == 0, f"Not present columns({partial_path}): {not_present_columns}"
+            assert combined_train_df.count() >= df.count()
 
     # check combined train
     assert os.path.exists(combined_train_path)
@@ -409,9 +415,7 @@ def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, 
            and 'item_idx' in combined_train_df.columns \
            and 'target' in combined_train_df.columns
 
-    check_combined_dataset(combined_train_df)
-
-    # TODO: need to check features
+    check_combined_dataset(combined_train_df, original_partial_paths=artifacts.partial_train_paths)
 
     # check combined predicts
     assert os.path.exists(combined_predicts_path)
@@ -421,4 +425,4 @@ def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, 
            and 'item_idx' in combined_predicts_df.columns \
            and 'target' not in combined_predicts_df.columns
 
-    check_combined_dataset(combined_train_df)
+    check_combined_dataset(combined_train_df, original_partial_paths=artifacts.partial_predicts_paths)
