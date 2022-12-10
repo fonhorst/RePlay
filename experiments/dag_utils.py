@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from typing import Dict, cast, Optional, List, Union, Tuple
 
 import mlflow
+from docutils.nodes import Part
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 
 import replay
@@ -771,3 +772,87 @@ def do_fit_predict_second_level(
             mlflow.log_metric(timer.name, timer.duration)
 
             _estimate_and_report_metrics(model_name, artifacts.test, recs)
+
+
+def do_combining_datasets(artifacts: ArtifactPaths):
+    with _init_spark_session() as spark:
+        flvl_model_names = [
+            "ALSWrap",
+            "ClusterRec",
+            "ItemKNN",
+            "SLIM",
+            "UCB"
+        ]
+
+        train_paths = [
+            "partial_train_replay__models__als__ALSWrap_b07691ef15114b9687126ee64a3bc8cf.parquet",
+            "partial_train_replay__models__cluster__ClusterRec_717251fdc4ff4d63b52badff93331bd2.parquet",
+            "partial_train_replay__models__knn__ItemKNN_372668465d6a4537b43173379109a66c.parquet",
+            "partial_train_replay__models__slim__SLIM_b77f553e2ff94556ad24d640f4b1dee3.parquet",
+            "partial_train_replay__models__ucb__UCB_43a7c02276d84b0f828f89b96ded5241.parquet"
+        ]
+
+        predicts_paths = [
+            "partial_predict_replay__models__als__ALSWrap_b07691ef15114b9687126ee64a3bc8cf.parquet",
+            "partial_predict_replay__models__cluster__ClusterRec_717251fdc4ff4d63b52badff93331bd2.parquet",
+            "partial_predict_replay__models__knn__ItemKNN_372668465d6a4537b43173379109a66c.parquet",
+            "partial_predict_replay__models__slim__SLIM_b77f553e2ff94556ad24d640f4b1dee3.parquet",
+            "partial_predict_replay__models__ucb__UCB_43a7c02276d84b0f828f89b96ded5241.parquet"
+        ]
+
+        model_paths = [
+
+        ]
+
+        # creating combined train
+        partial_train_dfs = [spark.read.parquet(train_path) for train_path in train_paths]
+
+        unique_pairs = (
+            functools.reduce(lambda acc, x: acc.unionByName(x), partial_train_dfs)
+            .select('user_idx', 'item_idx')
+            .distinct()
+        )
+
+        missing_pairs = [
+            df.join(unique_pairs, on=['user_idx', 'item_idx'], how='anti').select('user_idx', 'item_idx').distinct()
+            for df in partial_train_dfs
+        ]
+
+        models = [
+            cast(BaseRecommender, cast(PartialTwoStageScenario, load(path)).first_level_models)
+            for path in model_paths
+        ]
+
+        missing_pairs_predictions = [
+            model._predict_pairs(
+                mpairs,
+                log=artifacts.train,
+                user_features=artifacts.user_features,
+                item_features=artifacts.item_features
+            ).withColumnRenamed('relevance', f'rel_{model_name}')
+            for model_name, model, mpairs in zip(flvl_model_names, models, missing_pairs)
+        ]
+
+        extended_train_dfs = [
+            partial_train.select('user_idx', 'item_idx', 'relevance').unionByName(mpreds)
+            for partial_train, mpreds in zip(partial_train_dfs, missing_pairs_predictions)
+        ]
+
+        extended_train_df = functools.reduce(
+            lambda acc, x: acc.join(x, on=['user_idx', 'item_idx'], how='left'),
+            extended_train_dfs
+        )
+
+        partial_train_df = functools.reduce(
+            lambda acc, x: acc.drop('rel_').unionByName(x),
+            partial_train_dfs
+        ).distinct('user_idx', 'item_idx')
+
+        new_train_df = extended_train_df.join(partial_train_df, on=['user_idx', 'item_idx'])
+
+        new_train_df.write.parquet(artifacts.full_second_level_train_path)
+
+        # combine predicts
+        partial_predicts_dfs = [spark.read.parquet(predict_path) for predict_path in predicts_paths]
+        full_predicts_df = functools.reduce(lambda acc, x: acc.join(x, on=['user_idx', 'item_idx']), partial_predicts_dfs)
+        full_predicts_df.write.parquet(artifacts.full_second_level_predicts_path)
