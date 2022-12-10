@@ -853,8 +853,7 @@ class DatasetCombiner:
                 functools.reduce(
                     lambda acc, x: acc.unionByName(x),
                     (df.select('user_idx', 'item_idx') for df in partial_dfs)
-                )
-                    .distinct()
+                ).distinct()
             )
         else:
             # "leading_<model_name>"
@@ -942,19 +941,34 @@ class DatasetCombiner:
             desired_models: Optional[List[str]] = None,
             mode: str = 'union'):
         with _init_spark_session() as spark:
+
+            train_exists = do_path_exists(combined_train_path)
+            predicts_exists = do_path_exists(combined_predicts_path)
+
+            assert train_exists == predicts_exists, \
+                f"The both datasets should either exist or be absent. " \
+                f"Train {combined_train_path}, Predicts {combined_predicts_path}"
+
+            if train_exists and predicts_exists:
+                logger.info(f"Datasets {combined_train_path} and {combined_predicts_path} exist. Nothing to do.")
+                return
+
             logger.info("Inferring traine models and their files")
             model_files = _infer_trained_models_files(artifacts)
 
             logger.info(f"Found the following models that have all required files: "
                         f"{[mfiles.model_name for mfiles in model_files]}")
             found_mpaths = '\n'.join([mfiles.model_path for mfiles in model_files])
-            logger.info(f"Found models paths: {found_mpaths}")
+            logger.info(f"Found models paths:\n {found_mpaths}")
 
             if desired_models is not None:
                 logger.info(f"Checking availability of the desired models: {desired_models}")
-                model_files = [mfiles for mfiles in model_files if mfiles.model_name in desired_models]
-                not_available_models = set(desired_models).intersection(mfiles.model_name for mfiles in model_files)
+                model_files = [mfiles for mfiles in model_files if mfiles.model_name.lower() in desired_models]
+                not_available_models = set(desired_models).difference(mfiles.model_name.lower() for mfiles in model_files)
                 assert len(not_available_models) == 0, f"Not all desired models available: {not_available_models}"
+
+            used_mpaths = '\n'.join([mfiles.model_path for mfiles in model_files])
+            logger.info(f"Continue with models:\n {used_mpaths}")
 
             # creating combined train
             logger.info("Creating combined train")
