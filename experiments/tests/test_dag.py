@@ -4,8 +4,9 @@ import os
 import shutil
 from typing import cast
 
+import mlflow
 import pytest
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, DataFrame
 from sparklightautoml.utils import logging_config, VERBOSE_LOGGING_FORMAT
 
 import replay
@@ -13,7 +14,8 @@ from conftest import phase_report_key
 from experiments.dag_entities import ArtifactPaths, DatasetInfo, dense_hnsw_params
 from experiments.dag_utils import _init_spark_session, do_dataset_splitting, do_init_refitable_two_stage_scenario, \
     EmptyRecommender, RefitableTwoStageScenario, _combine_datasets_for_second_level, do_fit_predict_second_level, \
-    do_presplit_data, do_fit_feature_transformers, do_fit_predict_first_level_model, PartialTwoStageScenario
+    do_presplit_data, do_fit_feature_transformers, do_fit_predict_first_level_model, PartialTwoStageScenario, \
+    do_combine_datasets
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
@@ -72,7 +74,7 @@ def artifacts(request, resource_path: str) -> ArtifactPaths:
                            'Sci-Fi', 'Thriller', 'War', 'Western']
     )
 
-    yield ArtifactPaths(base_path=path, dataset=dataset)
+    yield ArtifactPaths(base_path=path, dataset=dataset, uid="test_uid")
 
     report = request.node.stash[phase_report_key]
     if report["setup"].failed:
@@ -336,12 +338,13 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     model_class_name = "replay.models.als.ALSWrap"
     model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
 
-    do_fit_predict_first_level_model(
-        artifacts=artifacts,
-        model_class_name=model_class_name,
-        model_kwargs=model_kwargs,
-        k=10
-    )
+    with mlflow.start_run(nested=True):
+        do_fit_predict_first_level_model(
+            artifacts=artifacts,
+            model_class_name=model_class_name,
+            model_kwargs=model_kwargs,
+            k=10
+        )
 
 
 @pytest.mark.parametrize('second_model_type', ['lama', 'slama'])
@@ -378,3 +381,44 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
 
     assert model is not None
 
+
+@pytest.mark.parametrize('ctx', ['test_simple_dag_fit_predict_first_level_model__out'], indirect=True)
+def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
+    combined_train_path = artifacts.make_path("combined_train.parquet")
+    combined_predicts_path = artifacts.make_path("combined_predicts.parquet")
+
+    do_combine_datasets(
+        artifacts,
+        combined_train_path=combined_train_path,
+        combined_predicts_path=combined_predicts_path
+    )
+
+    def check_combined_dataset(combined_df: DataFrame):
+        rel_cols = [c for c in combined_df.columns if c.startswith('rel_')]
+
+        assert set(rel_cols) == 2
+        assert set(c.split('_')[-1].lower() for c in rel_cols) == {'alswrap', 'itemknn'}
+        assert len(set(combined_df.columns).difference(['user_idx', 'item_idx', 'target', *rel_cols])) > 1
+        assert combined_df.count() > 0
+
+    # check combined train
+    assert os.path.exists(combined_train_path)
+    combined_train_df = spark_sess.read.parquet(combined_train_path)
+
+    assert 'user_idx' in combined_train_df.columns \
+           and 'item_idx' in combined_train_df.columns \
+           and 'target' in combined_train_df.columns
+
+    check_combined_dataset(combined_train_df)
+
+    # TODO: need to check features
+
+    # check combined predicts
+    assert os.path.exists(combined_predicts_path)
+    combined_predicts_df = spark_sess.read.parquet(combined_predicts_path)
+
+    assert 'user_idx' in combined_predicts_df.columns \
+           and 'item_idx' in combined_predicts_df.columns \
+           and 'target' not in combined_predicts_df.columns
+
+    check_combined_dataset(combined_train_df)

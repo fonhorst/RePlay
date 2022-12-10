@@ -318,5 +318,8 @@ class ArtifactPaths:
     def second_level_predicts_path(self, model_name: str) -> str:
         return self._fs_prefix(os.path.join(self.base_path, f"{self.second_level_predicts_prefix}_{model_name}.parquet"))
 
+    def make_path(self, relative_path: str) -> str:
+        return self._fs_prefix(os.path.join(self.base_path, relative_path))
+
     def _get_session(self) -> SparkSession:
         return SparkSession.getActiveSession()
