@@ -21,10 +21,11 @@ from replay.models.base_rec import BaseRecommender
 from replay.scenarios import TwoStagesScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.scenarios.two_stages.slama_reranker import SlamaWrap
+from replay.scenarios.two_stages.two_stages_scenario import get_first_level_model_features
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists, JobGroup, load_transformer, \
-    list_folder
+    list_folder, join_with_col_renaming
 
 logger = logging.getLogger('airflow.task')
 
@@ -361,6 +362,18 @@ class RefitableTwoStageScenario(TwoStagesScenario):
         row = spark.read.parquet(os.path.join(path, "data_refittable.parquet")).first().asDict()
         self._are_candidates_dumped = row["_are_candidates_dumped"]
         self._are_split_data_dumped = row["_are_split_data_dumped"]
+
+
+def load_model(path: str):
+    setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
+    setattr(replay.model_handler, 'EmptyWrap', EmptyWrap)
+    setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
+    setattr(replay.model_handler, 'PartialTwoStageScenario', PartialTwoStageScenario)
+    return load(path)
+
+
+def save_model(model: BaseRecommender, path: str, overwrite: bool = False):
+    save(model, path, overwrite)
 
 
 @contextmanager
@@ -805,7 +818,7 @@ def _infer_trained_models_files(artifacts: ArtifactPaths) -> List[FirstLevelMode
         return filename.split('_')[-2]
 
     def get_files(prefix: str) -> Dict[str, str]:
-        return {model_name(file): file for file in files if file.startswith(prefix)}
+        return {model_name(file): artifacts.make_path(file) for file in files if file.startswith(prefix)}
 
     partial_predicts =  get_files('partial_predict')
     partial_trains =  get_files('partial_train')
@@ -847,14 +860,17 @@ def do_combine_datasets(artifacts: ArtifactPaths,
         logger.info("Creating combined train")
         model_names = [mfiles.model_name for mfiles in model_files]
         partial_train_dfs = [spark.read.parquet(mfiles.train_path) for mfiles in model_files]
+
         models = [
-            cast(BaseRecommender, cast(PartialTwoStageScenario, load(mfiles.model_path)).first_level_models)
+            cast(BaseRecommender, cast(PartialTwoStageScenario, load_model(mfiles.model_path)).first_level_models[0])
             for mfiles in model_files
         ]
 
         unique_pairs = (
-            functools.reduce(lambda acc, x: acc.unionByName(x), partial_train_dfs)
-            .select('user_idx', 'item_idx')
+            functools.reduce(
+                lambda acc, x: acc.unionByName(x),
+                (df.select('user_idx', 'item_idx') for df in partial_train_dfs)
+            )
             .distinct()
         )
 
@@ -863,41 +879,67 @@ def do_combine_datasets(artifacts: ArtifactPaths,
             for df in partial_train_dfs
         ]
 
-        missing_pairs_predictions = [
-            model._predict_pairs(
+        def get_rel_col(df: DataFrame) -> str:
+            return [c for c in df.columns if c.startswith('rel_')][0]
+
+        def make_missing_predictions(model, mpairs: DataFrame, partial_df: DataFrame) -> DataFrame:
+            mpairs = mpairs.cache()
+
+            if mpairs.count() == 0:
+                return partial_df
+
+            current_pred = model._predict_pairs(
                 mpairs,
                 log=artifacts.train,
                 user_features=artifacts.user_features,
                 item_features=artifacts.item_features
-            ).withColumnRenamed('relevance', f'rel_{model_name}')
-            for model_name, model, mpairs in zip(model_names, models, missing_pairs)
-        ]
+            ).withColumnRenamed('relevance', get_rel_col(partial_df))
+
+            features = get_first_level_model_features(
+                model=model,
+                pairs=current_pred.select(
+                    "user_idx", "item_idx"
+                ),
+                user_features=artifacts.user_features.cache(),
+                item_features=artifacts.item_features.cache(),
+                prefix=f"m_0",
+            )
+            current_pred_with_features = join_with_col_renaming(
+                left=current_pred,
+                right=features,
+                on_col_name=["user_idx", "item_idx"],
+                how="left",
+            )
+            return partial_df.unionByName(current_pred_with_features.select(*partial_df.columns))
 
         extended_train_dfs = [
-            partial_train.select('user_idx', 'item_idx', 'relevance').unionByName(mpreds)
-            for partial_train, mpreds in zip(partial_train_dfs, missing_pairs_predictions)
+            make_missing_predictions(model, mpairs, partial_df)
+            for model_name, model, mpairs, partial_df in zip(model_names, models, missing_pairs, partial_train_dfs)
         ]
 
-        extended_train_df = functools.reduce(
-            lambda acc, x: acc.join(x, on=['user_idx', 'item_idx'], how='left'),
-            extended_train_dfs
+        common_cols = functools.reduce(
+            lambda acc, cols: acc.intersection(cols),
+            [set(df.columns) for df in partial_train_dfs]
         )
+        common_cols.remove('user_idx')
+        common_cols.remove('item_idx')
 
-        partial_train_df = functools.reduce(
-            lambda acc, x: acc.drop('rel_').unionByName(x),
-            partial_train_dfs
-        ).distinct('user_idx', 'item_idx')
-
-        new_train_df = extended_train_df.join(partial_train_df, on=['user_idx', 'item_idx'])
+        new_train_df = functools.reduce(
+            lambda acc, x: acc.join(x.drop(*common_cols), on=['user_idx', 'item_idx'], how='left'),
+            extended_train_dfs,
+            partial_train_dfs[0].select('user_idx', 'item_idx', *common_cols)
+        )
 
         new_train_df.write.parquet(combined_train_path)
 
         # combine predicts
         logger.info("Creating combined predicts")
+        common_cols.remove('target')
         partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
         full_predicts_df = functools.reduce(
-            lambda acc, x: acc.join(x, on=['user_idx', 'item_idx']),
-            partial_predicts_dfs
+            lambda acc, x: acc.join(x.drop(*common_cols), on=['user_idx', 'item_idx']),
+            partial_predicts_dfs,
+            partial_predicts_dfs[0].select('user_idx', 'item_idx', *common_cols)
         )
         full_predicts_df.write.parquet(combined_predicts_path)
 

@@ -15,14 +15,11 @@ from experiments.dag_entities import ArtifactPaths, DatasetInfo, dense_hnsw_para
 from experiments.dag_utils import _init_spark_session, do_dataset_splitting, do_init_refitable_two_stage_scenario, \
     EmptyRecommender, RefitableTwoStageScenario, _combine_datasets_for_second_level, do_fit_predict_second_level, \
     do_presplit_data, do_fit_feature_transformers, do_fit_predict_first_level_model, PartialTwoStageScenario, \
-    do_combine_datasets
+    do_combine_datasets, load_model
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
 from replay.model_handler import load
-from replay.model_handler import load
-from replay.scenarios.two_stages.reranker import LamaWrap
-from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.utils import save_transformer, load_transformer
 
 logging.config.dictConfig(logging_config(level=logging.DEBUG, log_filename='/tmp/slama.log'))
@@ -74,7 +71,7 @@ def artifacts(request, resource_path: str) -> ArtifactPaths:
                            'Sci-Fi', 'Thriller', 'War', 'Western']
     )
 
-    yield ArtifactPaths(base_path=path, dataset=dataset, uid="test_uid")
+    yield ArtifactPaths(base_path=path, dataset=dataset, uid="testuid")
 
     report = request.node.stash[phase_report_key]
     if report["setup"].failed:
@@ -123,7 +120,7 @@ def test_init_refitable_two_stage_scenario(spark_sess: SparkSession, artifacts: 
 
     setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
     setattr(replay.model_handler, 'RefitableTwoStageScenario', RefitableTwoStageScenario)
-    scenario = cast(RefitableTwoStageScenario, load(artifacts.two_stage_scenario_path))
+    scenario = cast(RefitableTwoStageScenario, load_model(artifacts.two_stage_scenario_path))
 
     assert scenario._are_candidates_dumped
     assert scenario._are_split_data_dumped
@@ -322,7 +319,7 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
     # check the model
     setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
     setattr(replay.model_handler, 'PartialTwoStageScenario', PartialTwoStageScenario)
-    model = load(artifacts.partial_two_stage_scenario_path(model_class_name))
+    model = load_model(artifacts.partial_two_stage_scenario_path(model_class_name))
     assert model is not None
     assert type(model).__name__ == 'PartialTwoStageScenario'
     model = cast(PartialTwoStageScenario, model)
@@ -396,7 +393,7 @@ def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, 
     def check_combined_dataset(combined_df: DataFrame, original_partial_paths: List[str]):
         rel_cols = [c for c in combined_df.columns if c.startswith('rel_')]
 
-        assert set(rel_cols) == 2
+        assert len(set(rel_cols)) == 2
         assert set(c.split('_')[-1].lower() for c in rel_cols) == {'alswrap', 'itemknn'}
         assert len(set(combined_df.columns).difference(['user_idx', 'item_idx', 'target', *rel_cols])) > 1
         assert combined_df.count() > 0
