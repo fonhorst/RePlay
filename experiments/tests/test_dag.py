@@ -382,7 +382,7 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
 
 @pytest.mark.parametrize('mode', ['union', 'leading_itemknn'])
 @pytest.mark.parametrize('ctx', ['test_simple_dag_fit_predict_first_level_model__out'], indirect=True)
-def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, mode: str, ctx):
+def test_simple_dag_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, mode: str, ctx):
     combined_train_path = artifacts.make_path("combined_train.parquet")
     combined_predicts_path = artifacts.make_path("combined_predicts.parquet")
 
