@@ -801,13 +801,13 @@ def do_fit_predict_second_level(
 
             mlflow.log_metric(timer.name, timer.duration)
 
+            _estimate_and_report_metrics(model_name, artifacts.test, recs)
+
             with log_exec_timer("model_saving") as timer:
                 second_level_model_path = artifacts.second_level_model_path(model_name)
                 save_transformer(second_stage_model, second_level_model_path)
 
             mlflow.log_metric(timer.name, timer.duration)
-
-            _estimate_and_report_metrics(model_name, artifacts.test, recs)
 
 
 def _infer_trained_models_files(artifacts: ArtifactPaths) -> List[FirstLevelModelFiles]:

@@ -143,8 +143,8 @@ def _make_combined_2lvl(artifacts: ArtifactPaths,
                         k: int,
                         mode: str = 'union',
                         desired_1lvl_models: Optional[List[str]] = None):
-    combined_train_path = artifacts.make_path("combined_train.parquet")
-    combined_predicts_path = artifacts.make_path("combined_predicts.parquet")
+    combined_train_path = artifacts.make_path(f"combined_train_{combiner_suffix}.parquet")
+    combined_predicts_path = artifacts.make_path(f"combined_predicts_{combiner_suffix}.parquet")
 
     combiner = task(
         task_id=f"combiner_{combiner_suffix}"
@@ -275,6 +275,7 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
             model_name=std_model_name,
             combiner_suffix="all_models_union",
             k=k,
+            desired_1lvl_models=['itemknn', 'alswrap', 'slim', 'ucb'],
             mode='union'
         )
 
@@ -282,6 +283,7 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
             artifacts=artifacts,
             model_name=std_model_name,
             combiner_suffix="all_models_leading_itemknn",
+            desired_1lvl_models=['itemknn', 'alswrap', 'slim', 'ucb'],
             k=k,
             mode='leading_itemknn'
         )
@@ -307,10 +309,10 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
         _make_combined_2lvl(
             artifacts=artifacts,
             model_name=std_model_name,
-            combiner_suffix="itemknn_alswrap",
+            combiner_suffix="alswrap_slim",
             k=k,
             mode='union',
-            desired_1lvl_models=['alswrap', 'cluster']
+            desired_1lvl_models=['alswrap', 'slim']
         )
 
 
@@ -342,7 +344,7 @@ ml1m_second_level_dag = build_fit_predict_second_level(
 
 ml1m_combined_second_level_dag = build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id="111")
 
-#####
+########10
 
 
 # ml25m_first_level_dag = build_fit_predict_first_level_models_dag(
