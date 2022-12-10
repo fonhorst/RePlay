@@ -1,3 +1,4 @@
+import functools
 import logging.config
 import logging.config
 import os
@@ -379,8 +380,7 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
     assert model is not None
 
 
-# @pytest.mark.parametrize('mode', ['union', 'leading_itemknn'])
-@pytest.mark.parametrize('mode', ['union'])
+@pytest.mark.parametrize('mode', ['union', 'leading_itemknn'])
 @pytest.mark.parametrize('ctx', ['test_simple_dag_fit_predict_first_level_model__out'], indirect=True)
 def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, mode: str, ctx):
     combined_train_path = artifacts.make_path("combined_train.parquet")
@@ -403,17 +403,26 @@ def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, 
 
         for partial_path in original_partial_paths:
             df = spark_sess.read.parquet(partial_path)
-            not_present_columns = set(df.columns).difference(combined_train_df.columns)
+            not_present_columns = set(df.columns).difference(combined_df.columns)
             assert len(not_present_columns) == 0, f"Not present columns({partial_path}): {not_present_columns}"
 
             if mode == 'union':
-                assert combined_train_df.count() >= df.count()
+                assert combined_df.count() >= df.count()
+
+        if mode == "union":
+            assert combined_df.count() == functools.reduce(
+                lambda acc, x: acc.unionByName(x),
+                [
+                    spark_sess.read.parquet(partial_path).select('user_idx', 'item_idx')
+                    for partial_path in original_partial_paths
+                ]
+            ).distinct().count()
 
         if mode.startswith('leading'):
             leading_model_name = mode.split('_')[-1]
             path = [p for p in original_partial_paths if leading_model_name.lower() in p.lower()][0]
             df = spark_sess.read.parquet(path)
-            assert combined_train_df.count() == df.count()
+            assert combined_df.count() == df.count()
 
     # check combined train
     assert os.path.exists(combined_train_path)
@@ -433,4 +442,4 @@ def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, 
            and 'item_idx' in combined_predicts_df.columns \
            and 'target' not in combined_predicts_df.columns
 
-    check_combined_dataset(combined_train_df, original_partial_paths=artifacts.partial_predicts_paths)
+    check_combined_dataset(combined_predicts_df, original_partial_paths=artifacts.partial_predicts_paths)
