@@ -657,8 +657,12 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
 
         if artifacts.user_features is not None:
             user_feature_transformer = load_transformer(artifacts.user_features_transformer_path)
+        else:
+            user_feature_transformer = None
         if artifacts.item_features is not None:
             item_feature_transformer = load_transformer(artifacts.item_features_transformer_path)
+        else:
+            item_feature_transformer = None
         history_based_transformer = load_transformer(artifacts.history_based_transformer_path)
 
         scenario = PartialTwoStageScenario(
