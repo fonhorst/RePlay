@@ -28,7 +28,6 @@ def fit_feature_transformers(artifacts: 'ArtifactPaths', cpu: int = DEFAULT_CPU,
     from dag_utils import do_fit_feature_transformers
     do_fit_feature_transformers(artifacts, cpu, memory)
 
-
 @task
 def presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
     from dag_utils import do_presplit_data

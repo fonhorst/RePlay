@@ -24,7 +24,7 @@ from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists, JobGroup, load_transformer
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('airflow.task')
 
 
 def _get_bucketing_key(default: str = 'user_idx') -> str:
@@ -476,7 +476,7 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
 
         print(f"Estimated metric {metric_name}={metric_value} for {model_name}")
 
-        # mlflow.log_metric(metric_name, metric_value)
+        mlflow.log_metric(metric_name, metric_value)
 
 
 def _log_model_settings(model_name: str,
@@ -561,46 +561,54 @@ def do_init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
 def do_fit_feature_transformers(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
     from replay.data_preparator import ToNumericFeatureTransformer
 
+    logger.info("Starting do_fit_feature_transformers")
+
     with _init_spark_session(cpu, memory) as spark:
-        if artifacts.user_features is None and artifacts.item_features is None:
-            return
+        if artifacts.user_features is not None or artifacts.item_features is not None:
+            assert (artifacts.user_features is not None and artifacts.item_features is not None) \
+                   or (artifacts.user_features is None and not artifacts.item_features is None),\
+                "Cannot handle when only user or item features is defined"
 
-        assert (artifacts.user_features is not None and artifacts.item_features is not None) \
-               or (artifacts.user_features is None and not artifacts.item_features is None),\
-            "Cannot handle when only user or item features is defined"
+            ift_exists = do_path_exists(artifacts.item_features_transformer_path)
+            uft_exists = do_path_exists(artifacts.user_features_transformer_path)
 
-        ift_exists = do_path_exists(artifacts.item_features_transformer_path)
-        uft_exists = do_path_exists(artifacts.user_features_transformer_path)
+            if any([ift_exists, uft_exists]) and not all([ift_exists, uft_exists]):
+                raise Exception(
+                    f"The paths should be all either existing or absent. "
+                    f"But: {artifacts.item_features_transformer_path} exists == {ift_exists}, "
+                    f"{artifacts.user_features_transformer_path} exists == {uft_exists}."
+                )
+
+            if not ift_exists:
+                first_level_user_features_transformer = ToNumericFeatureTransformer()
+                first_level_item_features_transformer = ToNumericFeatureTransformer()
+
+                logger.info("Fitting user features transformer...")
+                first_level_user_features_transformer.fit(artifacts.user_features)
+                logger.info("Fitting item features transformer...")
+                first_level_item_features_transformer.fit(artifacts.item_features)
+
+                logger.info("Saving fitted user and items transformers")
+                save_transformer(first_level_item_features_transformer, artifacts.item_features_transformer_path)
+                save_transformer(first_level_user_features_transformer, artifacts.user_features_transformer_path)
+
         hbt_exists = do_path_exists(artifacts.history_based_transformer_path)
 
-        if any([ift_exists, uft_exists, hbt_exists]) and not all([ift_exists, uft_exists, hbt_exists]):
-            raise Exception(
-                f"The paths should be all either existing or absent. "
-                f"But: {artifacts.item_features_transformer_path} exists == {ift_exists}, "
-                f"{artifacts.user_features_transformer_path} exists == {uft_exists}, "
-                f"{artifacts.history_based_transformer_path} exists == {hbt_exists}."
-            )
-
-        if all([ift_exists, uft_exists, hbt_exists]):
+        if hbt_exists:
             return
 
-        first_level_user_features_transformer = ToNumericFeatureTransformer()
-        first_level_item_features_transformer = ToNumericFeatureTransformer()
         hbt_transformer = HistoryBasedFeaturesProcessor(
             user_cat_features_list=artifacts.dataset.user_cat_features,
             item_cat_features_list=artifacts.dataset.item_cat_features,
         )
 
-        first_level_user_features_transformer.fit(artifacts.user_features)
-        first_level_item_features_transformer.fit(artifacts.item_features)
+        logger.info("Fitting history-based features transformer...")
         hbt_transformer.fit(
             log=spark.read.parquet(artifacts.first_level_train_path),
             user_features=artifacts.user_features,
             item_features=artifacts.item_features
         )
 
-        save_transformer(first_level_item_features_transformer, artifacts.item_features_transformer_path)
-        save_transformer(first_level_user_features_transformer, artifacts.user_features_transformer_path)
         save_transformer(hbt_transformer, artifacts.history_based_transformer_path)
 
 
@@ -636,19 +644,21 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                                   cpu: int = DEFAULT_CPU,
                                   memory: int = DEFAULT_MEMORY):
     with _init_spark_session(cpu, memory):
-        # _log_model_settings(
-        #     model_name=model_class_name,
-        #     model_type=model_class_name,
-        #     k=k,
-        #     artifacts=artifacts,
-        #     model_params=model_kwargs,
-        #     model_config_path=None
-        # )
+        _log_model_settings(
+            model_name=model_class_name,
+            model_type=model_class_name,
+            k=k,
+            artifacts=artifacts,
+            model_params=model_kwargs,
+            model_config_path=None
+        )
 
         first_level_model = _get_model(artifacts, model_class_name, model_kwargs)
 
-        user_feature_transformer = load_transformer(artifacts.user_features_transformer_path)
-        item_feature_transformer = load_transformer(artifacts.item_features_transformer_path)
+        if artifacts.user_features is not None:
+            user_feature_transformer = load_transformer(artifacts.user_features_transformer_path)
+        if artifacts.item_features is not None:
+            item_feature_transformer = load_transformer(artifacts.item_features_transformer_path)
         history_based_transformer = load_transformer(artifacts.history_based_transformer_path)
 
         scenario = PartialTwoStageScenario(

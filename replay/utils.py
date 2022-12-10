@@ -1011,6 +1011,8 @@ def save_transformer(
         transformer: AbleToSaveAndLoad,
         path: str,
         overwrite: bool = False):
+
+    logger.info(f"Saving transformer on path: {path}")
     spark = State().session
 
     is_exists = do_path_exists(path)
@@ -1027,6 +1029,7 @@ def save_transformer(
     }]).write.parquet(os.path.join(path, "metadata.parquet"))
 
     transformer.save(os.path.join(path, "transformer"), overwrite, spark=spark)
+    logger.info(f"The transformer is saved on path {path}")
 
 
 def load_transformer(path: str):
