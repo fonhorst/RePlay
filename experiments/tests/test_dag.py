@@ -15,7 +15,7 @@ from experiments.dag_entities import ArtifactPaths, DatasetInfo, dense_hnsw_para
 from experiments.dag_utils import _init_spark_session, do_dataset_splitting, do_init_refitable_two_stage_scenario, \
     EmptyRecommender, RefitableTwoStageScenario, _combine_datasets_for_second_level, do_fit_predict_second_level, \
     do_presplit_data, do_fit_feature_transformers, do_fit_predict_first_level_model, PartialTwoStageScenario, \
-    do_combine_datasets, load_model
+    load_model, DatasetCombiner
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import EmptyFeatureProcessor, LogStatFeaturesProcessor, ConditionalPopularityProcessor, \
     HistoryBasedFeaturesProcessor
@@ -386,7 +386,7 @@ def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, 
     combined_train_path = artifacts.make_path("combined_train.parquet")
     combined_predicts_path = artifacts.make_path("combined_predicts.parquet")
 
-    do_combine_datasets(
+    DatasetCombiner.do_combine_datasets(
         artifacts,
         combined_train_path=combined_train_path,
         combined_predicts_path=combined_predicts_path,

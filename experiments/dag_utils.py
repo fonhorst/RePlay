@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Dict, cast, Optional, List, Union, Tuple
 
 import mlflow
-from docutils.nodes import Part
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 
 import replay
@@ -839,57 +838,37 @@ def _infer_trained_models_files(artifacts: ArtifactPaths) -> List[FirstLevelMode
     return first_lvl_model_files
 
 
-def do_combine_datasets(artifacts: ArtifactPaths,
-                        combined_train_path: str,
-                        combined_predicts_path: str,
-                        desired_models: Optional[List[str]] = None,
-                        mode: str = 'union'):
-    with _init_spark_session() as spark:
-        logger.info("Inferring traine models and their files")
-        model_files = _infer_trained_models_files(artifacts)
-
-        logger.info(f"Found the following models that have all required files: "
-                    f"{[mfiles.model_name for mfiles in model_files]}")
-
-        if desired_models is not None:
-            logger.info(f"Checking availability of the desired models: {desired_models}")
-            model_files = [mfiles for mfiles in model_files if mfiles.model_name in desired_models]
-            not_available_models = set(desired_models).intersection(mfiles.model_name for mfiles in model_files)
-            assert len(not_available_models) == 0, f"Not all desired models available: {not_available_models}"
-
-        # creating combined train
-        logger.info("Creating combined train")
-        model_names = [mfiles.model_name.lower() for mfiles in model_files]
-        partial_train_dfs = [spark.read.parquet(mfiles.train_path) for mfiles in model_files]
-
-        models = [
-            cast(BaseRecommender, cast(PartialTwoStageScenario, load_model(mfiles.model_path)).first_level_models[0])
-            for mfiles in model_files
-        ]
-
+class DatasetCombiner:
+    @staticmethod
+    def _combine(
+            artifacts: ArtifactPaths,
+            mode: str,
+            model_names: List[str],
+            models: List[BaseRecommender],
+            partial_dfs: List[DataFrame],
+            combined_df_path: str
+    ):
         if mode == 'union':
             required_pairs = (
                 functools.reduce(
                     lambda acc, x: acc.unionByName(x),
-                    (df.select('user_idx', 'item_idx') for df in partial_train_dfs)
+                    (df.select('user_idx', 'item_idx') for df in partial_dfs)
                 )
-                .distinct()
+                    .distinct()
             )
         else:
             # "leading_<model_name>"
             leading_model_name = mode.split('_')[-1]
             required_pairs = (
-                partial_train_dfs[model_names.index(leading_model_name)]
-                .select('user_idx', 'item_idx')
-                .distinct()
+                partial_dfs[model_names.index(leading_model_name)]
+                    .select('user_idx', 'item_idx')
+                    .distinct()
             )
 
         missing_pairs = [
             required_pairs.join(df, on=['user_idx', 'item_idx'], how='anti').select('user_idx', 'item_idx').distinct()
-            for df in partial_train_dfs
+            for df in partial_dfs
         ]
-
-        k = 0
 
         def get_rel_col(df: DataFrame) -> str:
             return [c for c in df.columns if c.startswith('rel_')][0]
@@ -926,19 +905,19 @@ def do_combine_datasets(artifacts: ArtifactPaths,
 
         common_cols = functools.reduce(
             lambda acc, cols: acc.intersection(cols),
-            [set(df.columns) for df in partial_train_dfs]
+            [set(df.columns) for df in partial_dfs]
         )
         common_cols.remove('user_idx')
         common_cols.remove('item_idx')
 
         extended_train_dfs = [
             make_missing_predictions(model, mpairs, partial_df.drop(*common_cols))
-            for model, mpairs, partial_df in zip(models, missing_pairs, partial_train_dfs)
+            for model, mpairs, partial_df in zip(models, missing_pairs, partial_dfs)
         ]
 
         features_for_required_pairs_df = [
             required_pairs.join(df.select('user_idx', 'item_idx', *common_cols), on=['user_idx', 'item_idx'])
-            for df in partial_train_dfs
+            for df in partial_dfs
         ]
 
         required_pairs_with_features = functools.reduce(
@@ -953,17 +932,66 @@ def do_combine_datasets(artifacts: ArtifactPaths,
             required_pairs_with_features
         )
 
-        new_train_df.write.parquet(combined_train_path)
+        new_train_df.write.parquet(combined_df_path)
 
-        # combine predicts
-        logger.info("Creating combined predicts")
-        common_cols.remove('target')
-        partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
-        full_predicts_df = functools.reduce(
-            lambda acc, x: acc.join(x.drop(*common_cols), on=['user_idx', 'item_idx']),
-            partial_predicts_dfs,
-            partial_predicts_dfs[0].select('user_idx', 'item_idx', *common_cols)
-        )
-        full_predicts_df.write.parquet(combined_predicts_path)
+    @staticmethod
+    def do_combine_datasets(
+            artifacts: ArtifactPaths,
+            combined_train_path: str,
+            combined_predicts_path: str,
+            desired_models: Optional[List[str]] = None,
+            mode: str = 'union'):
+        with _init_spark_session() as spark:
+            logger.info("Inferring traine models and their files")
+            model_files = _infer_trained_models_files(artifacts)
 
-        logger.info("Combining finished")
+            logger.info(f"Found the following models that have all required files: "
+                        f"{[mfiles.model_name for mfiles in model_files]}")
+
+            if desired_models is not None:
+                logger.info(f"Checking availability of the desired models: {desired_models}")
+                model_files = [mfiles for mfiles in model_files if mfiles.model_name in desired_models]
+                not_available_models = set(desired_models).intersection(mfiles.model_name for mfiles in model_files)
+                assert len(not_available_models) == 0, f"Not all desired models available: {not_available_models}"
+
+            # creating combined train
+            logger.info("Creating combined train")
+            model_names = [mfiles.model_name.lower() for mfiles in model_files]
+            partial_train_dfs = [spark.read.parquet(mfiles.train_path) for mfiles in model_files]
+            partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
+
+            models = [
+                cast(BaseRecommender, cast(PartialTwoStageScenario, load_model(mfiles.model_path)).first_level_models[0])
+                for mfiles in model_files
+            ]
+
+            DatasetCombiner._combine(
+                artifacts=artifacts,
+                mode=mode,
+                model_names=model_names,
+                models=models,
+                partial_dfs=partial_train_dfs,
+                combined_df_path=combined_train_path
+            )
+
+            # combine predicts
+            logger.info("Creating combined predicts")
+
+            DatasetCombiner._combine(
+                artifacts=artifacts,
+                mode=mode,
+                model_names=model_names,
+                models=models,
+                partial_dfs=partial_predicts_dfs,
+                combined_df_path=combined_predicts_path
+            )
+            # common_cols.remove('target')
+            # partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
+            # full_predicts_df = functools.reduce(
+            #     lambda acc, x: acc.join(x.drop(*common_cols), on=['user_idx', 'item_idx']),
+            #     partial_predicts_dfs,
+            #     partial_predicts_dfs[0].select('user_idx', 'item_idx', *common_cols)
+            # )
+            # full_predicts_df.write.parquet(combined_predicts_path)
+
+            logger.info("Combining finished")
