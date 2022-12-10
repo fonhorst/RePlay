@@ -5,6 +5,7 @@ import logging
 import os
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Dict, cast, Optional, List, Union, Tuple
 
 import mlflow
@@ -22,9 +23,18 @@ from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists, JobGroup, load_transformer
+from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists, JobGroup, load_transformer, \
+    list_folder
 
 logger = logging.getLogger('airflow.task')
+
+
+@dataclass(frozen=True)
+class FirstLevelModelFiles:
+    model_name: str
+    train_path: str
+    predict_path: str
+    model_path: str
 
 
 def _get_bucketing_key(default: str = 'user_idx') -> str:
@@ -788,38 +798,59 @@ def do_fit_predict_second_level(
             _estimate_and_report_metrics(model_name, artifacts.test, recs)
 
 
-def do_combining_datasets(artifacts: ArtifactPaths):
+def _infer_trained_models_files(artifacts: ArtifactPaths) -> List[FirstLevelModelFiles]:
+    files = list_folder(artifacts.base_path)
+
+    def model_name(filename: str) -> str:
+        return filename.split('_')[-2]
+
+    def get_files(prefix: str) -> Dict[str, str]:
+        return {model_name(file): file for file in files if file.startswith(prefix)}
+
+    partial_predicts =  get_files('partial_predict')
+    partial_trains =  get_files('partial_train')
+    partial_scenarios = get_files('two_stage_scenario')
+
+    finished_model_names = set(partial_predicts).intersection(partial_trains).intersection(partial_scenarios)
+
+    first_lvl_model_files = [
+        FirstLevelModelFiles(
+            model_name=mname,
+            train_path=partial_trains[mname],
+            predict_path=partial_predicts[mname],
+            model_path=partial_scenarios[mname]
+        )
+        for mname in finished_model_names
+    ]
+
+    return first_lvl_model_files
+
+
+def do_combine_datasets(artifacts: ArtifactPaths,
+                        combined_train_path: str,
+                        combined_predicts_path: str,
+                        desired_models: Optional[List[str]] = None):
     with _init_spark_session() as spark:
-        flvl_model_names = [
-            "ALSWrap",
-            "ClusterRec",
-            "ItemKNN",
-            "SLIM",
-            "UCB"
-        ]
+        logger.info("Inferring traine models and their files")
+        model_files = _infer_trained_models_files(artifacts)
 
-        train_paths = [
-            "partial_train_replay__models__als__ALSWrap_b07691ef15114b9687126ee64a3bc8cf.parquet",
-            "partial_train_replay__models__cluster__ClusterRec_717251fdc4ff4d63b52badff93331bd2.parquet",
-            "partial_train_replay__models__knn__ItemKNN_372668465d6a4537b43173379109a66c.parquet",
-            "partial_train_replay__models__slim__SLIM_b77f553e2ff94556ad24d640f4b1dee3.parquet",
-            "partial_train_replay__models__ucb__UCB_43a7c02276d84b0f828f89b96ded5241.parquet"
-        ]
+        logger.info(f"Found the following models that have all required files: "
+                    f"{[mfiles.model_name for mfiles in model_files]}")
 
-        predicts_paths = [
-            "partial_predict_replay__models__als__ALSWrap_b07691ef15114b9687126ee64a3bc8cf.parquet",
-            "partial_predict_replay__models__cluster__ClusterRec_717251fdc4ff4d63b52badff93331bd2.parquet",
-            "partial_predict_replay__models__knn__ItemKNN_372668465d6a4537b43173379109a66c.parquet",
-            "partial_predict_replay__models__slim__SLIM_b77f553e2ff94556ad24d640f4b1dee3.parquet",
-            "partial_predict_replay__models__ucb__UCB_43a7c02276d84b0f828f89b96ded5241.parquet"
-        ]
-
-        model_paths = [
-
-        ]
+        if desired_models is not None:
+            logger.info(f"Checking availability of the desired models: {desired_models}")
+            model_files = [mfiles for mfiles in model_files if mfiles.model_name in desired_models]
+            not_available_models = set(desired_models).intersection(mfiles.model_name for mfiles in model_files)
+            assert len(not_available_models) == 0, f"Not all desired models available: {not_available_models}"
 
         # creating combined train
-        partial_train_dfs = [spark.read.parquet(train_path) for train_path in train_paths]
+        logger.info("Creating combined train")
+        model_names = [mfiles.model_name for mfiles in model_files]
+        partial_train_dfs = [spark.read.parquet(mfiles.train_path) for mfiles in model_files]
+        models = [
+            cast(BaseRecommender, cast(PartialTwoStageScenario, load(mfiles.model_path)).first_level_models)
+            for mfiles in model_files
+        ]
 
         unique_pairs = (
             functools.reduce(lambda acc, x: acc.unionByName(x), partial_train_dfs)
@@ -832,11 +863,6 @@ def do_combining_datasets(artifacts: ArtifactPaths):
             for df in partial_train_dfs
         ]
 
-        models = [
-            cast(BaseRecommender, cast(PartialTwoStageScenario, load(path)).first_level_models)
-            for path in model_paths
-        ]
-
         missing_pairs_predictions = [
             model._predict_pairs(
                 mpairs,
@@ -844,7 +870,7 @@ def do_combining_datasets(artifacts: ArtifactPaths):
                 user_features=artifacts.user_features,
                 item_features=artifacts.item_features
             ).withColumnRenamed('relevance', f'rel_{model_name}')
-            for model_name, model, mpairs in zip(flvl_model_names, models, missing_pairs)
+            for model_name, model, mpairs in zip(model_names, models, missing_pairs)
         ]
 
         extended_train_dfs = [
@@ -864,9 +890,15 @@ def do_combining_datasets(artifacts: ArtifactPaths):
 
         new_train_df = extended_train_df.join(partial_train_df, on=['user_idx', 'item_idx'])
 
-        new_train_df.write.parquet(artifacts.full_second_level_train_path)
+        new_train_df.write.parquet(combined_train_path)
 
         # combine predicts
-        partial_predicts_dfs = [spark.read.parquet(predict_path) for predict_path in predicts_paths]
-        full_predicts_df = functools.reduce(lambda acc, x: acc.join(x, on=['user_idx', 'item_idx']), partial_predicts_dfs)
-        full_predicts_df.write.parquet(artifacts.full_second_level_predicts_path)
+        logger.info("Creating combined predicts")
+        partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
+        full_predicts_df = functools.reduce(
+            lambda acc, x: acc.join(x, on=['user_idx', 'item_idx']),
+            partial_predicts_dfs
+        )
+        full_predicts_df.write.parquet(combined_predicts_path)
+
+        logger.info("Combining finished")
