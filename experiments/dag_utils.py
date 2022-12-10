@@ -947,6 +947,8 @@ class DatasetCombiner:
 
             logger.info(f"Found the following models that have all required files: "
                         f"{[mfiles.model_name for mfiles in model_files]}")
+            found_mpaths = '\n'.join([mfiles.model_path for mfiles in model_files])
+            logger.info(f"Found models paths: {found_mpaths}")
 
             if desired_models is not None:
                 logger.info(f"Checking availability of the desired models: {desired_models}")
