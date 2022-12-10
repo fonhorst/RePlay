@@ -842,7 +842,8 @@ def _infer_trained_models_files(artifacts: ArtifactPaths) -> List[FirstLevelMode
 def do_combine_datasets(artifacts: ArtifactPaths,
                         combined_train_path: str,
                         combined_predicts_path: str,
-                        desired_models: Optional[List[str]] = None):
+                        desired_models: Optional[List[str]] = None,
+                        mode: str = 'union'):
     with _init_spark_session() as spark:
         logger.info("Inferring traine models and their files")
         model_files = _infer_trained_models_files(artifacts)
@@ -858,7 +859,7 @@ def do_combine_datasets(artifacts: ArtifactPaths,
 
         # creating combined train
         logger.info("Creating combined train")
-        model_names = [mfiles.model_name for mfiles in model_files]
+        model_names = [mfiles.model_name.lower() for mfiles in model_files]
         partial_train_dfs = [spark.read.parquet(mfiles.train_path) for mfiles in model_files]
 
         models = [
@@ -866,18 +867,29 @@ def do_combine_datasets(artifacts: ArtifactPaths,
             for mfiles in model_files
         ]
 
-        unique_pairs = (
-            functools.reduce(
-                lambda acc, x: acc.unionByName(x),
-                (df.select('user_idx', 'item_idx') for df in partial_train_dfs)
+        if mode == 'union':
+            required_pairs = (
+                functools.reduce(
+                    lambda acc, x: acc.unionByName(x),
+                    (df.select('user_idx', 'item_idx') for df in partial_train_dfs)
+                )
+                .distinct()
             )
-            .distinct()
-        )
+        else:
+            # "leading_<model_name>"
+            leading_model_name = mode.split('_')[-1]
+            required_pairs = (
+                partial_train_dfs[model_names.index(leading_model_name)]
+                .select('user_idx', 'item_idx')
+                .distinct()
+            )
 
         missing_pairs = [
-            df.join(unique_pairs, on=['user_idx', 'item_idx'], how='anti').select('user_idx', 'item_idx').distinct()
+            required_pairs.join(df, on=['user_idx', 'item_idx'], how='anti').select('user_idx', 'item_idx').distinct()
             for df in partial_train_dfs
         ]
+
+        k = 0
 
         def get_rel_col(df: DataFrame) -> str:
             return [c for c in df.columns if c.startswith('rel_')][0]
@@ -912,11 +924,6 @@ def do_combine_datasets(artifacts: ArtifactPaths,
             )
             return partial_df.unionByName(current_pred_with_features.select(*partial_df.columns))
 
-        extended_train_dfs = [
-            make_missing_predictions(model, mpairs, partial_df)
-            for model_name, model, mpairs, partial_df in zip(model_names, models, missing_pairs, partial_train_dfs)
-        ]
-
         common_cols = functools.reduce(
             lambda acc, cols: acc.intersection(cols),
             [set(df.columns) for df in partial_train_dfs]
@@ -924,10 +931,26 @@ def do_combine_datasets(artifacts: ArtifactPaths,
         common_cols.remove('user_idx')
         common_cols.remove('item_idx')
 
+        extended_train_dfs = [
+            make_missing_predictions(model, mpairs, partial_df.drop(*common_cols))
+            for model, mpairs, partial_df in zip(models, missing_pairs, partial_train_dfs)
+        ]
+
+        features_for_required_pairs_df = [
+            required_pairs.join(df.select('user_idx', 'item_idx', *common_cols), on=['user_idx', 'item_idx'])
+            for df in partial_train_dfs
+        ]
+
+        required_pairs_with_features = functools.reduce(
+            lambda acc, df: acc.unionByName(df),
+            features_for_required_pairs_df
+        ).drop_duplicates(['user_idx', 'item_idx'])
+
+        # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
         new_train_df = functools.reduce(
-            lambda acc, x: acc.join(x.drop(*common_cols), on=['user_idx', 'item_idx'], how='left'),
+            lambda acc, x: acc.join(x, on=['user_idx', 'item_idx'], how='left'),
             extended_train_dfs,
-            partial_train_dfs[0].select('user_idx', 'item_idx', *common_cols)
+            required_pairs_with_features
         )
 
         new_train_df.write.parquet(combined_train_path)

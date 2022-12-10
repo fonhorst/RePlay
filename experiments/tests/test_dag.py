@@ -379,15 +379,18 @@ def test_second_level_fitting(spark_sess: SparkSession, artifacts: ArtifactPaths
     assert model is not None
 
 
+# @pytest.mark.parametrize('mode', ['union', 'leading_itemknn'])
+@pytest.mark.parametrize('mode', ['union'])
 @pytest.mark.parametrize('ctx', ['test_simple_dag_fit_predict_first_level_model__out'], indirect=True)
-def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, ctx):
+def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, mode: str, ctx):
     combined_train_path = artifacts.make_path("combined_train.parquet")
     combined_predicts_path = artifacts.make_path("combined_predicts.parquet")
 
     do_combine_datasets(
         artifacts,
         combined_train_path=combined_train_path,
-        combined_predicts_path=combined_predicts_path
+        combined_predicts_path=combined_predicts_path,
+        mode=mode
     )
 
     def check_combined_dataset(combined_df: DataFrame, original_partial_paths: List[str]):
@@ -402,7 +405,15 @@ def test_combining_datasets(spark_sess: SparkSession, artifacts: ArtifactPaths, 
             df = spark_sess.read.parquet(partial_path)
             not_present_columns = set(df.columns).difference(combined_train_df.columns)
             assert len(not_present_columns) == 0, f"Not present columns({partial_path}): {not_present_columns}"
-            assert combined_train_df.count() >= df.count()
+
+            if mode == 'union':
+                assert combined_train_df.count() >= df.count()
+
+        if mode.startswith('leading'):
+            leading_model_name = mode.split('_')[-1]
+            path = [p for p in original_partial_paths if leading_model_name.lower() in p.lower()][0]
+            df = spark_sess.read.parquet(path)
+            assert combined_train_df.count() == df.count()
 
     # check combined train
     assert os.path.exists(combined_train_path)
