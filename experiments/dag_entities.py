@@ -86,11 +86,12 @@ SECOND_LEVELS_MODELS_PARAMS = {
             "reader_params": {"cv": 2, "advanced_roles": False}
     },
 
+"cpu_limit": EXTRA_BIG_CPU,
+            "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+
     "lama_default": {
         "second_model_type": "lama",
         "second_model_params": {
-            "cpu_limit": EXTRA_BIG_CPU,
-            "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
             "timeout": 10800,
             "general_params": {"use_algos": [["lgb_tuned"]]},
             "reader_params": {"cv": 5, "advanced_roles": False},
@@ -176,7 +177,7 @@ DATASETS = {
 
         DatasetInfo(
             name="netflix",
-            log_path="/opt/spark_data/replay/netflix.csv"
+            log_path="/opt/spark_data/replay/netflix_correct_timestamp.csv"
         ),
 
         DatasetInfo(
