@@ -533,7 +533,7 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
         # splitting on train and test
         preparator = DataPreparator()
 
-        if artifacts.dataset.name.startswith('ml'):
+        if artifacts.dataset.name.startswith('ml') or artifacts.dataset.name.startswith('netflix'):
             log = preparator.transform(
                 columns_mapping={"user_id": "user_id", "item_id": "item_id",
                                  "relevance": "rating", "timestamp": "timestamp"},

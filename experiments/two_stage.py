@@ -1,5 +1,5 @@
 from pyspark.sql import functions as sf, SparkSession
-from rs_datasets import MovieLens
+from rs_datasets import MovieLens, Netflix
 
 from replay.data_preparator import DataPreparator
 from replay.scenarios import TwoStagesScenario
@@ -32,7 +32,8 @@ def main():
     )
     spark.sparkContext.setLogLevel("ERROR")
 
-    data = MovieLens("10m")
+    # data = MovieLens("20m")
+    data = Netflix()
     preparator = DataPreparator()
 
     log = preparator.transform(

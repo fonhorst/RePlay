@@ -103,10 +103,10 @@ SECOND_LEVELS_MODELS_PARAMS = {
         "second_model_params": {
             "cpu_limit": EXTRA_BIG_CPU,
             "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
-            "timeout": 10800,
+            "timeout": 23000,
             "general_params": {"use_algos": [["lgb_tuned"]]},
             "reader_params": {"cv": 5, "advanced_roles": False},
-            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 7200}
+            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 21600}
         }
     }
 }
@@ -160,8 +160,23 @@ DATASETS = {
         ),
 
         DatasetInfo(
+            name="ml10m",
+            log_path="/opt/spark_data/replay/ml10m_ratings.csv"
+        ),
+
+        DatasetInfo(
+            name="ml20m",
+            log_path="/opt/spark_data/replay/ml20m_ratings.csv"
+        ),
+
+        DatasetInfo(
             name="ml25m",
             log_path="/opt/spark_data/replay/ml25m_ratings.csv"
+        ),
+
+        DatasetInfo(
+            name="netflix",
+            log_path="/opt/spark_data/replay/netflix.csv"
         ),
 
         DatasetInfo(

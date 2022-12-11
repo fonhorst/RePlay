@@ -9,6 +9,7 @@ from airflow.decorators import task
 from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, BIG_CPU, BIG_MEMORY, \
     big_executor_config, _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS
 from dag_entities import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS
+from dag_entities import extra_big_executor_config
 
 
 @task
@@ -91,9 +92,7 @@ def build_fit_predict_first_level_models_dag(
         dag_id: str,
         mlflow_exp_id: str,
         model_params_map: Dict[str, Dict[str, Any]],
-        dataset: DatasetInfo,
-        cpu: int = BIG_CPU,
-        memory: int = BIG_MEMORY
+        dataset: DatasetInfo
 ):
     with DAG(
             dag_id=dag_id,
@@ -117,14 +116,14 @@ def build_fit_predict_first_level_models_dag(
         first_level_models = [
             task(
                 task_id=f"fit_predict_first_level_model_{model_class_name.split('.')[-1]}",
-                executor_config=big_executor_config
+                executor_config=extra_big_executor_config
             )(fit_predict_first_level_model)(
                 artifacts=artifacts,
                 model_class_name=model_class_name,
                 model_kwargs=model_kwargs,
                 k=k,
-                cpu=cpu,
-                memory=memory
+                cpu=EXTRA_BIG_CPU,
+                memory=EXTRA_BIG_MEMORY
             )
             for model_class_name, model_kwargs in model_params_map.items()
         ]
@@ -261,6 +260,7 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
         dataset=dataset
     )
     std_model_name = 'lama_default'
+    longer_model_name = 'longer_lama_default'
     k = 100
 
     with DAG(
@@ -272,7 +272,7 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
     ) as dag:
         _make_combined_2lvl(
             artifacts=artifacts,
-            model_name=std_model_name,
+            model_name=longer_model_name,
             combiner_suffix="all_models_union",
             k=k,
             desired_1lvl_models=['itemknn', 'alswrap', 'slim', 'ucb'],
@@ -281,7 +281,7 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
 
         _make_combined_2lvl(
             artifacts=artifacts,
-            model_name=std_model_name,
+            model_name=longer_model_name,
             combiner_suffix="all_models_leading_itemknn",
             desired_1lvl_models=['itemknn', 'alswrap', 'slim', 'ucb'],
             k=k,
@@ -290,7 +290,7 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
 
         _make_combined_2lvl(
             artifacts=artifacts,
-            model_name=std_model_name,
+            model_name=longer_model_name,
             combiner_suffix="itemknn_slim",
             k=k,
             mode='union',
@@ -299,7 +299,7 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
 
         _make_combined_2lvl(
             artifacts=artifacts,
-            model_name=std_model_name,
+            model_name=longer_model_name,
             combiner_suffix="itemknn_alswrap",
             k=k,
             mode='union',
@@ -308,7 +308,7 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
 
         _make_combined_2lvl(
             artifacts=artifacts,
-            model_name=std_model_name,
+            model_name=longer_model_name,
             combiner_suffix="alswrap_slim",
             k=k,
             mode='union',
@@ -323,16 +323,33 @@ ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
     dataset=DATASETS["ml1m"]
 )
 
+ml10m_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="ml10m_first_level_dag",
+    mlflow_exp_id="111",
+    model_params_map=_get_models_params("ucb", "slim"),
+    dataset=DATASETS["ml10m"]
+)
+
+ml20m_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="ml20m_first_level_dag",
+    mlflow_exp_id="111",
+    model_params_map=_get_models_params("ucb", "slim"),
+    dataset=DATASETS["ml20m"]
+)
 
 ml25m_first_level_dag = build_fit_predict_first_level_models_dag(
     dag_id="ml25m_first_level_dag",
     mlflow_exp_id="111",
     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim"),
-    dataset=DATASETS["ml25m"],
-    cpu=EXTRA_BIG_CPU,
-    memory=EXTRA_BIG_MEMORY
+    dataset=DATASETS["ml25m"]
 )
 
+netflix_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="netflix_first_level_dag",
+    mlflow_exp_id="111",
+    model_params_map=_get_models_params("ucb", "slim"),
+    dataset=DATASETS["netflix"]
+)
 
 ml1m_second_level_dag = build_fit_predict_second_level(
     dag_id="ml1m_second_level_dag",
