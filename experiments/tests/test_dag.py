@@ -333,16 +333,16 @@ def test_simple_dag_fit_predict_first_level_model(spark_sess: SparkSession, arti
         assert os.path.exists(artifacts.hnsw_index_path(model_class_name))
 
     # alternative 2
-    model_class_name = "replay.models.als.ALSWrap"
-    model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
-
-    with mlflow.start_run(nested=True):
-        do_fit_predict_first_level_model(
-            artifacts=artifacts,
-            model_class_name=model_class_name,
-            model_kwargs=model_kwargs,
-            k=10
-        )
+    # model_class_name = "replay.models.als.ALSWrap"
+    # model_kwargs = {"rank": 10, "seed": 42, "nmslib_hnsw_params": dense_hnsw_params}
+    #
+    # with mlflow.start_run(nested=True):
+    #     do_fit_predict_first_level_model(
+    #         artifacts=artifacts,
+    #         model_class_name=model_class_name,
+    #         model_kwargs=model_kwargs,
+    #         k=10
+    #     )
 
 
 @pytest.mark.parametrize('second_model_type', ['lama', 'slama'])
