@@ -180,8 +180,18 @@ DATASETS = {
         ),
 
         DatasetInfo(
+            name="netflix_small",
+            log_path="/opt/spark_data/replay_datasets/Netflix/train_1m.parquet"
+        ),
+
+        DatasetInfo(
             name="msd",
             log_path="/opt/spark_data/replay_datasets/MillionSongDataset/original.parquet"
+        ),
+
+        DatasetInfo(
+            name="msd_small",
+            log_path="/opt/spark_data/replay_datasets/MillionSongDataset/train_1m.parquet"
         )
     ]
 }

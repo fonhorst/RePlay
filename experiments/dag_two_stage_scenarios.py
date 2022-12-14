@@ -248,13 +248,11 @@ def build_fit_predict_second_level(
     return dag
 
 
-def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
+def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: DatasetInfo):
     os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
     os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
 
-    dag_id = "ml1m_combined_second_level_dag"
     path_suffix = 'default'
-    dataset = DATASETS['ml1m']
     artifacts = ArtifactPaths(
         base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
         dataset=dataset
@@ -315,6 +313,8 @@ def build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id: str):
             desired_1lvl_models=['alswrap', 'slim']
         )
 
+    return dag
+
 
 ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
     dag_id="ml1m_first_level_dag",
@@ -326,7 +326,7 @@ ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
 ml10m_first_level_dag = build_fit_predict_first_level_models_dag(
     dag_id="ml10m_first_level_dag",
     mlflow_exp_id="111",
-    model_params_map=_get_models_params("ucb", "slim"),
+    model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
     dataset=DATASETS["ml10m"]
 )
 
@@ -351,6 +351,37 @@ netflix_first_level_dag = build_fit_predict_first_level_models_dag(
     dataset=DATASETS["netflix"]
 )
 
+netflix_small_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="netflix_small_first_level_dag",
+    mlflow_exp_id="111",
+    model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
+    dataset=DATASETS["netflix_small"]
+)
+
+
+msd_small_first_level_dag = build_fit_predict_first_level_models_dag(
+    dag_id="msd_small_first_level_dag",
+    mlflow_exp_id="111",
+    model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
+    dataset=DATASETS["msd_small"]
+)
+
+
+msd_small_combined_second_level_dag = build_combiner_second_level(
+    dag_id="msd_small_combined_second_level_dag",
+    mlflow_exp_id="111",
+    dataset=DATASETS["msd_small"]
+)
+
+
+msd_small_second_level_dag = build_fit_predict_second_level(
+    dag_id="msd_small_second_level_dag",
+    mlflow_exp_id="111",
+    model_name="lama_default",
+    dataset=DATASETS["msd_small"]
+)
+
+
 ml1m_second_level_dag = build_fit_predict_second_level(
     dag_id="ml1m_second_level_dag",
     mlflow_exp_id="111",
@@ -359,7 +390,11 @@ ml1m_second_level_dag = build_fit_predict_second_level(
 )
 
 
-ml1m_combined_second_level_dag = build_ml1m_fit_predict_combiner_second_level(mlflow_exp_id="111")
+ml1m_combined_second_level_dag = build_combiner_second_level(
+    dag_id="ml1m_combined_second_level_dag",
+    mlflow_exp_id="111",
+    dataset=DATASETS["ml1m"]
+)
 
 ########10
 

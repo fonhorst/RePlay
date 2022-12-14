@@ -13,6 +13,7 @@ from pyspark.sql import functions as sf, SparkSession, DataFrame
 
 import replay
 from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY
+from replay.data_preparator import Indexer
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.model_handler import save, Splitter, load, ALSWrap
 from replay.models import PopRec
@@ -521,11 +522,7 @@ def _log_model_settings(model_name: str,
 def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
     from replay.data_preparator import DataPreparator
     with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY):
-        data = (
-            artifacts.log
-                .withColumn('user_id', sf.col('user_id').cast('int'))
-                .withColumn('item_id', sf.col('item_id').cast('int'))
-        )
+        data = artifacts.log
 
         if 'timestamp' in data.columns:
             data = data.withColumn('timestamp', sf.col('timestamp').cast('long'))
@@ -533,12 +530,60 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
         # splitting on train and test
         preparator = DataPreparator()
 
-        if artifacts.dataset.name.startswith('ml') or artifacts.dataset.name.startswith('netflix'):
+        if artifacts.dataset.name == 'netflix_small':
+            data = data.withColumn('timestamp', sf.col('timestamp').cast('long'))
+            log = preparator.transform(
+                columns_mapping={"user_id": "user_idx", "item_id": "item_idx",
+                                 "relevance": "relevance", "timestamp": "timestamp"},
+                data=data
+            ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
+
+            # train/test split ml
+            train_spl = DateSplitter(
+                test_start=0.2,
+                drop_cold_items=True,
+                drop_cold_users=True,
+            )
+        elif artifacts.dataset.name.startswith('ml') or artifacts.dataset.name.startswith('netflix'):
+            data = (
+                data
+                .withColumn('user_id', sf.col('user_id').cast('int'))
+                .withColumn('item_id', sf.col('item_id').cast('int'))
+                .withColumn('timestamp', sf.col('timestamp').cast('long'))
+            )
             log = preparator.transform(
                 columns_mapping={"user_id": "user_id", "item_id": "item_id",
                                  "relevance": "rating", "timestamp": "timestamp"},
                 data=data
             ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
+
+            # train/test split ml
+            train_spl = DateSplitter(
+                test_start=0.2,
+                drop_cold_items=True,
+                drop_cold_users=True,
+            )
+        elif artifacts.dataset.name == 'msd_small':
+            log = preparator.transform(
+                columns_mapping={"user_id": "user_idx", "item_id": "item_idx",
+                                 "relevance": "relevance", "timestamp": "timestamp"},
+                data=data
+            ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
+
+            indexer = Indexer(user_col="user_idx", item_col="item_idx")
+            indexer.fit(
+                users=log.select("user_idx"), items=log.select("item_idx")
+            )
+
+            log = indexer.transform(df=log)
+
+            # train/test split ml
+            train_spl = UserSplitter(
+                item_test_size=0.2,
+                shuffle=True,
+                drop_cold_items=True,
+                drop_cold_users=True,
+            )
         else:
             raise Exception(f"Unsupported dataset name: {artifacts.dataset.name}")
 
@@ -549,13 +594,6 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
 
         only_positives_log = log.filter(sf.col('relevance') >= 3).withColumn('relevance', sf.lit(1))
         logger.info(get_log_info(only_positives_log))
-
-        # train/test split ml
-        train_spl = DateSplitter(
-            test_start=0.2,
-            drop_cold_items=True,
-            drop_cold_users=True,
-        )
 
         train, test = train_spl.split(only_positives_log)
         logger.info(f'train info: \n{get_log_info(train)}')
@@ -890,8 +928,8 @@ class DatasetCombiner:
                 pairs=current_pred.select(
                     "user_idx", "item_idx"
                 ),
-                user_features=artifacts.user_features.cache(),
-                item_features=artifacts.item_features.cache(),
+                user_features=artifacts.user_features.cache() if artifacts.user_features is not None else None,
+                item_features=artifacts.item_features.cache() if artifacts.item_features is not None else None,
                 prefix=f"m_0",
             )
             current_pred_with_features = join_with_col_renaming(
