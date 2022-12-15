@@ -377,7 +377,7 @@ def save_model(model: BaseRecommender, path: str, overwrite: bool = False):
 
 
 @contextmanager
-def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) -> SparkSession:
+def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY, mem_coeff: float = 0.9) -> SparkSession:
     if os.environ.get('SCRIPT_ENV', 'local') == 'cluster':
         return SparkSession.builder.getOrCreate()
 
@@ -385,6 +385,10 @@ def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) ->
         os.environ.get("REPLAY_JAR_PATH", '../../scala/target/scala-2.12/replay_2.12-0.1.jar'),
         os.environ.get("SLAMA_JAR_PATH", '../../../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar')
     ]
+
+    real_memory = int(memory * mem_coeff)
+    max_result_size = max(int(real_memory * 0.8), 1)
+
     spark = (
         SparkSession
         .builder
@@ -394,9 +398,9 @@ def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY) ->
         .config("spark.driver.extraJavaOptions", "-Dio.netty.tryReflectionSetAccessible=true")
         .config("spark.sql.shuffle.partitions", str(cpu * 3))
         .config("spark.default.parallelism", str(cpu * 3))
-        .config("spark.driver.maxResultSize", "6g")
-        .config("spark.driver.memory", f"10g")
-        .config("spark.executor.memory", f"{int(memory * 0.9)}g")
+        .config("spark.driver.maxResultSize", f"{max_result_size}g")
+        .config("spark.driver.memory", f"{real_memory}g")
+        .config("spark.executor.memory", f"{real_memory}g")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         .config("spark.sql.warehouse.dir", "/tmp/current-spark-warehouse")
         .config("spark.kryoserializer.buffer.max", "256m")
@@ -799,7 +803,12 @@ def do_fit_predict_second_level(
         second_model_config_path: Optional[str] = None,
         cpu: int = DEFAULT_CPU,
         memory: int = DEFAULT_MEMORY):
-    with _init_spark_session(cpu, memory) as spark:
+    if second_model_type == "lama":
+        mem_coeff = 0.3
+    else:
+        mem_coeff = 0.7
+
+    with _init_spark_session(cpu, memory, mem_coeff=mem_coeff) as spark:
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
         model_name = f"{model_name}_{str(uuid.uuid4()).replace('-', '')}"
         with mlflow.start_run():
@@ -818,8 +827,8 @@ def do_fit_predict_second_level(
                 second_level_positives_path=artifacts.second_level_positives_path,
                 presplitted_data=True
             )
-
             if second_model_type == "lama":
+                # TODO: make late parametrizing of these param
                 second_stage_model = LamaWrap(params=second_model_params, config_path=second_model_config_path)
             elif second_model_type == "slama":
                 second_stage_model = SlamaWrap(params=second_model_params, config_path=second_model_config_path)

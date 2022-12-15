@@ -157,7 +157,7 @@ def _make_combined_2lvl(artifacts: ArtifactPaths,
 
     second_level_model = task(
         task_id=f"2lvl_{model_name.split('.')[-1]}_{combiner_suffix}",
-        executor_config=big_executor_config
+        executor_config=extra_big_executor_config
     )(fit_predict_second_level_model)(
         artifacts=artifacts,
         model_name=f"{model_name}_{combiner_suffix}",
@@ -259,6 +259,7 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
     )
     std_model_name = 'lama_default'
     longer_model_name = 'longer_lama_default'
+    slama_longer_model_name = 'longer_slama_default'
     k = 100
 
     with DAG(
@@ -270,7 +271,7 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
     ) as dag:
         _make_combined_2lvl(
             artifacts=artifacts,
-            model_name=longer_model_name,
+            model_name=slama_longer_model_name,
             combiner_suffix="all_models_union",
             k=k,
             desired_1lvl_models=['itemknn', 'alswrap', 'slim', 'ucb'],
