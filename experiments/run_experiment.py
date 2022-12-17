@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 
@@ -22,13 +23,22 @@ from pyspark.conf import SparkConf
 
 from experiment_utils import get_model
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
-# VERBOSE_LOGGING_FORMAT = (
-#     "%(asctime)s %(levelname)s %(module)s %(filename)s:%(lineno)d %(message)s"
-# )
-# logging.basicConfig(level=logging.INFO, format=VERBOSE_LOGGING_FORMAT)
-# logger = logging.getLogger("replay")
-# logger.setLevel(logging.DEBUG)
+
+spark_logger = logging.getLogger("py4j")
+spark_logger.setLevel(logging.WARN)
+logger = logging.getLogger("replay")
+formatter = logging.Formatter(
+    "%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%d/%m/%y %H:%M:%S",
+)
+hdlr = logging.StreamHandler()
+hdlr.setFormatter(formatter)
+logger.addHandler(hdlr)
+logger.setLevel(logging.DEBUG)
 
 
 def main(spark: SparkSession, dataset_name: str):
