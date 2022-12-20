@@ -124,8 +124,8 @@ class PartialTwoStageScenario(TwoStagesScenario):
                  num_negatives: int = 100,
                  negatives_type: str = "first_level",
                  use_generated_features: bool = True,
-                 first_level_user_features_transformer = None,
-                 first_level_item_features_transformer = None,
+                 first_level_user_features_transformer=None,
+                 first_level_item_features_transformer=None,
                  user_cat_features_list: Optional[List] = None,
                  item_cat_features_list: Optional[List] = None,
                  custom_features_processor: Optional[HistoryBasedFeaturesProcessor] = None,
@@ -629,8 +629,9 @@ def do_fit_feature_transformers(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU
 
     with _init_spark_session(cpu, memory) as spark:
         if artifacts.user_features is not None or artifacts.item_features is not None:
-            assert (artifacts.user_features is not None and artifacts.item_features is not None) \
-                   or (artifacts.user_features is None and not artifacts.item_features is None),\
+            assert \
+                (artifacts.user_features is not None and artifacts.item_features is not None) \
+                or (artifacts.user_features is None and artifacts.item_features is not None),\
                 "Cannot handle when only user or item features is defined"
 
             ift_exists = do_path_exists(artifacts.item_features_transformer_path)
@@ -702,11 +703,11 @@ def do_presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: i
 
 
 def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
-                                  model_class_name: str,
-                                  model_kwargs: Dict,
-                                  k: int,
-                                  cpu: int = DEFAULT_CPU,
-                                  memory: int = DEFAULT_MEMORY):
+                                     model_class_name: str,
+                                     model_kwargs: Dict,
+                                     k: int,
+                                     cpu: int = DEFAULT_CPU,
+                                     memory: int = DEFAULT_MEMORY):
     with _init_spark_session(cpu, memory):
         _log_model_settings(
             model_name=model_class_name,
@@ -866,8 +867,8 @@ def _infer_trained_models_files(artifacts: ArtifactPaths) -> List[FirstLevelMode
     def get_files(prefix: str) -> Dict[str, str]:
         return {model_name(file): artifacts.make_path(file) for file in files if file.startswith(prefix)}
 
-    partial_predicts =  get_files('partial_predict')
-    partial_trains =  get_files('partial_train')
+    partial_predicts = get_files('partial_predict')
+    partial_trains = get_files('partial_train')
     partial_scenarios = get_files('two_stage_scenario')
 
     finished_model_names = set(partial_predicts).intersection(partial_trains).intersection(partial_scenarios)
@@ -907,8 +908,8 @@ class DatasetCombiner:
             leading_model_name = mode.split('_')[-1]
             required_pairs = (
                 partial_dfs[model_names.index(leading_model_name)]
-                    .select('user_idx', 'item_idx')
-                    .distinct()
+                .select('user_idx', 'item_idx')
+                .distinct()
             )
 
         missing_pairs = [
@@ -1011,7 +1012,9 @@ class DatasetCombiner:
             if desired_models is not None:
                 logger.info(f"Checking availability of the desired models: {desired_models}")
                 model_files = [mfiles for mfiles in model_files if mfiles.model_name.lower() in desired_models]
-                not_available_models = set(desired_models).difference(mfiles.model_name.lower() for mfiles in model_files)
+                not_available_models = set(desired_models).difference(
+                    mfiles.model_name.lower() for mfiles in model_files
+                )
                 assert len(not_available_models) == 0, f"Not all desired models available: {not_available_models}"
 
             used_mpaths = '\n'.join([mfiles.model_path for mfiles in model_files])
@@ -1024,7 +1027,8 @@ class DatasetCombiner:
             partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
 
             models = [
-                cast(BaseRecommender, cast(PartialTwoStageScenario, load_model(mfiles.model_path)).first_level_models[0])
+                cast(BaseRecommender, cast(PartialTwoStageScenario, load_model(mfiles.model_path))
+                     .first_level_models[0])
                 for mfiles in model_files
             ]
 

@@ -144,7 +144,7 @@ class DatasetInfo:
 
 
 DATASETS = {
-    dataset.name: dataset  for dataset in [
+    dataset.name: dataset for dataset in [
         DatasetInfo(
             name="ml100k",
             log_path="/opt/spark_data/replay/ml100k_ratings.csv",
@@ -345,30 +345,50 @@ class ArtifactPaths:
         return self._fs_prefix(os.path.join(self.base_path, "history_based_transformer"))
 
     def partial_two_stage_scenario_path(self, model_cls_name: str) -> str:
-        return self._fs_prefix(os.path.join(self.base_path, f"two_stage_scenario_{model_cls_name.split('.')[-1]}_{self.uid}"))
+        return self._fs_prefix(
+            os.path.join(self.base_path, f"two_stage_scenario_{model_cls_name.split('.')[-1]}_{self.uid}")
+        )
 
     def model_path(self, model_cls_name: str) -> str:
-        return self._fs_prefix(os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}"))
+        return self._fs_prefix(
+            os.path.join(self.base_path, f"model_{model_cls_name.replace('.', '__')}_{self.uid}")
+        )
 
     def hnsw_index_path(self, model_cls_name: str) -> str:
-        return self._fs_prefix(os.path.join(self.base_path, f"hnsw_model_index_{model_cls_name.replace('.', '__')}_{self.uid}"))
+        return self._fs_prefix(
+            os.path.join(self.base_path, f"hnsw_model_index_{model_cls_name.replace('.', '__')}_{self.uid}")
+        )
 
     def partial_train_path(self, model_cls_name: str) -> str:
-        return self._fs_prefix(os.path.join(self.base_path,
-                            f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet"))
+        return self._fs_prefix(
+            os.path.join(
+                self.base_path,
+                f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet"
+            )
+        )
 
     def partial_predicts_path(self, model_cls_name: str):
-        return self._fs_prefix(os.path.join(self.base_path,
-                            f"{self.partial_predict_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet"))
+        return self._fs_prefix(
+            os.path.join(
+                self.base_path,
+                f"{self.partial_predict_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet"
+            )
+        )
 
     def second_level_model_path(self, model_name: str) -> str:
-        return self._fs_prefix(os.path.join(self.base_path, f"{self.second_level_model_prefix}_{model_name}"))
+        return self._fs_prefix(
+            os.path.join(self.base_path, f"{self.second_level_model_prefix}_{model_name}")
+        )
 
     def second_level_predicts_path(self, model_name: str) -> str:
-        return self._fs_prefix(os.path.join(self.base_path, f"{self.second_level_predicts_prefix}_{model_name}.parquet"))
+        return self._fs_prefix(
+            os.path.join(self.base_path, f"{self.second_level_predicts_prefix}_{model_name}.parquet")
+        )
 
     def make_path(self, relative_path: str) -> str:
-        return self._fs_prefix(os.path.join(self.base_path, relative_path))
+        return self._fs_prefix(
+            os.path.join(self.base_path, relative_path)
+        )
 
     def _get_session(self) -> SparkSession:
         return SparkSession.getActiveSession()

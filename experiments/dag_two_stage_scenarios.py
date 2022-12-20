@@ -6,8 +6,8 @@ import pendulum
 from airflow import DAG
 from airflow.decorators import task
 
-from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, BIG_CPU, BIG_MEMORY, \
-    big_executor_config, _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS
+from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, big_executor_config, \
+    _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS
 from dag_entities import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS
 from dag_entities import extra_big_executor_config
 
@@ -28,6 +28,7 @@ def init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
 def fit_feature_transformers(artifacts: 'ArtifactPaths', cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
     from dag_utils import do_fit_feature_transformers
     do_fit_feature_transformers(artifacts, cpu, memory)
+
 
 @task
 def presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
@@ -225,7 +226,7 @@ def build_fit_predict_second_level(
         train_paths = [os.path.join(artifacts.base_path, train_path) for train_path in train_paths]
         predicts_paths = [os.path.join(artifacts.base_path, predicts_path) for predicts_path in predicts_paths]
 
-        second_level_models = [
+        [
             task(
                 task_id=f"2lvl_{model_name.split('.')[-1]}_{flvl_model_name}",
                 executor_config=big_executor_config
@@ -257,7 +258,6 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
         base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
         dataset=dataset
     )
-    std_model_name = 'lama_default'
     longer_model_name = 'longer_lama_default'
     slama_longer_model_name = 'longer_slama_default'
     k = 100
@@ -396,21 +396,3 @@ ml1m_combined_second_level_dag = build_combiner_second_level(
     mlflow_exp_id="111",
     dataset=DATASETS["ml1m"]
 )
-
-########10
-
-
-# ml25m_first_level_dag = build_fit_predict_first_level_models_dag(
-#     dag_id="ml25m_first_level_dag",
-#     mlflow_exp_id="111",
-#     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
-#     dataset=DATASETS["ml25m"]
-# )
-#
-#
-# msd_first_level_dag = build_fit_predict_first_level_models_dag(
-#     dag_id="msd_first_level_dag",
-#     mlflow_exp_id="111",
-#     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
-#     dataset=DATASETS["msd"]
-# )
