@@ -1,11 +1,11 @@
-from typing import Optional
+from typing import Iterator, Optional
 
 import numpy as np
 import pandas as pd
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
-from scipy.sparse import csc_matrix
+from scipy.sparse import csc_matrix, hstack
 from sklearn.linear_model import ElasticNet
 
 from replay.models.base_rec import NeighbourRec
@@ -45,7 +45,7 @@ class SLIM(NeighbourRec, NmslibHnswMixin):
     @property
     def _init_args(self):
         return {"beta": self.beta, "lambda_": self.lambda_, "seed": self.seed}
-    
+
     def _save_model(self, path: str):
         if self._nmslib_hnsw_params:
             self._save_nmslib_hnsw_index(path)
@@ -62,11 +62,6 @@ class SLIM(NeighbourRec, NmslibHnswMixin):
             (pandas_log.relevance, (pandas_log.user_idx, pandas_log.item_idx)),
             shape=(self._user_dim, self._item_dim),
         )
-        similarity = (
-            State()
-            .session.createDataFrame(pandas_log.item_idx, st.IntegerType())
-            .withColumnRenamed("value", "item_idx_one")
-        )
 
         alpha = self.beta + self.lambda_
         l1_ratio = self.lambda_ / alpha
@@ -81,33 +76,57 @@ class SLIM(NeighbourRec, NmslibHnswMixin):
             positive=True,
         )
 
-        def slim_column(pandas_df: pd.DataFrame) -> pd.DataFrame:
+        _interactions_csc_matrix_broadcast = (
+            State().session.sparkContext.broadcast(interactions_matrix)
+        )
+
+        def slim_column(iterator: Iterator[pd.DataFrame]) -> pd.DataFrame:
             """
             fit similarity matrix with ElasticNet
             :param pandas_df: pd.Dataframe
             :return: pd.Dataframe
             """
-            idx = int(pandas_df["item_idx_one"][0])
-            column = interactions_matrix[:, idx]
-            column_arr = column.toarray().ravel()
-            interactions_matrix[
-                interactions_matrix[:, idx].nonzero()[0], idx
-            ] = 0
+            interactions_matrix = (
+                _interactions_csc_matrix_broadcast.value
+            )
+            for pdf in iterator:
+                for col_idx in pdf["item_idx_one"].astype(int).values:
+                    column = interactions_matrix[:, col_idx]
+                    column_arr = column.toarray()
+                    X = hstack(
+                        [
+                            interactions_matrix[:, :col_idx],
+                            csc_matrix(column.shape, dtype=column.dtype), # column filled zeros
+                            interactions_matrix[:, col_idx + 1 :],
+                        ]
+                    )
+                    regression.fit(X, column_arr)
+                    good_idx = np.nonzero(regression.coef_)
+                    if len(good_idx[0]) > 0:
+                        good_values = regression.coef_[good_idx]
+                        similarity_row = {
+                            "item_idx_one": good_idx[0],
+                            "item_idx_two": col_idx,
+                            "similarity": good_values,
+                        }
+                        yield pd.DataFrame(data=similarity_row)
+                    else:
+                        # return empty dataframe with correct column names
+                        yield pd.DataFrame(
+                            columns=[
+                                "item_idx_one",
+                                "item_idx_two",
+                                "similarity",
+                            ]
+                        )
 
-            regression.fit(interactions_matrix, column_arr)
-            interactions_matrix[:, idx] = column
-            good_idx = np.argwhere(regression.coef_ > 0).reshape(-1)
-            good_values = regression.coef_[good_idx]
-            similarity_row = {
-                "item_idx_one": good_idx,
-                "item_idx_two": idx,
-                "similarity": good_values,
-            }
-            return pd.DataFrame(data=similarity_row)
-
-        self.similarity = similarity.groupby("item_idx_one").applyInPandas(
-            slim_column,
-            "item_idx_one int, item_idx_two int, similarity double",
+        self.similarity = (
+            log.select(sf.col("item_idx").alias("item_idx_one"))
+            .distinct()
+            .mapInPandas(
+                slim_column,
+                "item_idx_one int, item_idx_two int, similarity double",
+            )
         )
         self.similarity.cache().count()
 
