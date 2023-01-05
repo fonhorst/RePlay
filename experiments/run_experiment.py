@@ -64,7 +64,7 @@ def main(spark: SparkSession, dataset_name: str):
         "MLFLOW_TRACKING_URI", "http://node2.bdcl:8811"
     )
     MODEL = os.environ.get(
-        "MODEL", "ALS_NMSLIB_HNSW"
+        "MODEL", "ItemKNN"#"ALS_NMSLIB_HNSW"
     )
     # PopRec
     # Word2VecRec Word2VecRec_NMSLIB_HNSW
@@ -187,9 +187,9 @@ def main(spark: SparkSession, dataset_name: str):
                 test = spark.read.parquet(
                     "/opt/spark_data/replay_datasets/ml1m_test.parquet"
                 )
-                user_features = spark.read.parquet(
-                    "/opt/spark_data/replay_datasets/ml1m_user_features.parquet"
-                )
+                # user_features = spark.read.parquet(
+                #     "/opt/spark_data/replay_datasets/ml1m_user_features.parquet"
+                # )
                 #.select("user_idx", "gender_idx", "age", "occupation", "zip_code_idx")
                 train = train.repartition(partition_num, "user_idx")
                 test = test.repartition(partition_num, "user_idx")
@@ -226,11 +226,11 @@ def main(spark: SparkSession, dataset_name: str):
                 test = spark.read.parquet(
                     "/opt/spark_data/replay_datasets/ml1m_1m_users_37k_items_test.parquet"
                 )
-                user_features = spark.read.parquet(
-                    "/opt/spark_data/replay_datasets/ml1m_1m_users_37k_items_user_features.parquet"
-                )
+                # user_features = spark.read.parquet(
+                #     "/opt/spark_data/replay_datasets/ml1m_1m_users_37k_items_user_features.parquet"
+                # )
                 #.select("user_idx", "gender_idx", "age", "occupation", "zip_code_idx")
-                print(user_features.printSchema())
+                # print(user_features.printSchema())
                 train = train.repartition(partition_num, "user_idx")
                 test = test.repartition(partition_num, "user_idx")
             mlflow.log_metric(
@@ -589,5 +589,5 @@ if __name__ == "__main__":
     # dataset = "MovieLens__1m"
     # dataset = "MillionSongDataset"
     main(spark=spark_sess, dataset_name=dataset)
-    time.sleep(100)
+
     spark_sess.stop()

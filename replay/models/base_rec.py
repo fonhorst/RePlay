@@ -428,9 +428,9 @@ class BaseRecommender(ABC):
 
         # filter recommendations presented in interactions log
         recs = recs.join(
-            users_log.withColumnRenamed("item_idx", "item")
+            sf.broadcast(users_log.withColumnRenamed("item_idx", "item")
             .withColumnRenamed("user_idx", "user")
-            .select("user", "item"),
+            .select("user", "item")),
             on=(sf.col("user_idx") == sf.col("user"))
             & (sf.col("item_idx") == sf.col("item")),
             how="anti",
@@ -521,6 +521,7 @@ class BaseRecommender(ABC):
             )
             # recs = recs.cache()
             # recs.write.mode("overwrite").format("noop").save()
+
         if os.environ.get("LOG_TO_MLFLOW", None) == "True":
             mlflow.log_metric("_predict_sec", _predict_timer.duration)
 
@@ -1459,12 +1460,12 @@ class NeighbourRec(Recommender, ABC):
         recs = (
             log.join(users, how="inner", on="user_idx")
             .join(
-                self.similarity,
+                sf.broadcast(self.similarity),
                 how="inner",
                 on=sf.col("item_idx") == sf.col("item_idx_one"),
             )
             .join(
-                filter_df,
+                sf.broadcast(filter_df),
                 how="inner",
                 on=condition,
             )
