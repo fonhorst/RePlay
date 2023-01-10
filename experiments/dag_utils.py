@@ -3,6 +3,7 @@ import importlib
 import itertools
 import logging
 import os
+import pickle
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -374,6 +375,11 @@ def load_model(path: str):
 
 def save_model(model: BaseRecommender, path: str, overwrite: bool = False):
     save(model, path, overwrite)
+
+
+def get_cluster_session():
+    assert os.environ.get('SCRIPT_ENV', 'local') == 'cluster'
+    return SparkSession.builder.getOrCreate()
 
 
 @contextmanager
@@ -1062,3 +1068,12 @@ class DatasetCombiner:
             # full_predicts_df.write.parquet(combined_predicts_path)
 
             logger.info("Combining finished")
+
+
+if __name__ == "__main__":
+    spark = get_cluster_session()
+
+    with open("task_config.pickle", "rb") as f:
+        task_config = pickle.load(f)
+
+    do_fit_predict_first_level_model(**task_config)
