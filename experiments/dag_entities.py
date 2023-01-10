@@ -125,6 +125,107 @@ SECOND_LEVELS_MODELS_PARAMS = {
 
 SECOND_LEVELS_MODELS_CONFIGS = dict()
 
+KUBERNETES_SUBMIT_CONF = {
+    "spark.kryoserializer.buffer.max": "512m",
+    "spark.scheduler.minRegisteredResourcesRatio": 1.0,
+    "spark.scheduler.maxRegisteredResourcesWaitingTime": "180s",
+    "spark.executor.extraClassPath": "/root/.ivy2/jars/*",
+    "spark.driver.extraClassPath": "/root/.ivy2/jars/*",
+    "spark.jars": "/src/replay_2.12-0.1.jar,/src/spark-lightautoml_2.12-0.1.1.jar",
+    "spark.driver.cores": 4,
+    "spark.driver.memory": "4g",
+    "spark.driver.maxResultSize": "4g",
+    "spark.executor.instances": 1,
+    "spark.executor.cores": 6,
+    "spark.executor.memory": "16g",
+    "spark.cores.max": 6,
+    "spark.memory.fraction": 0.8,
+    "spark.memory.storageFraction": 0.5,
+    "spark.sql.autoBroadcastJoinThreshold": "500MB",
+    "spark.sql.execution.arrow.pyspark.enabled": True,
+    "spark.kubernetes.namespace": "airflow",
+    "spark.kubernetes.container.image": "node2.bdcl:5000/spark-py-replay:slama-replay-3.2.0",
+    "spark.kubernetes.container.image.pullPolicy": "Always",
+    "spark.kubernetes.authenticate.driver.serviceAccountName": "spark",
+    "spark.kubernetes.executor.deleteOnTermination": "false",
+    "spark.kubernetes.memoryOverheadFactor": 0.2,
+    "spark.kubernetes.driver.label.appname": "test_airflow",
+    "spark.kubernetes.executor.label.appname": "test_airflow",
+    # env vars
+    "spark.kubernetes.driverEnv.SCRIPT_ENV": "cluster",
+    # upload dir
+    "spark.kubernetes.file.upload.path": "/opt/spark_data/spark_upload_dir",
+    # driver - mount /opt/spark_data
+    "spark.kubernetes.driver.volumes.persistentVolumeClaim.spark-lama-data.options.claimName": "spark-lama-data",
+    "spark.kubernetes.driver.volumes.persistentVolumeClaim.spark-lama-data.options.storageClass": "local-hdd",
+    "spark.kubernetes.driver.volumes.persistentVolumeClaim.spark-lama-data.mount.path": "/opt/spark_data/",
+    "spark.kubernetes.driver.volumes.persistentVolumeClaim.spark-lama-data.mount.readOnly": "false",
+    # executor - mount /opt/spark_data
+    "spark.kubernetes.executor.volumes.persistentVolumeClaim.spark-lama-data.options.claimName": "spark-lama-data",
+    "spark.kubernetes.executor.volumes.persistentVolumeClaim.spark-lama-data.options.storageClass": "local-hdd",
+    "spark.kubernetes.executor.volumes.persistentVolumeClaim.spark-lama-data.mount.path": "/opt/spark_data/",
+    "spark.kubernetes.executor.volumes.persistentVolumeClaim.spark-lama-data.mount.readOnly": "false"
+}
+
+# "spark.yarn.appMasterEnv.DATASET='${DATASET} \
+# "spark.yarn.appMasterEnv.SEED='${SEED} \
+# "spark.yarn.appMasterEnv.K='${K} \
+# "spark.yarn.appMasterEnv.MODEL='${MODEL} \
+# "spark.yarn.appMasterEnv.ALS_RANK='${ALS_RANK} \
+# "spark.yarn.appMasterEnv.USE_RELEVANCE='${USE_RELEVANCE} \
+# "spark.yarn.appMasterEnv.LOG_TO_MLFLOW='${LOG_TO_MLFLOW} \
+# "spark.yarn.appMasterEnv.EXPERIMENT='${EXPERIMENT} \
+# "spark.yarn.appMasterEnv.FILTER_LOG='${FILTER_LOG} \
+# "spark.yarn.appMasterEnv.NUM_BLOCKS='${NUM_BLOCKS} \
+# "spark.yarn.appMasterEnv.PARTITION_NUM='${PARTITION_NUM} \
+# "spark.yarn.appMasterEnv.USE_BUCKETING='${USE_BUCKETING} \
+
+# --py-files '/src/replay_rec-0.10.0-py3-none-any.whl' \
+# --num-executors ${EXECUTOR_INSTANCES} \
+# --jars '/src/replay_2.12-0.1.jar' \
+# $SCRIPT
+
+YARN_SUBMIT_CONF = {
+    "spark.yarn.appMasterEnv.SCRIPT_ENV": "cluster",
+    "spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/python_envs/.replay_venv/bin/python",
+    "spark.yarn.appMasterEnv.MLFLOW_TRACKING_URI": "http://node2.bdcl:8811",
+    "spark.yarn.appMasterEnv.GIT_PYTHON_REFRESH": "quiet",
+    "spark.yarn.tags": "replay",
+    "spark.kryoserializer.buffer.max": "512m",
+    "spark.driver.cores": "2",
+    "spark.driver.memory": "20g",
+    "spark.driver.maxResultSize": "5g",
+    "spark.executor.instances": "8",
+    "spark.executor.cores": "6",
+    "spark.executor.memory": "46g",
+    "spark.cores.max": "48",
+    "spark.memory.fraction": "0.4",
+    "spark.sql.shuffle.partitions": f"{48 * 3}",
+    "spark.default.parallelism": f"{48 * 3}",
+    "spark.yarn.maxAppAttempts": "1",
+    "spark.rpc.message.maxSize": "1024",
+    "spark.sql.autoBroadcastJoinThreshold": "100MB",
+    "spark.sql.execution.arrow.pyspark.enabled": "true",
+    "spark.scheduler.minRegisteredResourcesRatio": "1.0",
+    "spark.scheduler.maxRegisteredResourcesWaitingTime": "180s",
+    "spark.eventLog.enabled": "true",
+    "spark.eventLog.dir": "hdfs://node21.bdcl:9000/shared/spark-logs",
+    "spark.yarn.historyServer.allowTracking": "true",
+    "spark.driver.extraJavaOptions": "-Dio.netty.tryReflectionSetAccessible=true",
+    "spark.executor.extraJavaOptions": "-Dio.netty.tryReflectionSetAccessible=true",
+    "spark.executor.extraClassPath": "/jars/replay_jars/*",
+    "spark.driver.extraClassPath": "/jars/replay_jars/*",
+    "spark.sql.warehouse.dir": "hdfs://node21.bdcl:9000/spark-warehouse",
+    "spark.task.maxFailures": "1",
+    "spark.excludeOnFailure.task.maxTaskAttemptsPerNode": "1",
+    "spark.excludeOnFailure.stage.maxFailedTasksPerExecutor": "1",
+    "spark.excludeOnFailure.stage.maxFailedExecutorsPerNode": "1",
+    "spark.excludeOnFailure.application.maxFailedTasksPerExecutor": "1",
+    "spark.excludeOnFailure.application.maxFailedExecutorsPerNode": "1",
+    "spark.python.worker.reuse": "true",
+    "spark.sql.optimizer.maxIterations": "100",
+}
+
 
 def _get_models_params(*model_names: str) -> Dict[str, Any]:
     return {
