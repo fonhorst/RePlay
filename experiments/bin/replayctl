@@ -106,6 +106,14 @@ function build_spark_replay_image() {
   rm spark-lightautoml_2.12-0.1.1.jar
 }
 
+function airflow_sync_dags() {
+  rsync -v --perms --chmod=u+rwx,g+rwx,o+rwx experiments/dag_*.py  node2.bdcl:/mnt/ess_storage/DN_1/storage/Airflow/dags
+}
+
+function airflow_port_forward() {
+    kubectl -n airflow port-forward svc/airflow-webserver 8080:8080
+}
+
 function help() {
   echo "
   List of commands.
@@ -147,6 +155,14 @@ function main () {
 
     "build-spark-replay-image")
         build_spark_replay_image
+        ;;
+
+    "sync-dags")
+        airflow_sync_dags
+        ;;
+
+    "airflow-port-forward")
+        airflow_port_forward
         ;;
 
     *)

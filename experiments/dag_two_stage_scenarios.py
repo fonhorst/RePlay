@@ -413,10 +413,10 @@ ml20m_first_level_dag = build_fit_predict_first_level_models_dag(
     dataset=DATASETS["ml20m"]
 )
 
-ml25m_first_level_dag = build_fit_predict_first_level_models_dag(
+ml25m_first_level_dag_submit = build_fit_predict_first_level_models_dag(
     dag_id="ml25m_first_level_dag",
     mlflow_exp_id="111",
-    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim"),
+    model_params_map=_get_models_params("als"), #, "itemknn", "ucb", "slim"),
     dataset=DATASETS["ml25m"]
 )
 
