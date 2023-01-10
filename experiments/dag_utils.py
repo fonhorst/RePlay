@@ -13,7 +13,7 @@ import mlflow
 from pyspark.sql import functions as sf, SparkSession, DataFrame
 
 import replay
-from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY
+from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, TASK_CONFIG_FILENAME_ENV_VAR
 from replay.data_preparator import Indexer
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.model_handler import save, Splitter, load, ALSWrap
@@ -385,34 +385,35 @@ def get_cluster_session():
 @contextmanager
 def _init_spark_session(cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY, mem_coeff: float = 0.9) -> SparkSession:
     if os.environ.get('SCRIPT_ENV', 'local') == 'cluster':
-        return SparkSession.builder.getOrCreate()
+        spark = SparkSession.builder.getOrCreate()
+    else:
 
-    jars = [
-        os.environ.get("REPLAY_JAR_PATH", '../../scala/target/scala-2.12/replay_2.12-0.1.jar'),
-        os.environ.get("SLAMA_JAR_PATH", '../../../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar')
-    ]
+        jars = [
+            os.environ.get("REPLAY_JAR_PATH", '../../scala/target/scala-2.12/replay_2.12-0.1.jar'),
+            os.environ.get("SLAMA_JAR_PATH", '../../../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar')
+        ]
 
-    real_memory = int(memory * mem_coeff)
-    max_result_size = max(int(real_memory * 0.8), 1)
+        real_memory = int(memory * mem_coeff)
+        max_result_size = max(int(real_memory * 0.8), 1)
 
-    spark = (
-        SparkSession
-        .builder
-        .config("spark.jars", ",".join(jars))
-        .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5")
-        .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven")
-        .config("spark.driver.extraJavaOptions", "-Dio.netty.tryReflectionSetAccessible=true")
-        .config("spark.sql.shuffle.partitions", str(cpu * 3))
-        .config("spark.default.parallelism", str(cpu * 3))
-        .config("spark.driver.maxResultSize", f"{max_result_size}g")
-        .config("spark.driver.memory", f"{real_memory}g")
-        .config("spark.executor.memory", f"{real_memory}g")
-        .config("spark.sql.execution.arrow.pyspark.enabled", "true")
-        .config("spark.sql.warehouse.dir", "/tmp/current-spark-warehouse")
-        .config("spark.kryoserializer.buffer.max", "256m")
-        .master(f"local[{cpu}]")
-        .getOrCreate()
-    )
+        spark = (
+            SparkSession
+            .builder
+            .config("spark.jars", ",".join(jars))
+            .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5")
+            .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven")
+            .config("spark.driver.extraJavaOptions", "-Dio.netty.tryReflectionSetAccessible=true")
+            .config("spark.sql.shuffle.partitions", str(cpu * 3))
+            .config("spark.default.parallelism", str(cpu * 3))
+            .config("spark.driver.maxResultSize", f"{max_result_size}g")
+            .config("spark.driver.memory", f"{real_memory}g")
+            .config("spark.executor.memory", f"{real_memory}g")
+            .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+            .config("spark.sql.warehouse.dir", "/tmp/current-spark-warehouse")
+            .config("spark.kryoserializer.buffer.max", "256m")
+            .master(f"local[{cpu}]")
+            .getOrCreate()
+        )
 
     yield spark
 
@@ -1073,7 +1074,9 @@ class DatasetCombiner:
 if __name__ == "__main__":
     spark = get_cluster_session()
 
-    with open("task_config.pickle", "rb") as f:
+    config_filename = os.environ.get(TASK_CONFIG_FILENAME_ENV_VAR, "task_config.pickle")
+
+    with open(config_filename, "rb") as f:
         task_config = pickle.load(f)
 
     do_fit_predict_first_level_model(**task_config)

@@ -42,3 +42,9 @@ COPY SparkLightAutoML_DEV-0.3.2-py3-none-any.whl /src/
 RUN pip install /src/SparkLightAutoML_DEV-0.3.2-py3-none-any.whl
 
 RUN pip install pyspark==3.2.0
+
+COPY core-site.xml /etc/hadoop/core-site.xml
+
+COPY yarn-site.xml /etc/hadoop/yarn-site.xml
+
+ENV HADOOP_CONF_DIR=/etc/hadoop/

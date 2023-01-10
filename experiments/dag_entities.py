@@ -226,6 +226,8 @@ YARN_SUBMIT_CONF = {
     "spark.sql.optimizer.maxIterations": "100",
 }
 
+TASK_CONFIG_FILENAME_ENV_VAR = "TASK_CONFIG_FILENAME"
+
 
 def _get_models_params(*model_names: str) -> Dict[str, Any]:
     return {

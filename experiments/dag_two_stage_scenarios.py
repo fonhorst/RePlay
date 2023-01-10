@@ -9,10 +9,10 @@ from airflow.decorators import task
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
 from dag_entities import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, big_executor_config, \
-    _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS
+    _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS, TASK_CONFIG_FILENAME_ENV_VAR
 from dag_entities import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS
 from dag_entities import extra_big_executor_config
-from experiments.dag_entities import YARN_SUBMIT_CONF
+from dag_entities import YARN_SUBMIT_CONF
 
 
 @task
@@ -69,7 +69,10 @@ def fit_predict_first_level_model_spark_submit(
         task_id=f"submit_{task_name}",
         files=config_filename,
         conf=YARN_SUBMIT_CONF,
-        py_files='/src/replay_rec-0.10.0-py3-none-any.whl',
+        env_vars={
+            TASK_CONFIG_FILENAME_ENV_VAR: config_filename
+        },
+        py_files='/src/replay_rec-0.10.0-py3-none-any.whl,/src/experiments/*',
         jars='/src/replay_2.12-0.1.jar'
     )
 

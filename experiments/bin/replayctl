@@ -33,12 +33,18 @@ function build_airflow_image() {
 
   cp ../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar .
 
+  cp experiments/docker/yarn-site.xml yarn-site.xml
+
+  cp experiments/docker/core-site.xml core-site.xml
+
   poetry build
 
   poetry export --without-hashes -f requirements.txt > requirements.txt
 
   docker build -t node2.bdcl:5000/airflow-worker:latest -f experiments/docker/airflow-worker.dockerfile .
 
+  rm core-site.xml
+  rm yarn-site.xml
   rm SparkLightAutoML_DEV-0.3.2-py3-none-any.whl
   rm spark-lightautoml_2.12-0.1.1.jar
 }
