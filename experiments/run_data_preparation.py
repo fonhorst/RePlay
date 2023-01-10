@@ -188,10 +188,14 @@ def main(spark: SparkSession, dataset_name: str):
         with log_exec_timer("DateSplitter execution") as splitter_timer:
             if dataset_name.startswith("MovieLens"):
                 # MovieLens
-                train_spl = DateSplitter(
-                    test_start=0.2,
-                    drop_cold_items=True,
-                    drop_cold_users=True,
+                # train_spl = DateSplitter(
+                #     test_start=0.5,
+                #     drop_cold_items=True,
+                #     drop_cold_users=True,
+                # )
+
+                train_spl = UserSplitter(
+                    item_test_size=0.5, shuffle=True, seed=42
                 )
             else:
                 ## MillionSongDataset
@@ -213,7 +217,6 @@ def main(spark: SparkSession, dataset_name: str):
         mlflow.log_metric("train_num_partitions", train.rdd.getNumPartitions())
         mlflow.log_metric("test_num_partitions", test.rdd.getNumPartitions())
 
-        
         if dataset_name.startswith("MillionSongDataset"):
             partition_nums = {6, 12, 24, 48}
             if partition_num in partition_nums:
@@ -233,15 +236,14 @@ def main(spark: SparkSession, dataset_name: str):
                 mlflow.log_metric(f"parquets{partition_num}_write_sec", parquets_save_timer.duration)
         else:
             with log_exec_timer("Train/test datasets saving to parquet") as parquets_save_timer:
-                train.write.mode('overwrite').parquet(f"/opt/spark_data/replay_datasets/MovieLens/train_{dataset_version}.parquet")
-                test.write.mode('overwrite').parquet(f"/opt/spark_data/replay_datasets/MovieLens/test_{dataset_version}.parquet")
+                train.write.mode('overwrite').parquet(f"/opt/spark_data/replay_datasets/MovieLens/train_{dataset_version}_0.5.parquet")
+                test.write.mode('overwrite').parquet(f"/opt/spark_data/replay_datasets/MovieLens/test_{dataset_version}_0.5.parquet")
             mlflow.log_metric(f"parquets{partition_num}_write_sec", parquets_save_timer.duration)
-
 
 
 if __name__ == "__main__":
     spark_sess = get_spark_session()
-    dataset = os.getenv("DATASET")
+    dataset = os.getenv("DATASET", "MovieLens__25m")
     # dataset = "MovieLens__1m"
     # dataset = "MillionSongDataset"
     main(spark=spark_sess, dataset_name=dataset)
