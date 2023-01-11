@@ -47,6 +47,7 @@ pyarrow = "*"
 implicit = ">=0.5"
 nmslib = "*"
 hnswlib = "*"
+scann = "*"
 
 [tool.poetry.dev-dependencies]
 # dev only
