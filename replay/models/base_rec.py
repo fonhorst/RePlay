@@ -500,8 +500,8 @@ class BaseRecommender(ABC):
         if os.environ.get("LOG_TO_MLFLOW", None) == "True":
             mlflow.log_metric("before_predict_sec", before_predict_timer.duration)
 
-        with log_exec_timer(f"{self.__class__.__name__} execution") as _predict_timer, JobGroup(
-            "Model inference (inside 1)", f"{self.__class__.__name__}._predict()"
+        with log_exec_timer(f"{type(self).__name__}._predict()") as _predict_timer, JobGroup(
+            "Model inference (inside 1)", f"{type(self).__name__}._predict()"
         ):
             recs = self._predict(
                 log,

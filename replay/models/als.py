@@ -13,13 +13,14 @@ from scipy.sparse import csr_matrix, csc_matrix
 
 from replay.models.base_rec import Recommender, ItemVectorModel
 from replay.models.hnswlib import HnswlibMixin
+from replay.models.scann import ScannMixin
 from replay.spark_custom_models.recommendation import ALS, ALSModel
 from replay.session_handler import State
 from replay.utils import JobGroup, list_to_vector_udf, log_exec_timer
 from sklearn.linear_model import Ridge
 
 
-class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
+class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin, ScannMixin):
     """Wrapper for `Spark ALS
     <https://spark.apache.org/docs/latest/api/python/pyspark.mllib.html#pyspark.mllib.recommendation.ALS>`_.
     """
@@ -30,13 +31,14 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
     }
 
     def __init__(
-        self,
-        rank: int = 10,
-        implicit_prefs: bool = True,
-        seed: Optional[int] = None,
-        num_item_blocks: Optional[int] = None,
-        num_user_blocks: Optional[int] = None,
-        hnswlib_params: Optional[dict] = None,
+            self,
+            rank: int = 10,
+            implicit_prefs: bool = True,
+            seed: Optional[int] = None,
+            num_item_blocks: Optional[int] = None,
+            num_user_blocks: Optional[int] = None,
+            hnswlib_params: Optional[dict] = None,
+            scann_params: Optional[dict] = None
     ):
         """
         :param rank: hidden dimension for the approximate matrix
@@ -49,6 +51,7 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         self._num_item_blocks = num_item_blocks
         self._num_user_blocks = num_user_blocks
         self._hnswlib_params = hnswlib_params
+        self._scann_params = scann_params
 
         HnswlibMixin.__init__(self)
 
@@ -109,6 +112,31 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         self.model.userFactors.cache()
         self.model.itemFactors.count()
         self.model.userFactors.count()
+
+        if self._scann_params:
+            item_vectors, _ = self.get_features(
+                log.select("item_idx").distinct()
+            )
+
+            max_items_to_retrieve = log.groupBy('user_idx').agg(sf.count('item_idx').alias('num_items')).select(
+                sf.max('num_items')).collect()[0][0]
+
+            self._scann_params["num_neighbors"] += int(max_items_to_retrieve/20)
+
+            self._position_in_index_2_item_idx = self._build_scann_index(
+                item_vectors,
+                'item_factors',
+                self._scann_params,
+                id_col='item_idx'
+            )
+            # self._position_in_index_2_item_idx.show(5)
+
+            self._user_to_max_items = (
+                log.groupBy('user_idx')
+                .agg(sf.count('item_idx').alias('num_items'))
+            )
+
+            return
 
         if self._hnswlib_params:
             item_vectors, _ = self.get_features(
@@ -260,7 +288,7 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         For each user return from `k` to `k + number of seen by user` recommendations.
         """
 
-        if not self._hnswlib_params:
+        if not self._hnswlib_params and not self._scann_params:
             return Recommender._filter_seen(self, recs, log, k, users)
 
         users_log = log.join(users, on="user_idx")
@@ -305,7 +333,31 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
-        
+
+        if self._scann_params:
+            params = self._scann_params
+
+            with JobGroup(
+                    f"{self.__class__.__name__}._predict()",
+                    "get_features()",
+            ):
+                user_vectors, _ = self.get_features(users)
+                # user_vectors = user_vectors.cache()
+                # user_vectors.write.mode("overwrite").format("noop").save()
+
+                user_vectors = user_vectors.join(self._user_to_max_items, on="user_idx")
+
+            res = self._infer_scann_index(user_vectors, "user_factors", params, k)
+            res = res.join(self._position_in_index_2_item_idx,
+                           on=(sf.col('vector_idx') == sf.col('index'))
+                           ).select(
+                "user_idx",
+                "item_idx",
+                "relevance"
+            )
+
+            return res
+
         if self._hnswlib_params:
 
             params = self._hnswlib_params
@@ -367,7 +419,6 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
                 )
                 .select("user_idx", "item_idx", "relevance")
             )
-
 
         mlflow.log_metric("als_predict_branch", 2)
         if os.environ.get("USE_NEW_ALS_METHOD", "False") == "True":

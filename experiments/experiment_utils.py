@@ -19,28 +19,28 @@ from replay.models import (
 
 
 def get_model(MODEL: str, SEED: int, spark_app_id: str):
-    """Inits model and return instance
+    """Initializes model and returns instance
     """
 
     if MODEL == "ALS":
-        ALS_RANK = int(os.environ.get("ALS_RANK", 100))
+        als_rank = int(os.environ.get("ALS_RANK", 100))
         num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
 
-        mlflow.log_params({"num_blocks": num_blocks, "ALS_rank": ALS_RANK})
+        mlflow.log_params({"num_blocks": num_blocks, "ALS_rank": als_rank})
 
         model = ALSWrap(
-            rank=ALS_RANK,
+            rank=als_rank,
             seed=SEED,
             num_item_blocks=num_blocks,
             num_user_blocks=num_blocks,
         )
 
     elif MODEL == "Explicit_ALS":
-        ALS_RANK = int(os.environ.get("ALS_RANK", 100))
-        mlflow.log_param("ALS_rank", ALS_RANK)
-        model = ALSWrap(rank=ALS_RANK, seed=SEED, implicit_prefs=False)
+        als_rank = int(os.environ.get("ALS_RANK", 100))
+        mlflow.log_param("ALS_rank", als_rank)
+        model = ALSWrap(rank=als_rank, seed=SEED, implicit_prefs=False)
     elif MODEL == "ALS_HNSWLIB":
-        ALS_RANK = int(os.environ.get("ALS_RANK", 100))
+        als_rank = int(os.environ.get("ALS_RANK", 100))
         build_index_on = "executor"  # driver executor
         num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
         hnswlib_params = {
@@ -55,18 +55,47 @@ def get_model(MODEL: str, SEED: int, spark_app_id: str):
         }
         mlflow.log_params(
             {
-                "ALS_rank": ALS_RANK,
+                "ALS_rank": als_rank,
                 "num_blocks": num_blocks,
                 "build_index_on": build_index_on,
                 "hnswlib_params": hnswlib_params,
             }
         )
         model = ALSWrap(
-            rank=ALS_RANK,
+            rank=als_rank,
             seed=SEED,
             num_item_blocks=num_blocks,
             num_user_blocks=num_blocks,
             hnswlib_params=hnswlib_params,
+        )
+    elif MODEL == "ALS_SCANN":
+        als_rank = int(os.environ.get("ALS_RANK", 100))
+        build_index_on = "executor"  # driver executor
+        num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
+        scann_params = {
+            "distance_measure": "dot_product",
+            "num_leaves": 2000,
+            "num_neighbors": 10,
+            "pre_reorder_num_neighbors": 1000,
+            "leaves_to_search": 1000,
+            # hdfs://node21.bdcl:9000
+            "index_path": f"file:///opt/spark_data/replay_datasets/scann_index_{spark_app_id}",
+            "build_index_on": build_index_on,
+        }
+        mlflow.log_params(
+            {
+                "ALS_rank": als_rank,
+                "num_blocks": num_blocks,
+                "build_index_on": build_index_on,
+                "scann_params": scann_params,
+            }
+        )
+        model = ALSWrap(
+            rank=als_rank,
+            seed=SEED,
+            num_item_blocks=num_blocks,
+            num_user_blocks=num_blocks,
+            scann_params=scann_params,
         )
     elif MODEL == "SLIM":
         model = SLIM(seed=SEED)

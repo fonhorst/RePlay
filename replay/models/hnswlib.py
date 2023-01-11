@@ -249,7 +249,7 @@ class HnswlibMixin:
         )
 
         @pandas_udf(return_type)
-        def infer_index( # user_ids: pd.Series,
+        def infer_index(
             vectors: pd.Series, num_items: pd.Series
         ) -> pd.DataFrame:
             index_file_manager = index_file_manager_broadcast.value
@@ -380,7 +380,6 @@ class HnswlibMixin:
         Index file name is 'hnswlib_index'.
         And adds index file to the `SparkFiles`.
         `path` can be a hdfs path or a local path.
-
 
         Args:
             path: directory path, where index file is stored
