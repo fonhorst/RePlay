@@ -11,6 +11,7 @@ import string
 from typing import Dict, List, Optional
 
 from pyspark.ml.feature import StringIndexerModel, IndexToString, StringIndexer
+from pyspark.ml import Transformer, Estimator
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql.types import DoubleType, NumericType
@@ -184,6 +185,184 @@ class Indexer:  # pylint: disable=too-many-instance-attributes
                 ),
             )
             inv_indexer.setLabels(new_labels)
+
+
+class IndexerTransformer(Transformer):
+
+    suffix = "inner"
+
+    def __init__(
+        self,
+        user_indexer,
+        inv_user_indexer,
+        item_indexer,
+        inv_item_indexer,
+        user_type,
+        item_type,
+        user_col="user_id",
+        item_col="item_id",
+    ):
+        self.user_col = user_col
+        self.item_col = item_col
+        self.user_indexer = user_indexer
+        self.inv_user_indexer = inv_user_indexer
+        self.item_indexer = item_indexer
+        self.inv_item_indexer = inv_item_indexer
+        self.user_type=user_type
+        self.item_type=item_type
+
+    def _reindex(self, df: DataFrame, entity: str):
+        """
+        Update indexer with new entries.
+
+        :param df: DataFrame with users/items
+        :param entity: user or item
+        """
+        indexer = getattr(self, f"{entity}_indexer")
+        inv_indexer = getattr(self, f"inv_{entity}_indexer")
+        new_objects = set(
+            map(
+                str,
+                df.select(indexer.getInputCol())
+                .distinct()
+                .toPandas()[indexer.getInputCol()],
+            )
+        ).difference(indexer.labels)
+        if new_objects:
+            new_labels = indexer.labels + list(new_objects)
+            setattr(
+                self,
+                f"{entity}_indexer",
+                indexer.from_labels(
+                    new_labels,
+                    inputCol=indexer.getInputCol(),
+                    outputCol=indexer.getOutputCol(),
+                    handleInvalid="error",
+                ),
+            )
+            inv_indexer.setLabels(new_labels)
+
+    def _transform(self, df: DataFrame) -> DataFrame:
+        """
+        Convert raw ``user_col`` and ``item_col`` to numerical ``user_idx`` and ``item_idx``
+
+        :param df: dataframe with raw indexes
+        :return: dataframe with converted indexes
+        """
+        if self.item_col in df.columns:
+            remaining_cols = df.drop(self.item_col).columns
+            df = df.withColumnRenamed(
+                self.item_col, f"{self.item_col}_{self.suffix}"
+            )
+            self._reindex(df, "item")
+            df = self.item_indexer.transform(df).select(
+                sf.col("item_idx").cast("int").alias("item_idx"),
+                *remaining_cols,
+            )
+        if self.user_col in df.columns:
+            remaining_cols = df.drop(self.user_col).columns
+            df = df.withColumnRenamed(
+                self.user_col, f"{self.user_col}_{self.suffix}"
+            )
+            self._reindex(df, "user")
+            df = self.user_indexer.transform(df).select(
+                sf.col("user_idx").cast("int").alias("user_idx"),
+                *remaining_cols,
+            )
+        return df
+
+    def inverse_transform(self, df: DataFrame) -> DataFrame:
+        """
+        Convert DataFrame to the initial indexes.
+
+        :param df: DataFrame with numerical ``user_idx/item_idx`` columns
+        :return: DataFrame with original user/item columns
+        """
+        res = df
+        if "item_idx" in df.columns:
+            remaining_cols = res.drop("item_idx").columns
+            res = self.inv_item_indexer.transform(
+                res.withColumnRenamed(
+                    "item_idx", f"{self.item_col}_{self.suffix}"
+                )
+            ).select(
+                sf.col(self.item_col)
+                .cast(self.item_type)
+                .alias(self.item_col),
+                *remaining_cols,
+            )
+        if "user_idx" in df.columns:
+            remaining_cols = res.drop("user_idx").columns
+            res = self.inv_user_indexer.transform(
+                res.withColumnRenamed(
+                    "user_idx", f"{self.user_col}_{self.suffix}"
+                )
+            ).select(
+                sf.col(self.user_col)
+                .cast(self.user_type)
+                .alias(self.user_col),
+                *remaining_cols,
+            )
+        return res
+
+
+class IndexerEstimator(Estimator):
+    suffix = "inner"
+
+    def __init__(self, user_col="user_id", item_col="item_id"):
+        """
+        Provide column names for indexer to use
+        """
+        self.user_col = user_col
+        self.item_col = item_col
+
+    def _fit(self, df: DataFrame) -> Transformer:
+        """
+        Creates indexers to map raw id to numerical idx so that spark can handle them.
+        :param df: DataFrame containing user column and item column
+        :return:
+        """
+        users = df.select(self.user_col).withColumnRenamed(
+            self.user_col, f"{self.user_col}_{self.suffix}"
+        )
+        items = df.select(self.item_col).withColumnRenamed(
+            self.item_col, f"{self.item_col}_{self.suffix}"
+        )
+
+        self.user_type = users.schema[
+            f"{self.user_col}_{self.suffix}"
+        ].dataType
+        self.item_type = items.schema[
+            f"{self.item_col}_{self.suffix}"
+        ].dataType
+
+        self.user_indexer = StringIndexer(
+            inputCol=f"{self.user_col}_{self.suffix}", outputCol="user_idx"
+        ).fit(users)
+        self.item_indexer = StringIndexer(
+            inputCol=f"{self.item_col}_{self.suffix}", outputCol="item_idx"
+        ).fit(items)
+        self.inv_user_indexer = IndexToString(
+            inputCol=f"{self.user_col}_{self.suffix}",
+            outputCol=self.user_col,
+            labels=self.user_indexer.labels,
+        )
+        self.inv_item_indexer = IndexToString(
+            inputCol=f"{self.item_col}_{self.suffix}",
+            outputCol=self.item_col,
+            labels=self.item_indexer.labels,
+        )
+
+        return IndexerTransformer(
+            user_col=self.user_col,
+            user_type=self.user_type,
+            user_indexer=self.user_indexer,
+            inv_user_indexer=self.inv_user_indexer,
+            item_col=self.item_col,
+            item_indexer=self.item_indexer,
+            inv_item_indexer=self.inv_item_indexer,
+            item_type=self.item_type
+        )
 
 
 class DataPreparator:
