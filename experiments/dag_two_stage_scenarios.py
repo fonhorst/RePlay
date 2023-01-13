@@ -1,5 +1,6 @@
 import os
 import pickle
+import uuid
 from datetime import timedelta
 from typing import Dict, Any, Optional, Union, List
 
@@ -55,7 +56,7 @@ def fit_predict_first_level_model_spark_submit(
         model_class_name: str,
         model_kwargs: Dict,
         k: int):
-    config_filename = f"task_config_{task_name}.pickle"
+    config_filename = f"task_config_{task_name}_{uuid.uuid4()}.pickle"
     with open(config_filename, "wb") as f:
         pickle.dump({
             "artifacts": artifacts,

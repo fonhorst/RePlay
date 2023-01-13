@@ -327,7 +327,7 @@ class ArtifactPaths:
     template_fields: Sequence[str] = ("base_path",)
 
     def _fs_prefix(self, path: str) -> str:
-        return path
+        return "file://" + path
 
     @property
     def train_path(self) -> str:

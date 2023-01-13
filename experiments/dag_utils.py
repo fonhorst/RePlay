@@ -773,8 +773,6 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
             scenario.fit(log=artifacts.train, user_features=user_features, item_features=item_features)
 
         logger.info("Fit is ended. Predicting...")
-        with JobGroup("save", "saving the model"):
-            save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name))
 
         with JobGroup("predict", "predicting the test"):
             test_recs = scenario.predict(
@@ -797,6 +795,10 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
         _estimate_and_report_metrics(model_class_name, artifacts.test, test_recs)
 
         test_recs.unpersist()
+
+        logger.info("Saving the model")
+        with JobGroup("save", "saving the model"):
+            save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name))
 
 
 # this is @task
@@ -1078,5 +1080,8 @@ if __name__ == "__main__":
 
     with open(config_filename, "rb") as f:
         task_config = pickle.load(f)
+
+    print("Task config artifacts:")
+    print(f"{task_config['artifacts']}")
 
     do_fit_predict_first_level_model(**task_config)

@@ -22,16 +22,6 @@ RUN pip install mlflow-skinny
 
 RUN python3 -c 'from pyspark.sql import SparkSession; SparkSession.builder.config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5").config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven").getOrCreate()'
 
-COPY dist/replay_rec-0.10.0-py3-none-any.whl /src
-
-RUN pip install /src/replay_rec-0.10.0-py3-none-any.whl
-
-COPY experiments /src/experiments
-
-COPY scala/target/scala-2.12/replay_2.12-0.1.jar /src/
-
-ENV REPLAY_JAR_PATH=/src/replay_2.12-0.1.jar
-
 COPY spark-lightautoml_2.12-0.1.1.jar /src
 
 ENV SLAMA_JAR_PATH=/src/spark-lightautoml_2.12-0.1.1.jar
@@ -48,3 +38,17 @@ COPY core-site.xml /etc/hadoop/core-site.xml
 COPY yarn-site.xml /etc/hadoop/yarn-site.xml
 
 ENV HADOOP_CONF_DIR=/etc/hadoop/
+
+COPY requirements.txt /src
+
+RUN pip install -r /src/requirements.txt
+
+COPY dist/replay_rec-0.10.0-py3-none-any.whl /src
+
+RUN pip install /src/replay_rec-0.10.0-py3-none-any.whl
+
+COPY experiments /src/experiments
+
+COPY scala/target/scala-2.12/replay_2.12-0.1.jar /src/
+
+ENV REPLAY_JAR_PATH=/src/replay_2.12-0.1.jar

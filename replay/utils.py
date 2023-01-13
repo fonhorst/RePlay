@@ -778,6 +778,12 @@ class log_exec_timer:
 
     def __enter__(self):
         self._start = datetime.now()
+        msg = (
+            f"Measuring Exec time of {self.name}: {self._duration}"
+            if self.name
+            else f"Measuring Exec time: {self._duration}"
+        )
+        logger.warning(msg)
         return self
 
     def __exit__(self, type, value, traceback):
@@ -788,7 +794,6 @@ class log_exec_timer:
             else f"Exec time: {self._duration}"
         )
         logger.warning(msg)
-        print(msg)
 
     @property
     def duration(self):

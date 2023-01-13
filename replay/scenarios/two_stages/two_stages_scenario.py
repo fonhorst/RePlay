@@ -13,9 +13,8 @@ from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import Metric, Precision
 from replay.models import ALSWrap, RandomRec, PopRec
 from replay.models.base_rec import BaseRecommender, HybridRecommender
-from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
+from replay.scenarios.two_stages.reranker import LamaWrap
 from replay.scenarios.two_stages.slama_reranker import SlamaWrap
-
 from replay.session_handler import State
 from replay.splitters import Splitter, UserSplitter
 from replay.utils import (
@@ -114,12 +113,16 @@ def get_first_level_model_features(
     for col_name, feature_prefix in factors_to_explode:
         col_set = set(pairs_with_features.columns)
         col_set.remove(col_name)
-        pairs_with_features = horizontal_explode(
-            data_frame=pairs_with_features,
-            column_to_explode=col_name,
-            other_columns=[sf.col(column) for column in sorted(list(col_set))],
-            prefix=f"{prefix}_{feature_prefix}",
-        )
+        with JobGroup("fit", "horizontal explode"):
+            # TODO: PERF - probably inefficient at all?
+            # TODO: do we really need to explode vectors into columns? Probably better to postpone this transformation
+            #  for a direct consumer (LAMAWrap)
+            pairs_with_features = horizontal_explode(
+                data_frame=pairs_with_features,
+                column_to_explode=col_name,
+                other_columns=[sf.col(column) for column in sorted(list(col_set))],
+                prefix=f"{prefix}_{feature_prefix}",
+            )
 
     return pairs_with_features
 
@@ -420,6 +423,7 @@ class TwoStagesScenario(HybridRecommender):
             )
 
             if self.use_first_level_models_feat[idx]:
+                # TODO: PERF - horizontal_explode materialization inside (without caching)?
                 features = get_first_level_model_features(
                     model=model,
                     pairs=full_second_level_train.select(
@@ -457,22 +461,26 @@ class TwoStagesScenario(HybridRecommender):
             how="left",
         )
 
+        # TODO: PERF - spent 49 secs here?
         if self.use_generated_features:
-            if not self.features_processor.fitted:
-                self.features_processor.fit(
-                    log=log_for_first_level_models,
-                    user_features=user_features,
-                    item_features=item_features,
+            with JobGroup("fit", "fitting the feature processor"):
+                if not self.features_processor.fitted:
+                    self.features_processor.fit(
+                        log=log_for_first_level_models,
+                        user_features=user_features,
+                        item_features=item_features,
+                    )
+                self.logger.info("Adding generated features")
+                full_second_level_train = self.features_processor.transform(
+                    log=full_second_level_train
                 )
-            self.logger.info("Adding generated features")
-            full_second_level_train = self.features_processor.transform(
-                log=full_second_level_train
-            )
 
         self.logger.info(
             "Columns at second level: %s",
             " ".join(full_second_level_train.columns),
         )
+
+        # TODO: PERF - potentially lost cache and repeated computations on higher levels?
         full_second_level_train_cached.unpersist()
         return full_second_level_train
 
@@ -532,14 +540,17 @@ class TwoStagesScenario(HybridRecommender):
         ).cache()
         max_positives_to_filter = 0
 
-        if log_to_filter_cached.count() > 0:
-            max_positives_to_filter = (
-                log_to_filter_cached.groupBy("user_idx")
-                .agg(sf.count("item_idx").alias("num_positives"))
-                .select(sf.max("num_positives"))
-                .collect()[0][0]
-            )
+        # TODO: PERF - spending 208 secs here?
+        with JobGroup("fit", "calculating max_positives_to_filter"):
+            if log_to_filter_cached.count() > 0:
+                max_positives_to_filter = (
+                    log_to_filter_cached.groupBy("user_idx")
+                    .agg(sf.count("item_idx").alias("num_positives"))
+                    .select(sf.max("num_positives"))
+                    .collect()[0][0]
+                )
 
+        # TODO: PERF - k + max_positives_to_filter too much to predict?
         pred = model._predict(
             log,
             k=k + max_positives_to_filter,
@@ -556,6 +567,7 @@ class TwoStagesScenario(HybridRecommender):
             how="anti",
         ).drop("user", "item")
 
+        # TODO: PERF - lost cache in the downstream?
         log_to_filter_cached.unpersist()
 
         return get_top_k_recs(pred, k)
@@ -613,19 +625,24 @@ class TwoStagesScenario(HybridRecommender):
         """
         passed_arguments = locals()
         passed_arguments.pop("self")
-        candidates = self._predict_with_first_level_model(**passed_arguments)
+
+        with JobGroup("fit", "_predict_with_first_level_model"):
+            candidates = self._predict_with_first_level_model(**passed_arguments)
 
         if self.fallback_model is not None:
             passed_arguments.pop("model")
-            fallback_candidates = self._predict_with_first_level_model(
-                model=self.fallback_model, **passed_arguments
-            )
+            with JobGroup("fit", "fallback candidates"):
+                fallback_candidates = self._predict_with_first_level_model(
+                    model=self.fallback_model, **passed_arguments
+                )
 
-            candidates = fallback(
-                base=candidates,
-                fill=fallback_candidates,
-                k=self.num_negatives,
-            )
+            with JobGroup("fit", "fallback"):
+                # TODO: PERF - no cache and repeated computations for candidate and fallback_candidates?
+                candidates = fallback(
+                    base=candidates,
+                    fill=fallback_candidates,
+                    k=self.num_negatives,
+                )
         return candidates
 
     # pylint: disable=too-many-locals,too-many-statements
@@ -734,14 +751,16 @@ class TwoStagesScenario(HybridRecommender):
 
         self.cached_list.append(second_level_train)
 
-        self.logger.info(
-            "Distribution of classes in second-level train dataset:/n %s",
-            (
-                second_level_train.groupBy("target")
-                .agg(sf.count(sf.col("target")).alias("count_for_class"))
-                .take(2)
-            ),
-        )
+        # TODO: PERF - lost 130+ secs here?
+        with JobGroup("fit", "inferring class distribution to log them"):
+            self.logger.info(
+                "Distribution of classes in second-level train dataset:/n %s",
+                (
+                    second_level_train.groupBy("target")
+                    .agg(sf.count(sf.col("target")).alias("count_for_class"))
+                    .take(2)
+                ),
+            )
 
         with JobGroup("fit", "feature processor fit"):
             if not self.features_processor.fitted:
@@ -790,35 +809,45 @@ class TwoStagesScenario(HybridRecommender):
             self.first_level_item_features_transformer.transform(item_features)
         )
 
-        candidates = self._get_first_level_candidates(
-            model=self.first_level_models[0],
-            log=log,
-            k=self.num_negatives,
-            users=users,
-            items=items,
-            user_features=first_level_user_features,
-            item_features=first_level_item_features,
-            log_to_filter=log,
-        ).select("user_idx", "item_idx")
+        with JobGroup("2stage scenario predict", "_get_first_level_candidates"):
+            candidates = self._get_first_level_candidates(
+                model=self.first_level_models[0],
+                log=log,
+                k=self.num_negatives,
+                users=users,
+                items=items,
+                user_features=first_level_user_features,
+                item_features=first_level_item_features,
+                log_to_filter=log,
+            ).select("user_idx", "item_idx")
 
         candidates_cached = candidates.cache()
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
         self.logger.info("Adding features")
-        candidates_features = self._add_features_for_second_level(
-            log_to_add_features=candidates_cached,
-            log_for_first_level_models=log,
-            user_features=user_features,
-            item_features=item_features,
-        )
+
+        with JobGroup("2stage scenario predict", "_add_features_for_second_level"):
+            candidates_features = self._add_features_for_second_level(
+                log_to_add_features=candidates_cached,
+                log_for_first_level_models=log,
+                user_features=user_features,
+                item_features=item_features,
+            )
         candidates_features.cache()
+        # TODO: PERF - partially lost cache and repeated computations
         candidates_cached.unpersist()
-        self.logger.info(
-            "Generated %s candidates for %s users",
-            candidates_features.count(),
-            candidates_features.select("user_idx").distinct().count(),
-        )
-        return self.second_stage_model.predict(data=candidates_features, k=k)
+
+        with JobGroup("2stage scenario predict", "candidates_features info logging"):
+            self.logger.info(
+                "Generated %s candidates for %s users",
+                candidates_features.count(),
+                candidates_features.select("user_idx").distinct().count(),
+            )
+
+        with JobGroup("2stage scenario predict", "second_stage_model predict"):
+            predictions = self.second_stage_model.predict(data=candidates_features, k=k)
+
+        return predictions
 
     def fit_predict(
         self,
