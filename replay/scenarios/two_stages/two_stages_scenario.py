@@ -110,19 +110,21 @@ def get_first_level_model_features(
         )
         factors_to_explode.append(("factors_mult", "fm"))
 
-    for col_name, feature_prefix in factors_to_explode:
-        col_set = set(pairs_with_features.columns)
-        col_set.remove(col_name)
-        with JobGroup("fit", "horizontal explode"):
-            # TODO: PERF - probably inefficient at all?
-            # TODO: do we really need to explode vectors into columns? Probably better to postpone this transformation
-            #  for a direct consumer (LAMAWrap)
-            pairs_with_features = horizontal_explode(
-                data_frame=pairs_with_features,
-                column_to_explode=col_name,
-                other_columns=[sf.col(column) for column in sorted(list(col_set))],
-                prefix=f"{prefix}_{feature_prefix}",
-            )
+    pairs_with_features = pairs_with_features.cache()
+
+    # for col_name, feature_prefix in factors_to_explode:
+    #     col_set = set(pairs_with_features.columns)
+    #     col_set.remove(col_name)
+    #     with JobGroup("fit", "horizontal explode"):
+    #         # TODO: PERF - probably inefficient at all?
+    #         # TODO: do we really need to explode vectors into columns? Probably better to postpone this transformation
+    #         #  for a direct consumer (LAMAWrap)
+    #         pairs_with_features = horizontal_explode(
+    #             data_frame=pairs_with_features,
+    #             column_to_explode=col_name,
+    #             other_columns=[sf.col(column) for column in sorted(list(col_set))],
+    #             prefix=f"{prefix}_{feature_prefix}",
+    #         )
 
     return pairs_with_features
 
@@ -481,7 +483,7 @@ class TwoStagesScenario(HybridRecommender):
         )
 
         # TODO: PERF - potentially lost cache and repeated computations on higher levels?
-        full_second_level_train_cached.unpersist()
+        # full_second_level_train_cached.unpersist()
         return full_second_level_train
 
     def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
@@ -568,7 +570,7 @@ class TwoStagesScenario(HybridRecommender):
         ).drop("user", "item")
 
         # TODO: PERF - lost cache in the downstream?
-        log_to_filter_cached.unpersist()
+        # log_to_filter_cached.unpersist()
 
         return get_top_k_recs(pred, k)
 
@@ -628,6 +630,7 @@ class TwoStagesScenario(HybridRecommender):
 
         with JobGroup("fit", "_predict_with_first_level_model"):
             candidates = self._predict_with_first_level_model(**passed_arguments)
+            candidates = candidates.cache()
 
         if self.fallback_model is not None:
             passed_arguments.pop("model")
@@ -635,6 +638,7 @@ class TwoStagesScenario(HybridRecommender):
                 fallback_candidates = self._predict_with_first_level_model(
                     model=self.fallback_model, **passed_arguments
                 )
+                fallback_candidates = fallback_candidates.cache()
 
             with JobGroup("fit", "fallback"):
                 # TODO: PERF - no cache and repeated computations for candidate and fallback_candidates?
@@ -835,7 +839,7 @@ class TwoStagesScenario(HybridRecommender):
             )
         candidates_features.cache()
         # TODO: PERF - partially lost cache and repeated computations
-        candidates_cached.unpersist()
+        # candidates_cached.unpersist()
 
         with JobGroup("2stage scenario predict", "candidates_features info logging"):
             self.logger.info(
