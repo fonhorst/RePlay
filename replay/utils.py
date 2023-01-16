@@ -891,7 +891,7 @@ def create_folder(path: str, delete_if_exists: bool = False, exists_ok: bool = F
     if filesystem == FileSystem.HDFS:
         fs.HadoopFileSystem().create_dir(uri)
     else:
-        fs.LocalFileSystem().create_dir(path)
+        fs.LocalFileSystem().create_dir(prefixless_path)
 
 
 def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
@@ -989,6 +989,11 @@ def get_class_by_name(classname: str) -> type:
 
 def do_path_exists(path: str) -> bool:
     spark = State().session
+
+    # due to the error: pyspark.sql.utils.IllegalArgumentException: Wrong FS: file:/...
+    if path.startswith("file:/"):
+        return os.path.exists(path)
+
     fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
     is_exists = fs.exists(spark._jvm.org.apache.hadoop.fs.Path(path))
     return is_exists

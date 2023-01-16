@@ -424,6 +424,11 @@ class TwoStagesScenario(HybridRecommender):
                 how="left",
             )
 
+            # TODO: DEBUG - remove later
+            self.logger.info("Trying to calculate first level pairs predict")
+            with JobGroup("fit", "Debug materialization of full_second_level_train in _add_features_for_second_level"):
+                full_second_level_train.write.parquet("/tmp/msd_test_add_features_for_second_level_msd.parquet", mode='overwrite')
+
             if self.use_first_level_models_feat[idx]:
                 # TODO: PERF - horizontal_explode materialization inside (without caching)?
                 features = get_first_level_model_features(
@@ -435,12 +440,25 @@ class TwoStagesScenario(HybridRecommender):
                     item_features=first_level_item_features_cached,
                     prefix=f"m_{idx}",
                 )
+
+                # TODO: DEBUG - remove later
+                self.logger.info("Trying to calculate get_first_level_model_features")
+                with JobGroup("fit",
+                              "Debug materialization of full_second_level_train in _add_features_for_second_level"):
+                    features.write.parquet("/tmp/msd_test_features.parquet", mode='overwrite')
+
                 full_second_level_train = join_with_col_renaming(
                     left=full_second_level_train,
                     right=features,
                     on_col_name=["user_idx", "item_idx"],
                     how="left",
                 )
+
+                # TODO: DEBUG - remove later
+                self.logger.info("Trying to calculate full_second_level_train with features")
+                with JobGroup("fit",
+                              "Debug materialization of full_second_level_train with features"):
+                    full_second_level_train.write.parquet("/tmp/msd_test_full_second_level_train_with_features.parquet", mode='overwrite')
 
         unpersist_if_exists(first_level_user_features_cached)
         unpersist_if_exists(first_level_item_features_cached)
@@ -463,6 +481,13 @@ class TwoStagesScenario(HybridRecommender):
             how="left",
         )
 
+        # TODO: DEBUG - remove later
+        self.logger.info("Trying to calculate full_second_level_train with user and item features")
+        with JobGroup("fit",
+                      "Debug materialization of full_second_level_train with features"):
+            full_second_level_train.write.parquet("/tmp/msd_test_full_second_level_train_with_user_and_item_features.parquet",
+                                                  mode='overwrite')
+
         # TODO: PERF - spent 49 secs here?
         if self.use_generated_features:
             with JobGroup("fit", "fitting the feature processor"):
@@ -476,6 +501,14 @@ class TwoStagesScenario(HybridRecommender):
                 full_second_level_train = self.features_processor.transform(
                     log=full_second_level_train
                 )
+
+                # TODO: DEBUG - remove later
+                self.logger.info("Trying to calculate full_second_level_train with generated features")
+                with JobGroup("fit",
+                              "Debug materialization of full_second_level_train with generated features"):
+                    full_second_level_train.write.parquet(
+                        "/tmp/msd_test_full_second_level_train_with_generated_features.parquet",
+                        mode='overwrite')
 
         self.logger.info(
             "Columns at second level: %s",

@@ -245,7 +245,6 @@ class DatasetInfo:
     user_cat_features: Optional[List[str]] = None
     item_cat_features: Optional[List[str]] = None
 
-
 DATASETS = {
     dataset.name: dataset for dataset in [
         DatasetInfo(
@@ -301,7 +300,7 @@ DATASETS = {
 
         DatasetInfo(
             name="msd",
-            log_path="/opt/spark_data/replay_datasets/MillionSongDataset/original.parquet"
+            log_path="file:///opt/spark_data/replay_datasets/MillionSongDataset/original.parquet"
         ),
 
         DatasetInfo(

@@ -193,8 +193,8 @@ class PartialTwoStageScenario(TwoStagesScenario):
 
         first_level_train, second_level_positive = super()._split_data(log)
 
-        first_level_train.write.parquet(self._first_level_train_path)
-        second_level_positive.write.parquet(self._second_level_positives_path)
+        first_level_train.write.parquet(self._first_level_train_path, mode='overwrite')
+        second_level_positive.write.parquet(self._second_level_positives_path, mode='overwrite')
 
         return first_level_train, second_level_positive
 
@@ -574,10 +574,9 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
                 drop_cold_items=True,
                 drop_cold_users=True,
             )
-        elif artifacts.dataset.name == 'msd_small':
+        elif artifacts.dataset.name.startswith('msd'):
             log = preparator.transform(
-                columns_mapping={"user_id": "user_idx", "item_id": "item_idx",
-                                 "relevance": "relevance", "timestamp": "timestamp"},
+                columns_mapping={"user_id": "user_id", "item_id": "item_id", "relevance": "play_count"},
                 data=data
             ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
 
@@ -594,6 +593,7 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
                 shuffle=True,
                 drop_cold_items=True,
                 drop_cold_users=True,
+                seed=42
             )
         else:
             raise Exception(f"Unsupported dataset name: {artifacts.dataset.name}")
@@ -616,8 +616,8 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
         assert train.count() > 0
         assert test.count() > 0
 
-        train.drop('_c0').write.parquet(artifacts.train_path)
-        test.drop('_c0').write.parquet(artifacts.test_path)
+        train.drop('_c0').write.parquet(artifacts.train_path, mode='overwrite')
+        test.drop('_c0').write.parquet(artifacts.test_path, mode='overwrite')
 
 
 def do_init_refitable_two_stage_scenario(artifacts: ArtifactPaths):
@@ -681,7 +681,7 @@ def do_fit_feature_transformers(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU
             item_features=artifacts.item_features
         )
 
-        save_transformer(hbt_transformer, artifacts.history_based_transformer_path)
+        save_transformer(hbt_transformer, artifacts.history_based_transformer_path, overwrite=True)
 
 
 def do_presplit_data(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
