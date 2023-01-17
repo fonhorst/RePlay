@@ -13,13 +13,14 @@ from scipy.sparse import csr_matrix, csc_matrix
 
 from replay.models.base_rec import Recommender, ItemVectorModel
 from replay.models.hnswlib import HnswlibMixin
+from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.spark_custom_models.recommendation import ALS, ALSModel
 from replay.session_handler import State
 from replay.utils import JobGroup, list_to_vector_udf, log_exec_timer
 from sklearn.linear_model import Ridge
 
 
-class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
+class ALSWrap(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
     """Wrapper for `Spark ALS
     <https://spark.apache.org/docs/latest/api/python/pyspark.mllib.html#pyspark.mllib.recommendation.ALS>`_.
     """
@@ -36,6 +37,7 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         seed: Optional[int] = None,
         num_item_blocks: Optional[int] = None,
         num_user_blocks: Optional[int] = None,
+        nmslib_hnsw_params: Optional[dict] = None,
         hnswlib_params: Optional[dict] = None,
     ):
         """
@@ -48,9 +50,13 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         self._seed = seed
         self._num_item_blocks = num_item_blocks
         self._num_user_blocks = num_user_blocks
+        self._nmslib_hnsw_params = nmslib_hnsw_params
         self._hnswlib_params = hnswlib_params
 
-        HnswlibMixin.__init__(self)
+        if self._nmslib_hnsw_params:
+            NmslibHnswMixin.__init__(self)
+        elif self._hnswlib_params:
+            HnswlibMixin.__init__(self)
 
     @property
     def _init_args(self):
@@ -109,6 +115,18 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         self.model.userFactors.cache()
         self.model.itemFactors.count()
         self.model.userFactors.count()
+
+        if self._nmslib_hnsw_params:
+            item_vectors, _ = self.get_features(
+                log.select("item_idx").distinct()
+            )
+
+            self._build_nmslib_hnsw_index(item_vectors, 'item_factors', self._nmslib_hnsw_params)
+
+            self._user_to_max_items = (
+                    log.groupBy('user_idx')
+                    .agg(sf.count('item_idx').alias('num_items'))
+            )
 
         if self._hnswlib_params:
             item_vectors, _ = self.get_features(
@@ -260,7 +278,7 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         For each user return from `k` to `k + number of seen by user` recommendations.
         """
 
-        if not self._hnswlib_params:
+        if not self._hnswlib_params and not self._nmslib_hnsw_params:
             return Recommender._filter_seen(self, recs, log, k, users)
 
         users_log = log.join(users, on="user_idx")
@@ -305,6 +323,24 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
+
+        if self._nmslib_hnsw_params:
+
+            params = self._nmslib_hnsw_params
+
+            with JobGroup(
+                f"{self.__class__.__name__}._predict()",
+                f"{self.__class__.__name__}.get_features()",
+            ):
+                user_vectors, _ = self.get_features(users)
+                # user_vectors = user_vectors.cache()
+                # user_vectors.write.mode("overwrite").format("noop").save()
+
+                user_vectors = user_vectors.join(self._user_to_max_items, on="user_idx")
+
+            res = self._infer_nmslib_hnsw_index(user_vectors, "user_factors", params, k)
+
+            return res
         
         if self._hnswlib_params:
 

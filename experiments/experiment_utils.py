@@ -68,6 +68,35 @@ def get_model(MODEL: str, SEED: int, spark_app_id: str):
             num_user_blocks=num_blocks,
             hnswlib_params=hnswlib_params,
         )
+    elif MODEL == "ALS_NMSLIB_HNSW":
+        ALS_RANK = int(os.environ.get("ALS_RANK", 100))
+        build_index_on = "executor"  # driver executor
+        num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
+        nmslib_hnsw_params = {
+            "method": "hnsw",
+            "space": "negdotprod",  # negdotprod
+            "M": 100,
+            "efS": 2000,
+            "efC": 2000,
+            "post": 0,
+            "index_path": f"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark_app_id}",
+            "build_index_on": build_index_on,
+        }
+        mlflow.log_params(
+            {
+                "ALS_rank": ALS_RANK,
+                "num_blocks": num_blocks,
+                "build_index_on": build_index_on,
+                "nmslib_hnsw_params": nmslib_hnsw_params,
+            }
+        )
+        model = ALSWrap(
+            rank=ALS_RANK,
+            seed=SEED,
+            num_item_blocks=num_blocks,
+            num_user_blocks=num_blocks,
+            nmslib_hnsw_params=nmslib_hnsw_params,
+        )
     elif MODEL == "SLIM":
         model = SLIM(seed=SEED)
     elif MODEL == "SLIM_NMSLIB_HNSW":

@@ -178,7 +178,7 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin):
                     )
             )
 
-            self._build_hnsw_index(item_vectors, 'item_vector', self._nmslib_hnsw_params)
+            self._build_nmslib_hnsw_index(item_vectors, 'item_vector', self._nmslib_hnsw_params)
 
             self._user_to_max_items = (
                     log.groupBy('user_idx')
@@ -319,7 +319,7 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin):
 
             user_vectors = user_vectors.join(self._user_to_max_items, on="user_idx")
 
-            res = self._infer_hnsw_index(user_vectors, "user_vector", params, k)
+            res = self._infer_nmslib_hnsw_index(user_vectors, "user_vector", params, k)
 
             return res
 
