@@ -75,6 +75,14 @@ def main(spark: SparkSession, dataset_name: str):
                 data = spark.read.parquet(
                     "file:///opt/spark_data/replay_datasets/MillionSongDataset/train_100m_users_1k_items.parquet"
                 )
+            elif fraction == "train_10m_users_1k_items":
+                data = spark.read.parquet(
+                    "file:///opt/spark_data/replay_datasets/MillionSongDataset/train_10m_users_1k_items.parquet"
+                )
+            elif fraction == "train_1m_users_1k_items":
+                data = spark.read.parquet(
+                    "file:///opt/spark_data/replay_datasets/MillionSongDataset/train_1m_users_1k_items.parquet"
+                )
             else:
                 data = pd.read_csv(f"/opt/spark_data/replay_datasets/MillionSongDataset/train_{fraction}.csv")
 
@@ -156,11 +164,13 @@ def main(spark: SparkSession, dataset_name: str):
         mlflow.log_param("log_length", log_length)
 
         with log_exec_timer("Indexer training") as indexer_fit_timer:
-            indexer_estimator = IndexerEstimator(user_col="user_id", item_col="item_id")
-            indexer = indexer_estimator.fit(log)
+            # indexer = Indexer(user_col="user_id", item_col="item_id")
             # indexer.fit(
             #     users=log.select("user_id"), items=log.select("item_id")
             # )
+            indexer_estimator = IndexerEstimator(user_col="user_id", item_col="item_id", rows_threshold=1,  # _000_000_000
+                                                 use_iterative=False)  # , n_parts=4
+            indexer = indexer_estimator.fit(log)
         mlflow.log_metric("indexer_fit_sec", indexer_fit_timer.duration)
 
         with log_exec_timer("Indexer transform") as indexer_transform_timer:
@@ -203,19 +213,19 @@ def main(spark: SparkSession, dataset_name: str):
             with log_exec_timer("Train/test datasets saving to parquet") as parquets_save_timer:
                 # WARN: 'fraction' is not fraction of test or train, it is fraction of input dataset.
                 train.write.mode('overwrite').parquet(
-                    f"/opt/spark_data/replay_datasets/MillionSongDataset/fraction_{fraction}_train.parquet"
+                    f"/opt/spark_data/replay_datasets/MillionSongDataset/tmp_fraction_{fraction}_train.parquet"
                 )
                 test.write.mode('overwrite').parquet(
-                    f"/opt/spark_data/replay_datasets/MillionSongDataset/fraction_{fraction}_test.parquet"
+                    f"/opt/spark_data/replay_datasets/MillionSongDataset/tmp_fraction_{fraction}_test.parquet"
                 )
             mlflow.log_metric(f"parquets{partition_num}_write_sec", parquets_save_timer.duration)
         else:
             with log_exec_timer("Train/test datasets saving to parquet") as parquets_save_timer:
                 train.write.mode('overwrite').parquet(
-                    f"/opt/spark_data/replay_datasets/MovieLens/train_{dataset_version}.parquet"
+                    f"/opt/spark_data/replay_datasets/MovieLens/tmp_train_{dataset_version}.parquet"
                 )
                 test.write.mode('overwrite').parquet(
-                    f"/opt/spark_data/replay_datasets/MovieLens/test_{dataset_version}.parquet"
+                    f"/opt/spark_data/replay_datasets/MovieLens/tmp_test_{dataset_version}.parquet"
                 )
             mlflow.log_metric(f"parquets{partition_num}_write_sec", parquets_save_timer.duration)
 
