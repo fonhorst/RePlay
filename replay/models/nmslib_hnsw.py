@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Iterator
 import uuid
 
 import numpy as np
@@ -157,7 +157,13 @@ class NmslibHnswMixin:
 
                 if index_type == "sparse":
 
-                    def build_index(iterator):
+                    def build_index(iterator: Iterator[pd.DataFrame]):
+                        """Builds index on executor and writes it to shared disk or hdfs.
+
+                        Args:
+                            iterator: iterates on dataframes with vectors/features
+
+                        """
                         index = nmslib.init(
                             method=params["method"],
                             space=params["space"],
@@ -223,7 +229,13 @@ class NmslibHnswMixin:
 
                 else:
 
-                    def build_index(iterator):
+                    def build_index(iterator: Iterator[pd.DataFrame]):
+                        """Builds index on executor and writes it to shared disk or hdfs.
+
+                        Args:
+                            iterator: iterates on dataframes with vectors/features
+
+                        """
                         index = nmslib.init(
                             method=params["method"],
                             space=params["space"],
@@ -270,7 +282,8 @@ class NmslibHnswMixin:
 
                         yield pd.DataFrame(data={"_success": 1}, index=[0])
 
-                # builds index on executor and writes it to shared disk or hdfs
+                # Here we perform materialization (`.collect()`) to build the hnsw index.
+                logger.info("Started building the hnsw index")
                 if index_type == "sparse":
                     item_vectors.select(
                         "similarity", "item_idx_one", "item_idx_two"
@@ -279,6 +292,7 @@ class NmslibHnswMixin:
                     item_vectors.select("item_idx", features_col).mapInPandas(
                         build_index, "_success int"
                     ).collect()
+                logger.info("Finished building the hnsw index")
             else:
                 if index_type == "sparse":
                     item_vectors = item_vectors.toPandas()
