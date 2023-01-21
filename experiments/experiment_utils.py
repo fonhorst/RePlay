@@ -250,7 +250,9 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
     return model
 
 
-def get_datasets(dataset_name, spark: SparkSession, partition_num: int):
+def get_datasets(
+    dataset_name, spark: SparkSession, partition_num: int
+) -> Tuple[DataFrame, DataFrame, Optional[DataFrame]]:
     """
     Reads prepared datasets from hdfs or disk and returns them.
 

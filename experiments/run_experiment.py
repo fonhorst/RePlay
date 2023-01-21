@@ -1,3 +1,35 @@
+"""
+This script is a Spark application that executes replay recommendation models.
+Parameters sets via environment variables.
+
+Available models to execution:
+    # LightFM
+    # PopRec UserPopRec
+    # Word2VecRec Word2VecRec_NMSLIB_HNSW Word2VecRec_HNSWLIB
+    # ALS ALS_NMSLIB_HNSW ALS_HNSWLIB
+    # SLIM SLIM_NMSLIB_HNSW
+    # ItemKNN ItemKNN_NMSLIB_HNSW
+    # ClusterRec ClusterRec_HNSWLIB
+
+Available datasets:
+    MovieLens
+    MillionSongDataset
+
+launch example:
+    $ export DATASET=MovieLens
+    $ export MODEL=ALS
+    $ export ALS_RANK=100
+    $ export SEED=22
+    $ export K=10
+    $ python experiments/run_experiment.py
+
+or run in one line:
+    $ DATASET=MovieLens MODEL=ALS ALS_RANK=100 SEED=22 K=10 python experiments/run_experiment.py
+
+All params:
+
+"""
+
 import os
 
 import mlflow
@@ -90,19 +122,23 @@ def main(spark: SparkSession, dataset_name: str):
         use_bucketing = os.environ.get("USE_BUCKETING", "False") == "True"
         mlflow.log_param("USE_BUCKETING", use_bucketing)
         if use_bucketing:
-            bucketizer = DataframeBucketizer(bucketing_key="user_idx",
-                                             partition_num=partition_num,
-                                             spark_warehouse_dir=spark_conf.get("spark.sql.warehouse.dir"))
+            bucketizer = DataframeBucketizer(
+                bucketing_key="user_idx",
+                partition_num=partition_num,
+                spark_warehouse_dir=spark_conf.get("spark.sql.warehouse.dir"),
+            )
 
             with log_exec_timer("dataframe bucketing") as bucketing_timer:
-                bucketizer.set_table_name(f"bucketed_train_{spark.sparkContext.applicationId.replace('-', '_')}")
+                bucketizer.set_table_name(
+                    f"bucketed_train_{spark.sparkContext.applicationId.replace('-', '_')}"
+                )
                 train = bucketizer.transform(train)
 
-                bucketizer.set_table_name(f"bucketed_test_{spark.sparkContext.applicationId.replace('-', '_')}")
+                bucketizer.set_table_name(
+                    f"bucketed_test_{spark.sparkContext.applicationId.replace('-', '_')}"
+                )
                 test = bucketizer.transform(test)
-            mlflow.log_metric(
-                "bucketing_sec", bucketing_timer.duration
-            )
+            mlflow.log_metric("bucketing_sec", bucketing_timer.duration)
 
         with log_exec_timer("Train/test caching") as train_test_cache_timer:
             train = train.cache()
@@ -156,7 +192,9 @@ def main(spark: SparkSession, dataset_name: str):
             model.fit(log=train, **kwargs)
         mlflow.log_metric("train_sec", train_timer.duration)
 
-        with log_exec_timer(f"{model_name} prediction") as infer_timer, JobGroup(
+        with log_exec_timer(
+            f"{model_name} prediction"
+        ) as infer_timer, JobGroup(
             "Model inference", f"{model.__class__.__name__}.predict()"
         ):
             if isinstance(model, AssociationRulesItemRec):
