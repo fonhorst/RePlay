@@ -36,7 +36,13 @@ import mlflow
 from pyspark.conf import SparkConf
 from pyspark.sql import SparkSession
 
-from experiment_utils import get_model, get_datasets, make_bucketed_df
+from experiment_utils import (
+    get_model,
+    get_datasets,
+    get_spark_configs_as_dict,
+    check_number_of_allocated_executors,
+    get_partition_num,
+)
 from replay.dataframe_bucketizer import DataframeBucketizer
 from replay.experiment import Experiment
 from replay.metrics import HitRate, MAP, NDCG
@@ -58,20 +64,15 @@ from replay.utils import logger
 def main(spark: SparkSession, dataset_name: str):
     spark_conf: SparkConf = spark.sparkContext.getConf()
 
-    # if enough executors is not allocated in the cluster mode, then we stop the experiment
-    if spark_conf.get("spark.executor.instances"):
-        if getNumberOfAllocatedExecutors(spark) < int(
-            spark_conf.get("spark.executor.instances")
-        ):
-            raise Exception("Not enough executors to run experiment!")
+    check_number_of_allocated_executors(spark)
 
     k = int(os.environ.get("K", 10))
-    k_list_metrics = [5, 10]
+    k_list_metrics = list(map(int, os.environ["K_LIST_METRICS"].split(",")))
     seed = int(os.environ.get("SEED", 1234))
     mlflow_tracking_uri = os.environ.get(
         "MLFLOW_TRACKING_URI", "http://node2.bdcl:8822"
     )
-    model_name = os.environ.get("MODEL", "Word2VecRec_HNSWLIB")
+    model_name = os.environ.get("MODEL", "SLIM_NMSLIB_HNSW")
     # LightFM
     # PopRec
     # UserPopRec
@@ -81,39 +82,23 @@ def main(spark: SparkSession, dataset_name: str):
     # ItemKNN ItemKNN_NMSLIB_HNSW
     # ClusterRec ClusterRec_HNSWLIB
 
-    if os.environ.get("PARTITION_NUM"):
-        partition_num = int(os.environ.get("PARTITION_NUM"))
-    else:
-        if spark_conf.get("spark.cores.max") is None:
-            partition_num = os.cpu_count()
-        else:
-            partition_num = int(spark_conf.get("spark.cores.max"))
+    partition_num = get_partition_num(spark_conf)
 
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     mlflow.set_experiment(os.environ.get("EXPERIMENT", "delete"))
 
     with mlflow.start_run():
-        spark_configs = {
-            "spark.driver.cores": spark_conf.get("spark.driver.cores"),
-            "spark.driver.memory": spark_conf.get("spark.driver.memory"),
-            "spark.memory.fraction": spark_conf.get("spark.memory.fraction"),
-            "spark.executor.cores": spark_conf.get("spark.executor.cores"),
-            "spark.executor.memory": spark_conf.get("spark.executor.memory"),
-            "spark.executor.instances": spark_conf.get(
-                "spark.executor.instances"
-            ),
-            "spark.sql.shuffle.partitions": spark_conf.get(
-                "spark.sql.shuffle.partitions"
-            ),
-            "spark.default.parallelism": spark_conf.get(
-                "spark.default.parallelism"
-            ),
-            "spark.applicationId": spark.sparkContext.applicationId,
-            "dataset": dataset_name,
-            "seed": seed,
-            "K": k,
-        }
-        mlflow.log_params(spark_configs)
+
+        params = get_spark_configs_as_dict(spark_conf)
+        params.update(
+            {
+                "spark.applicationId": spark.sparkContext.applicationId,
+                "dataset": dataset_name,
+                "seed": seed,
+                "K": k,
+            }
+        )
+        mlflow.log_params(params)
 
         train, test, user_features = get_datasets(
             dataset_name, spark, partition_num

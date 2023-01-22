@@ -1,6 +1,8 @@
 import os
+from typing import Tuple, Optional
 
 import mlflow
+from pyspark.conf import SparkConf
 from pyspark.sql import SparkSession
 from pyspark.sql import DataFrame
 
@@ -18,7 +20,7 @@ from replay.models import (
     ClusterRec,
     UCB,
 )
-from replay.utils import log_exec_timer
+from replay.utils import log_exec_timer, getNumberOfAllocatedExecutors
 
 
 def get_model(model_name: str, seed: int, spark_app_id: str):
@@ -58,7 +60,7 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
             "efC": 2000,
             "post": 0,
             # hdfs://node21.bdcl:9000
-            "index_path": f"/opt/spark_data/replay_datasets/hnsw_index_{spark_app_id}",
+            "index_path": f"/opt/spark_data/replay_datasets/hnswlib_index_{spark_app_id}",
             "build_index_on": build_index_on,
         }
         mlflow.log_params(
@@ -400,3 +402,49 @@ def get_datasets(
 
     return train, test, user_features
 
+
+def get_spark_configs_as_dict(spark_conf: SparkConf):
+    return {
+        "spark.driver.cores": spark_conf.get("spark.driver.cores"),
+        "spark.driver.memory": spark_conf.get("spark.driver.memory"),
+        "spark.memory.fraction": spark_conf.get("spark.memory.fraction"),
+        "spark.executor.cores": spark_conf.get("spark.executor.cores"),
+        "spark.executor.memory": spark_conf.get("spark.executor.memory"),
+        "spark.executor.instances": spark_conf.get("spark.executor.instances"),
+        "spark.sql.shuffle.partitions": spark_conf.get(
+            "spark.sql.shuffle.partitions"
+        ),
+        "spark.default.parallelism": spark_conf.get(
+            "spark.default.parallelism"
+        ),
+    }
+
+
+def check_number_of_allocated_executors(spark: SparkSession):
+    """
+    Checks whether enough executors are allocated or not. If not, then throws an exception.
+
+    Args:
+        spark: spark session
+    """
+
+    spark_conf: SparkConf = spark.sparkContext.getConf()
+
+    # if enough executors is not allocated in the cluster mode, then we stop the experiment
+    if spark_conf.get("spark.executor.instances"):
+        if getNumberOfAllocatedExecutors(spark) < int(
+            spark_conf.get("spark.executor.instances")
+        ):
+            raise Exception("Not enough executors to run experiment!")
+
+
+def get_partition_num(spark_conf: SparkConf):
+    if os.environ.get("PARTITION_NUM"):
+        partition_num = int(os.environ.get("PARTITION_NUM"))
+    else:
+        if spark_conf.get("spark.cores.max") is None:
+            partition_num = os.cpu_count()
+        else:
+            partition_num = int(spark_conf.get("spark.cores.max"))
+
+    return partition_num
