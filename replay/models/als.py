@@ -5,7 +5,7 @@ import pyspark.sql.functions as sf
 import mlflow
 import numpy as np
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.types import DoubleType
 from pyspark.sql.types import ArrayType, FloatType
 from pyspark.sql.functions import udf
@@ -58,15 +58,26 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
             "rank": self.rank,
             "implicit_prefs": self.implicit_prefs,
             "seed": self._seed,
+            "hnswlib_params": self._hnswlib_params
         }
 
     def _save_model(self, path: str):
         self.model.write().overwrite().save(path)
 
+        if self._hnswlib_params:
+            self._user_to_max_items.write.mode("overwrite").save(path + '/_user_to_max_items')
+            self._save_hnswlib_index(path)
+
     def _load_model(self, path: str):
         self.model = ALSModel.load(path)
         self.model.itemFactors.cache()
         self.model.userFactors.cache()
+
+        if self._hnswlib_params:
+            spark = SparkSession.getActiveSession()
+            _user_to_max_items = spark.read.parquet(path + '/_user_to_max_items')
+            setattr(self, "_user_to_max_items", _user_to_max_items)
+            self._load_hnswlib_index(path)
 
     def _fit(
         self,
@@ -245,6 +256,9 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         self, recs: DataFrame, log: DataFrame, k: int, users: DataFrame
     ):
         """
+        Overridden _filter_seen method from base class.
+        There is an optimization here (see get_top_k) when we use hnsw index.
+
         Filter seen items (presented in log) out of the users' recommendations.
         For each user return from `k` to `k + number of seen by user` recommendations.
         """
@@ -265,8 +279,8 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
             how="anti",
         ).drop("user", "item")
 
-        # because relevances are already sorted, we can return the first k values
-        # for every user_idx
+        # because relevances are already sorted,
+        # we can return the first k values for every user_idx
         def get_top_k(iterator):
             current_user_idx = None
             n = 0

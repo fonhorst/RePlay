@@ -37,14 +37,15 @@ def save(model: BaseRecommender, path: str, overwrite: bool = False):
     :return:
     """
     spark = State().session
-    
+
+    fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
     if not overwrite:
-        fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
         is_exists = fs.exists(spark._jvm.org.apache.hadoop.fs.Path(path))
         if is_exists:
             raise FileExistsError(f"Path '{path}' already exists. Mode is 'overwrite = False'.")
     # list_status = fs.listStatus(spark._jvm.org.apache.hadoop.fs.Path(path))
 
+    fs.mkdirs(spark._jvm.org.apache.hadoop.fs.Path(join(path, "model")))
     model._save_model(join(path, "model"))
 
     init_args = model._init_args
@@ -75,7 +76,7 @@ def load(path: str) -> BaseRecommender:
     :return: Restored trained model
     """
     spark = State().session
-    args = spark.read.json(join(path, "init_args.json")).first().asDict()
+    args = spark.read.json(join(path, "init_args.json")).first().asDict(recursive=True)
     name = args["_model_name"]
     del args["_model_name"]
 
@@ -95,10 +96,13 @@ def load(path: str) -> BaseRecommender:
         model.arg = extra_args[arg]
 
     df_path = join(path, "dataframes")
-    dataframes = os.listdir(df_path)
-    for name in dataframes:
-        df = spark.read.parquet(join(df_path, name))
-        setattr(model, name, df)
+    fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+    statuses = fs.listStatus(spark._jvm.org.apache.hadoop.fs.Path(df_path))
+    dataframes_paths = [str(f.getPath()) for f in statuses]
+    for dataframe_path in dataframes_paths:
+        df = spark.read.parquet(dataframe_path)
+        attr_name = dataframe_path.split("/")[-1]
+        setattr(model, attr_name, df)
 
     model._load_model(join(path, "model"))
     df = spark.read.parquet(join(path, "study"))
