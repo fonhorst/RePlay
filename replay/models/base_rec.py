@@ -484,24 +484,21 @@ class BaseRecommender(ABC):
             or None if `file_path` is provided
         """
         self.logger.debug("Starting predict %s", type(self).__name__)
-        with log_exec_timer("_get_ids() and _filter_cold_for_predict()") as before_predict_timer:
-            user_data = users or log or user_features or self.fit_users
-            users = self._get_ids(user_data, "user_idx")
-            users, log = self._filter_cold_for_predict(users, log, "user")
+        user_data = users or log or user_features or self.fit_users
+        users = self._get_ids(user_data, "user_idx")
+        users, log = self._filter_cold_for_predict(users, log, "user")
 
-            item_data = items or self.fit_items
-            items = self._get_ids(item_data, "item_idx")
-            items, log = self._filter_cold_for_predict(items, log, "item")
+        item_data = items or self.fit_items
+        items = self._get_ids(item_data, "item_idx")
+        items, log = self._filter_cold_for_predict(items, log, "item")
 
-            num_items = items.count()
-            if num_items < k:
-                message = f"k = {k} > number of items = {num_items}"
-                self.logger.debug(message)
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_metric("before_predict_sec", before_predict_timer.duration)
+        num_items = items.count()
+        if num_items < k:
+            message = f"k = {k} > number of items = {num_items}"
+            self.logger.debug(message)
 
-        with log_exec_timer(f"{self.__class__.__name__} execution") as _predict_timer, JobGroup(
-            "Model inference (inside 1)", f"{self.__class__.__name__}._predict()"
+        with log_exec_timer(f"{type(self).__name__}._predict()") as _predict_timer, JobGroup(
+            f"{type(self).__name__}._predict_wrap()", f"{type(self).__name__}._predict()"
         ):
             recs = self._predict(
                 log,
@@ -512,34 +509,31 @@ class BaseRecommender(ABC):
                 item_features,
                 filter_seen_items,
             )
-            recs = recs.cache()
-            recs.write.mode("overwrite").format("noop").save()
+            # recs = recs.cache()
+            # recs.write.mode("overwrite").format("noop").save()
         if os.environ.get("LOG_TO_MLFLOW", None) == "True":
             mlflow.log_metric("_predict_sec", _predict_timer.duration)
 
         if filter_seen_items and log:
             with log_exec_timer("_filter_seen()") as _filter_seen_timer, JobGroup(
-                "Model inference (inside 2)", f"{self.__class__.__name__}._filter_seen()"
+                f"{type(self).__name__}._predict_wrap()", f"{self.__class__.__name__}._filter_seen()"
             ):
                 recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
-                recs = recs.cache()
-                recs.write.mode("overwrite").format("noop").save()
+                # recs = recs.cache()
+                # recs.write.mode("overwrite").format("noop").save()
             if os.environ.get("LOG_TO_MLFLOW", None) == "True":
                 mlflow.log_metric("filter_seen_sec", _filter_seen_timer.duration)
         
         output = None
-        with JobGroup("Model inference (inside 4)", f"{self.__class__.__name__}._predict()"):
+        with JobGroup(f"{type(self).__name__}._predict_wrap()", f"{type(self).__name__}._predict_wrap()"):
             if recs_file_path is not None:
                 recs.write.parquet(path=recs_file_path, mode="overwrite")
             else:
                 output = recs.cache()
                 output.count()
 
-        with log_exec_timer("_clear_model_temp_view()") as _clear_model_temp_view_timer:
-            self._clear_model_temp_view("filter_seen_users_log")
-            self._clear_model_temp_view("filter_seen_num_seen")
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_metric("clear_model_temp_view_sec", _clear_model_temp_view_timer.duration)
+        self._clear_model_temp_view("filter_seen_users_log")
+        self._clear_model_temp_view("filter_seen_num_seen")
         return output
 
     @staticmethod
