@@ -166,7 +166,8 @@ class HnswlibMixin:
 
                 # Here we perform materialization (`.collect()`) to build the hnsw index.
                 logger.info("Started building the hnsw index")
-                vectors.select(id_col, features_col).mapInPandas(
+                cols = [id_col, features_col] if id_col else [features_col]
+                vectors.select(*cols).mapInPandas(
                     build_index, "_success int"
                 ).collect()
                 logger.info("Finished building the hnsw index")

@@ -2,19 +2,6 @@
 This script is a Spark application that executes replay recommendation models.
 Parameters sets via environment variables.
 
-Available models to execution:
-    # LightFM
-    # PopRec UserPopRec
-    # Word2VecRec Word2VecRec_NMSLIB_HNSW Word2VecRec_HNSWLIB
-    # ALS ALS_NMSLIB_HNSW ALS_HNSWLIB
-    # SLIM SLIM_NMSLIB_HNSW
-    # ItemKNN ItemKNN_NMSLIB_HNSW
-    # ClusterRec ClusterRec_HNSWLIB
-
-Available datasets:
-    MovieLens
-    MillionSongDataset
-
 launch example:
     $ export DATASET=MovieLens
     $ export MODEL=ALS
@@ -24,7 +11,7 @@ launch example:
     $ python experiments/run_experiment.py
 
 or run in one line:
-    $ DATASET=MovieLens MODEL=ALS ALS_RANK=100 SEED=22 K=10 python experiments/run_experiment.py
+    $ DATASET=MovieLens MODEL=ALS ALS_RANK=100 SEED=22 K=10 K_LIST_METRICS=5,10 python experiments/run_experiment.py
 
 All params:
     DATASET: dataset name
@@ -42,6 +29,7 @@ All params:
         PopRec
         UserPopRec
         ALS
+        Explicit_ALS
         ALS_HNSWLIB
         ALS_NMSLIB_HNSW (!)
         Word2VecRec
@@ -53,11 +41,25 @@ All params:
         ItemKNN_NMSLIB_HNSW
         ClusterRec
         ClusterRec_HNSWLIB
-
+        RandomRec_uniform
+        RandomRec_popular_based
+        RandomRec_relevance
+        AssociationRulesItemRec
+        Wilson
+        UCB
 
     SEED: seed
 
     K: number of desired recommendations per user
+
+    K_LIST_METRICS: List of K values (separated by commas) to calculate metrics. For example, K_LIST_METRICS=5,10.
+    It perform NDCG@5, NDCG@10, MAP@5, MAP@10, HitRate@5 and HitRate@10 calculation.
+
+    NMSLIB_HNSW_PARAMS: nmslib hnsw index params. Double quotes must be used instead of single quotes
+    Example: {"method":"hnsw","space":"negdotprod_sparse_fast","M":100,"efS":2000,"efC":2000,"post":0,"index_path":"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark_app_id}","build_index_on":"executor"}
+
+    HNSWLIB_PARAMS: hnswlib index params. Double quotes must be used instead of single quotes
+    Example: {"space":"ip","M":100,"efS":2000,"efC":2000,"post":0,"index_path":"/opt/spark_data/replay_datasets/hnswlib_index_{spark_app_id}","build_index_on":"executor"}
 
     ALS_RANK: rank for ALS model, i.e. length of ALS factor vectors
 
@@ -66,7 +68,6 @@ All params:
     NUM_NEIGHBOURS: ItemKNN param
 
     NUM_CLUSTERS: number of clusters in Cluster model
-
 
     DRIVER_CORES:
 
@@ -78,6 +79,7 @@ All params:
 
     EXECUTOR_MEMORY:
 
+    USE_SCALA_UDFS_METRICS: if set to "True", then metrics will be calculated via scala UDFs
 
 """
 
@@ -93,6 +95,7 @@ from experiment_utils import (
     get_spark_configs_as_dict,
     check_number_of_allocated_executors,
     get_partition_num,
+    get_log_info,
 )
 from replay.dataframe_bucketizer import DataframeBucketizer
 from replay.experiment import Experiment
@@ -105,10 +108,8 @@ from replay.models import (
 from replay.session_handler import get_spark_session
 from replay.utils import (
     JobGroup,
-    getNumberOfAllocatedExecutors,
     log_exec_timer,
 )
-from replay.utils import get_log_info2
 from replay.utils import logger
 
 
@@ -123,15 +124,7 @@ def main(spark: SparkSession, dataset_name: str):
     mlflow_tracking_uri = os.environ.get(
         "MLFLOW_TRACKING_URI", "http://node2.bdcl:8822"
     )
-    model_name = os.environ.get("MODEL", "SLIM_NMSLIB_HNSW")
-    # LightFM
-    # PopRec
-    # UserPopRec
-    # Word2VecRec Word2VecRec_NMSLIB_HNSW Word2VecRec_HNSWLIB
-    # ALS ALS_NMSLIB_HNSW ALS_HNSWLIB
-    # SLIM SLIM_NMSLIB_HNSW
-    # ItemKNN ItemKNN_NMSLIB_HNSW
-    # ClusterRec ClusterRec_HNSWLIB
+    model_name = os.environ.get("MODEL", "Word2VecRec")
 
     partition_num = get_partition_num(spark_conf)
 
@@ -188,30 +181,34 @@ def main(spark: SparkSession, dataset_name: str):
         mlflow.log_metric("train_num_partitions", train.rdd.getNumPartitions())
         mlflow.log_metric("test_num_partitions", test.rdd.getNumPartitions())
 
-        with log_exec_timer(
-            "get_log_info2() execution"
-        ) as get_log_info2_timer:
-            train_info = get_log_info2(train)
-            test_info = get_log_info2(test)
-            logger.info(
-                "train info: total lines: {}, total users: {}, total items: {}".format(
-                    *train_info
-                )
+        with log_exec_timer("get_log_info() execution") as get_log_info_timer:
+            (
+                train_rows_count,
+                train_users_count,
+                train_items_count,
+            ) = get_log_info(train)
+            test_rows_count, test_users_count, test_items_count = get_log_info(
+                test
             )
             logger.info(
-                "test info: total lines: {}, total users: {}, total items: {}".format(
-                    *test_info
-                )
+                f"train info: total lines: {train_rows_count}, "
+                f"total users: {train_users_count}, "
+                f"total items: {train_items_count}"
+            )
+            logger.info(
+                f"test info: total lines: {test_rows_count}, "
+                f"total users: {test_users_count}, "
+                f"total items: {test_items_count}"
             )
         mlflow.log_params(
             {
-                "get_log_info_sec": get_log_info2_timer.duration,
-                "train.total_users": train_info[1],
-                "train.total_items": train_info[2],
-                "train_size": train_info[0],
-                "test_size": test_info[0],
-                "test.total_users": test_info[1],
-                "test.total_items": test_info[2],
+                "get_log_info_sec": get_log_info_timer.duration,
+                "train.total_users": train_users_count,
+                "train.total_items": train_items_count,
+                "train_size": train_rows_count,
+                "test_size": test_rows_count,
+                "test.total_users": test_users_count,
+                "test.total_items": test_items_count,
             }
         )
 
@@ -250,6 +247,12 @@ def main(spark: SparkSession, dataset_name: str):
             recs.write.mode("overwrite").format("noop").save()
         mlflow.log_metric("infer_sec", infer_timer.duration)
 
+        if os.environ.get("USE_SCALA_UDFS_METRICS", "False") == "True":
+            use_scala_udf = True
+        else:
+            use_scala_udf = False
+        mlflow.log_param("use_scala_udf", use_scala_udf)
+
         if not isinstance(model, AssociationRulesItemRec):
             with log_exec_timer(
                 f"Metrics calculation"
@@ -259,9 +262,9 @@ def main(spark: SparkSession, dataset_name: str):
                 e = Experiment(
                     test,
                     {
-                        MAP(use_scala_udf=True): k_list_metrics,
-                        NDCG(use_scala_udf=True): k_list_metrics,
-                        HitRate(use_scala_udf=True): k_list_metrics,
+                        MAP(use_scala_udf=use_scala_udf): k_list_metrics,
+                        NDCG(use_scala_udf=use_scala_udf): k_list_metrics,
+                        HitRate(use_scala_udf=use_scala_udf): k_list_metrics,
                     },
                 )
                 e.add_result(model_name, recs)
@@ -326,9 +329,9 @@ def main(spark: SparkSession, dataset_name: str):
                 e = Experiment(
                     test,
                     {
-                        MAP(use_scala_udf=True): k_list_metrics,
-                        NDCG(use_scala_udf=True): k_list_metrics,
-                        HitRate(use_scala_udf=True): k_list_metrics,
+                        MAP(use_scala_udf=use_scala_udf): k_list_metrics,
+                        NDCG(use_scala_udf=use_scala_udf): k_list_metrics,
+                        HitRate(use_scala_udf=use_scala_udf): k_list_metrics,
                     },
                 )
                 e.add_result(model_name, recs)

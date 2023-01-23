@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Tuple, Optional
 
@@ -21,6 +22,46 @@ from replay.models import (
     UCB,
 )
 from replay.utils import log_exec_timer, getNumberOfAllocatedExecutors
+
+
+def get_nmslib_hnsw_params(spark_app_id: str):
+    index_params_str = os.environ.get("NMSLIB_HNSW_PARAMS")
+    if not index_params_str:
+        raise ValueError(
+            f"To use nmslib hnsw index you need to set the 'NMSLIB_HNSW_PARAMS' env variable! "
+            'For example, {"method":"hnsw","space":"negdotprod_sparse_fast","M":16,"efS":200,"efC":200,"post":0,'
+            '"index_path":"/tmp/nmslib_hnsw_index_{spark_app_id}","build_index_on":"executor"}.'
+        )
+    nmslib_hnsw_params = json.loads(index_params_str)
+    if (
+        "index_path" in nmslib_hnsw_params
+        and "{spark_app_id}" in nmslib_hnsw_params["index_path"]
+    ):
+        nmslib_hnsw_params["index_path"] = nmslib_hnsw_params[
+            "index_path"
+        ].replace("{spark_app_id}", spark_app_id)
+    print(f"nmslib_hnsw_params: {nmslib_hnsw_params}")
+    return nmslib_hnsw_params
+
+
+def get_hnswlib_params(spark_app_id: str):
+    index_params_str = os.environ.get("HNSWLIB_PARAMS")
+    if not index_params_str:
+        raise ValueError(
+            f"To use hnswlib index you need to set the 'HNSWLIB_PARAMS' env variable! "
+            'For example, {"space":"ip","M":100,"efS":2000,"efC":2000,"post":0,'
+            '"index_path":"/tmp/hnswlib_index_{spark_app_id}","build_index_on":"executor"}.'
+        )
+    hnswlib_params = json.loads(index_params_str)
+    if (
+        "index_path" in hnswlib_params
+        and "{spark_app_id}" in hnswlib_params["index_path"]
+    ):
+        hnswlib_params["index_path"] = hnswlib_params["index_path"].replace(
+            "{spark_app_id}", spark_app_id
+        )
+    print(f"hnswlib_params: {hnswlib_params}")
+    return hnswlib_params
 
 
 def get_model(model_name: str, seed: int, spark_app_id: str):
@@ -51,23 +92,13 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
         model = ALSWrap(rank=als_rank, seed=seed, implicit_prefs=False)
     elif model_name == "ALS_HNSWLIB":
         als_rank = int(os.environ.get("ALS_RANK", 100))
-        build_index_on = "executor"  # driver executor
         num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
-        hnswlib_params = {
-            "space": "ip",
-            "M": 100,
-            "efS": 2000,
-            "efC": 2000,
-            "post": 0,
-            # hdfs://node21.bdcl:9000
-            "index_path": f"/opt/spark_data/replay_datasets/hnswlib_index_{spark_app_id}",
-            "build_index_on": build_index_on,
-        }
+        hnswlib_params = get_hnswlib_params(spark_app_id)
         mlflow.log_params(
             {
                 "ALS_rank": als_rank,
                 "num_blocks": num_blocks,
-                "build_index_on": build_index_on,
+                "build_index_on": hnswlib_params["build_index_on"],
                 "hnswlib_params": hnswlib_params,
             }
         )
@@ -78,52 +109,38 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
             num_user_blocks=num_blocks,
             hnswlib_params=hnswlib_params,
         )
-    elif model_name == "ALS_SCANN":
-        als_rank = int(os.environ.get("ALS_RANK", 100))
-        build_index_on = "executor"  # driver executor
-        num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
-        scann_params = {
-            "distance_measure": "dot_product",
-            "num_neighbors": 10,
-            # "efS": 2000,
-            # "efC": 2000,
-            # "post": 0,
-            # hdfs://node21.bdcl:9000
-            "index_path": f"/opt/spark_data/replay_datasets/scann_index_{spark_app_id}",
-            "build_index_on": build_index_on,
-        }
-        mlflow.log_params(
-            {
-                "ALS_rank": als_rank,
-                "num_blocks": num_blocks,
-                "build_index_on": build_index_on,
-                "scann_params": scann_params,
-            }
-        )
-        model = ALSWrap(
-            rank=als_rank,
-            seed=seed,
-            num_item_blocks=num_blocks,
-            num_user_blocks=num_blocks,
-            scann_params=scann_params,
-        )
+    # elif model_name == "ALS_SCANN":
+    #     als_rank = int(os.environ.get("ALS_RANK", 100))
+    #     build_index_on = "executor"  # driver executor
+    #     num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
+    #     scann_params = {
+    #         "distance_measure": "dot_product",
+    #         "num_neighbors": 10,
+    #         "index_path": f"/opt/spark_data/replay_datasets/scann_index_{spark_app_id}",
+    #         "build_index_on": build_index_on,
+    #     }
+    #     mlflow.log_params(
+    #         {
+    #             "ALS_rank": als_rank,
+    #             "num_blocks": num_blocks,
+    #             "build_index_on": build_index_on,
+    #             "scann_params": scann_params,
+    #         }
+    #     )
+    #     model = ALSWrap(
+    #         rank=als_rank,
+    #         seed=seed,
+    #         num_item_blocks=num_blocks,
+    #         num_user_blocks=num_blocks,
+    #         scann_params=scann_params,
+    #     )
     elif model_name == "SLIM":
         model = SLIM(seed=seed)
     elif model_name == "SLIM_NMSLIB_HNSW":
-        build_index_on = "executor"  # driver executor
-        nmslib_hnsw_params = {
-            "method": "hnsw",
-            "space": "negdotprod_sparse",  # cosinesimil_sparse negdotprod_sparse
-            "M": 100,
-            "efS": 2000,
-            "efC": 2000,
-            "post": 0,
-            "index_path": f"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark_app_id}",
-            "build_index_on": build_index_on,
-        }
+        nmslib_hnsw_params = get_nmslib_hnsw_params(spark_app_id)
         mlflow.log_params(
             {
-                "build_index_on": build_index_on,
+                "build_index_on": nmslib_hnsw_params["build_index_on"],
                 "nmslib_hnsw_params": nmslib_hnsw_params,
             }
         )
@@ -133,20 +150,10 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
         mlflow.log_param("num_neighbours", num_neighbours)
         model = ItemKNN(num_neighbours=num_neighbours)
     elif model_name == "ItemKNN_NMSLIB_HNSW":
-        build_index_on = "executor"  # driver executor
-        nmslib_hnsw_params = {
-            "method": "hnsw",
-            "space": "negdotprod_sparse_fast",  # negdotprod_sparse_fast cosinesimil_sparse negdotprod_sparse
-            "M": 16,
-            "efS": 200,
-            "efC": 200,
-            "post": 0,
-            "index_path": f"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark_app_id}",
-            "build_index_on": build_index_on,
-        }
+        nmslib_hnsw_params = get_nmslib_hnsw_params(spark_app_id)
         mlflow.log_params(
             {
-                "build_index_on": build_index_on,
+                "build_index_on": nmslib_hnsw_params["build_index_on"],
                 "nmslib_hnsw_params": nmslib_hnsw_params,
             }
         )
@@ -154,54 +161,30 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
     elif model_name == "LightFM":
         model = LightFMWrap(random_state=seed)
     elif model_name == "Word2VecRec":
-        # model = Word2VecRec(
-        #     seed=SEED,
-        #     num_partitions=partition_num,
-        # )
-        model = Word2VecRec(seed=seed)
+        word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
+        mlflow.log_param("word2vec_rank", word2vec_rank)
+        model = Word2VecRec(rank=word2vec_rank, seed=seed)
     elif model_name == "Word2VecRec_NMSLIB_HNSW":
-        build_index_on = "executor"  # driver executor
-        nmslib_hnsw_params = {
-            "method": "hnsw",
-            "space": "negdotprod",
-            "M": 100,
-            "efS": 2000,
-            "efC": 2000,
-            "post": 0,
-            # hdfs://node21.bdcl:9000
-            "index_path": f"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark_app_id}",
-            "build_index_on": build_index_on,
-        }
+        nmslib_hnsw_params = get_nmslib_hnsw_params(spark_app_id)
         word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
         mlflow.log_params(
             {
-                "build_index_on": build_index_on,
+                "build_index_on": nmslib_hnsw_params["build_index_on"],
                 "nmslib_hnsw_params": nmslib_hnsw_params,
                 "word2vec_rank": word2vec_rank,
             }
         )
-
         model = Word2VecRec(
             rank=word2vec_rank,
             seed=seed,
             nmslib_hnsw_params=nmslib_hnsw_params,
         )
     elif model_name == "Word2VecRec_HNSWLIB":
-        build_index_on = "executor"  # driver executor
-        hnswlib_params = {
-            "space": "ip",
-            "M": 100,
-            "efS": 2000,
-            "efC": 2000,
-            "post": 0,
-            # hdfs://node21.bdcl:9000
-            "index_path": f"/opt/spark_data/replay_datasets/hnswlib_index_{spark_app_id}",
-            "build_index_on": build_index_on,
-        }
+        hnswlib_params = get_hnswlib_params(spark_app_id)
         word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
         mlflow.log_params(
             {
-                "build_index_on": build_index_on,
+                "build_index_on": hnswlib_params["build_index_on"],
                 "hnswlib_params": hnswlib_params,
                 "word2vec_rank": word2vec_rank,
             }
@@ -229,21 +212,22 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
     elif model_name == "Wilson":
         model = Wilson()
     elif model_name == "ClusterRec":
-        num_clusters = int(os.environ.get("num_clusters", "10"))
+        num_clusters = int(os.environ.get("NUM_CLUSTERS", "10"))
+        mlflow.log_param("num_clusters", num_clusters)
         model = ClusterRec(num_clusters=num_clusters)
     elif model_name == "ClusterRec_HNSWLIB":
-        build_index_on = "driver"
-        hnswlib_params = {
-            "space": "ip",
-            "M": 16,
-            "efS": 200,
-            "efC": 200,
-            # hdfs://node21.bdcl:9000
-            # "index_path": f"/opt/spark_data/replay_datasets/nmslib_hnsw_index_{spark_app_id}",
-            "build_index_on": build_index_on,
-        }
-        mlflow.log_param("hnswlib_params", hnswlib_params)
-        model = ClusterRec(hnswlib_params=hnswlib_params)
+        num_clusters = int(os.environ.get("NUM_CLUSTERS", "10"))
+        hnswlib_params = get_hnswlib_params(spark_app_id)
+        mlflow.log_params(
+            {
+                "num_clusters": num_clusters,
+                "build_index_on": hnswlib_params["build_index_on"],
+                "hnswlib_params": hnswlib_params,
+            }
+        )
+        model = ClusterRec(
+            num_clusters=num_clusters, hnswlib_params=hnswlib_params
+        )
     elif model_name == "UCB":
         model = UCB(seed=seed)
     else:
@@ -448,3 +432,37 @@ def get_partition_num(spark_conf: SparkConf):
             partition_num = int(spark_conf.get("spark.cores.max"))
 
     return partition_num
+
+
+def get_log_info(
+    log: DataFrame, user_col="user_idx", item_col="item_idx"
+) -> Tuple[int, int, int]:
+    """
+    Basic log statistics
+
+    >>> from replay.session_handler import State
+    >>> spark = State().session
+    >>> log = spark.createDataFrame([(1, 2), (3, 4), (5, 2)]).toDF("user_idx", "item_idx")
+    >>> log.show()
+    +--------+--------+
+    |user_idx|item_idx|
+    +--------+--------+
+    |       1|       2|
+    |       3|       4|
+    |       5|       2|
+    +--------+--------+
+    <BLANKLINE>
+    >>> rows_count, users_count, items_count = get_log_info(log)
+    >>> print((rows_count, users_count, items_count))
+    (3, 3, 2)
+
+    :param log: interaction log containing ``user_idx`` and ``item_idx``
+    :param user_col: name of a columns containing users' identificators
+    :param item_col: name of a columns containing items' identificators
+
+    :returns: statistics string
+    """
+    cnt = log.count()
+    user_cnt = log.select(user_col).distinct().count()
+    item_cnt = log.select(item_col).distinct().count()
+    return cnt, user_cnt, item_cnt
