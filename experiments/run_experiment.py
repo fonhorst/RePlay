@@ -27,6 +27,57 @@ or run in one line:
     $ DATASET=MovieLens MODEL=ALS ALS_RANK=100 SEED=22 K=10 python experiments/run_experiment.py
 
 All params:
+    DATASET: dataset name
+    Available values:
+        MovieLens__100k
+        MovieLens==MovieLens__1m
+        MovieLens__10m
+        MovieLens__20m
+        MovieLens__25m
+        MillionSongDataset
+
+    MODEL: model name
+    Available values:
+        LightFM
+        PopRec
+        UserPopRec
+        ALS
+        ALS_HNSWLIB
+        ALS_NMSLIB_HNSW (!)
+        Word2VecRec
+        Word2VecRec_NMSLIB_HNSW
+        Word2VecRec_HNSWLIB
+        SLIM
+        SLIM_NMSLIB_HNSW
+        ItemKNN
+        ItemKNN_NMSLIB_HNSW
+        ClusterRec
+        ClusterRec_HNSWLIB
+
+
+    SEED: seed
+
+    K: number of desired recommendations per user
+
+    ALS_RANK: rank for ALS model, i.e. length of ALS factor vectors
+
+    WORD2VEC_RANK: rank of Word2Vec model
+
+    NUM_NEIGHBOURS: ItemKNN param
+
+    NUM_CLUSTERS: number of clusters in Cluster model
+
+
+    DRIVER_CORES:
+
+    DRIVER_MEMORY:
+
+    DRIVER_MAX_RESULT_SIZE:
+
+    EXECUTOR_CORES:
+
+    EXECUTOR_MEMORY:
+
 
 """
 
