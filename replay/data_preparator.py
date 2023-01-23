@@ -190,13 +190,7 @@ class Indexer:  # pylint: disable=too-many-instance-attributes
             inv_indexer.setLabels(new_labels)
 
 
-class IndexerMLWritable(MLWritable):
-    def write(self) -> MLWriter:
-        """Returns MLWriter instance that can save the Transformer instance."""
-        return IndexerMLWriter(self)
-
-
-class IndexerMLWriter(MLWriter):
+class JoinIndexerMLWriter(MLWriter):
     """Implements saving an Estimator/Transformer instance to disk.
     Used when saving a trained pipeline.
     Implements MLWriter.saveImpl(path) method.
@@ -207,82 +201,53 @@ class IndexerMLWriter(MLWriter):
         self.instance = instance
 
     def saveImpl(self, path: str) -> None:
-        # logger.info(f"Save {self.instance.__class__.__name__} to '{path}'")
+        print(f"Saving {type(self.instance).__name__} to '{path}'")
 
         spark = SparkSession.getActiveSession()
 
         init_args = self.instance._init_args
-        init_args["user_type"] = str(self.instance.user_type)
-        init_args["item_type"] = str(self.instance.item_type)
         sc = spark.sparkContext
         df = spark.read.json(sc.parallelize([json.dumps(init_args)]))
         df.coalesce(1).write.mode("overwrite").json(join(path, "init_args.json"))
 
-        self.instance.user_indexer.write().overwrite().save(join(path, "user_indexer"))
-        self.instance.item_indexer.write().overwrite().save(join(path, "item_indexer"))
-        self.instance.inv_user_indexer.write().overwrite().save(join(path, "inv_user_indexer"))
-        self.instance.inv_item_indexer.write().overwrite().save(join(path, "inv_item_indexer"))
+        self.instance.user_col_2_index_map.write.mode("overwrite").save(join(path, "user_col_2_index_map.parquet"))
+        self.instance.item_col_2_index_map.write.mode("overwrite").save(join(path, "item_col_2_index_map.parquet"))
 
 
-class IndexerMLReadable(MLReadable):
-    @classmethod
-    def read(cls):
-        """Returns an MLReader instance for this class."""
-        return IndexerMLReader()
-
-
-class IndexerMLReader(MLReader):
+class JoinIndexerMLReader(MLReader):
     def load(self, path):
         """Load the ML instance from the input path."""
 
         spark = SparkSession.getActiveSession()
         args = spark.read.json(join(path, "init_args.json")).first().asDict(recursive=True)
+        user_col_2_index_map = spark.read.parquet(join(path, "user_col_2_index_map.parquet"))
+        item_col_2_index_map = spark.read.parquet(join(path, "item_col_2_index_map.parquet"))
 
-        user_indexer = StringIndexerModel.load(join(path, "user_indexer"))
-        item_indexer = StringIndexerModel.load(join(path, "item_indexer"))
-        inv_user_indexer = IndexToString.load(
-            join(path, "inv_user_indexer")
-        )
-        inv_item_indexer = IndexToString.load(
-            join(path, "inv_item_indexer")
-        )
-
-        indexer = IndexerTransformer(
+        indexer = JoinIndexerTransformer(
             user_col=args["user_col"],
             user_type=args["user_type"],
-            user_indexer=user_indexer,
-            inv_user_indexer=inv_user_indexer,
+            user_col_2_index_map=user_col_2_index_map,
             item_col=args["item_col"],
-            item_indexer=item_indexer,
-            inv_item_indexer=inv_item_indexer,
-            item_type=args["item_type"]
+            item_type=args["item_type"],
+            item_col_2_index_map=item_col_2_index_map,
+
         )
 
         return indexer
 
 
-class IndexerTransformer(Transformer, IndexerMLWritable, IndexerMLReadable):
-    suffix = "inner"
-
+class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
     def __init__(
             self,
-            user_indexer=None,
-            inv_user_indexer=None,
-            item_indexer=None,
-            inv_item_indexer=None,
-            user_type=None,
-            item_type=None,
-            user_col="user_id",
-            item_col="item_id",
-            user_col_2_index_map=None,
-            item_col_2_index_map=None
+            user_col: str,
+            item_col: str,
+            user_type: str,
+            item_type: str,
+            user_col_2_index_map: DataFrame,
+            item_col_2_index_map: DataFrame
     ):
         self.user_col = user_col
         self.item_col = item_col
-        self.user_indexer = user_indexer
-        self.inv_user_indexer = inv_user_indexer
-        self.item_indexer = item_indexer
-        self.inv_item_indexer = inv_item_indexer
         self.user_type = user_type
         self.item_type = item_type
         self.user_col_2_index_map = user_col_2_index_map
@@ -293,80 +258,33 @@ class IndexerTransformer(Transformer, IndexerMLWritable, IndexerMLReadable):
         return {
             "user_col": self.user_col,
             "item_col": self.item_col,
+            "user_type": self.user_type,
+            "item_type": self.item_type
         }
 
-    def _reindex(self, df: DataFrame, entity: str):
-        """
-        Update indexer with new entries.
+    def write(self) -> MLWriter:
+        """Returns MLWriter instance that can save the Transformer instance."""
+        return JoinIndexerMLWriter(self)
 
-        :param df: DataFrame with users/items
-        :param entity: user or item
-        """
-        indexer = getattr(self, f"{entity}_indexer")
-        inv_indexer = getattr(self, f"inv_{entity}_indexer")
-        new_objects = set(
-            map(
-                str,
-                df.select(indexer.getInputCol())
-                .distinct()
-                .toPandas()[indexer.getInputCol()],
-            )
-        ).difference(indexer.labels)
-        if new_objects:
-            new_labels = indexer.labels + list(new_objects)
-            setattr(
-                self,
-                f"{entity}_indexer",
-                indexer.from_labels(
-                    new_labels,
-                    inputCol=indexer.getInputCol(),
-                    outputCol=indexer.getOutputCol(),
-                    handleInvalid="error",
-                ),
-            )
-            inv_indexer.setLabels(new_labels)
+    @classmethod
+    def read(cls):
+        """Returns an MLReader instance for this class."""
+        return JoinIndexerMLReader()
+
 
     def _transform(self, df: DataFrame) -> DataFrame:
-        """
-        Convert raw ``user_col`` and ``item_col`` to numerical ``user_idx`` and ``item_idx``
-
-        :param df: dataframe with raw indexes
-        :return: dataframe with converted indexes
-        """
         if self.item_col in df.columns:
-            if self.item_col_2_index_map:
-                remaining_cols = df.drop(self.item_col).columns
-                df = df.join(self.item_col_2_index_map, on=self.item_col).select(
-                    sf.col("item_idx").cast("int").alias("item_idx"),
-                    *remaining_cols,
-                )
-            else:
-                remaining_cols = df.drop(self.item_col).columns
-                df = df.withColumnRenamed(
-                    self.item_col, f"{self.item_col}_{self.suffix}"
-                )
-                self._reindex(df, "item")
-                df = self.item_indexer.transform(df).select(
-                    sf.col("item_idx").cast("int").alias("item_idx"),
-                    *remaining_cols,
-                )
+            remaining_cols = df.drop(self.item_col).columns
+            df = df.join(self.item_col_2_index_map, on=self.item_col, how="left").select(
+                sf.col("item_idx").cast("int").alias("item_idx"),
+                *remaining_cols,
+            )
         if self.user_col in df.columns:
-            if self.user_col_2_index_map:
-                remaining_cols = df.drop(self.user_col).columns
-                df = df.join(self.user_col_2_index_map, on=self.user_col).select(
-                    sf.col("user_idx").cast("int").alias("user_idx"),
-                    *remaining_cols,
-                )
-            else:
-                remaining_cols = df.drop(self.user_col).columns
-                df = df.withColumnRenamed(
-                    self.user_col, f"{self.user_col}_{self.suffix}"
-                )
-                self._reindex(df, "user")
-                df = self.user_indexer.transform(df).select(
-                    sf.col("user_idx").cast("int").alias("user_idx"),
-                    *remaining_cols,
-                )
+            remaining_cols = df.drop(self.user_col).columns
+            df = df.join(self.user_col_2_index_map, on=self.user_col, how="left").select(
+                sf.col("user_idx").cast("int").alias("user_idx"),
+                *remaining_cols,
+            )
         return df
 
     def inverse_transform(self, df: DataFrame) -> DataFrame:
@@ -376,155 +294,33 @@ class IndexerTransformer(Transformer, IndexerMLWritable, IndexerMLReadable):
         :param df: DataFrame with numerical ``user_idx/item_idx`` columns
         :return: DataFrame with original user/item columns
         """
-        res = df
         if "item_idx" in df.columns:
-            remaining_cols = res.drop("item_idx").columns
-            res = self.inv_item_indexer.transform(
-                res.withColumnRenamed(
-                    "item_idx", f"{self.item_col}_{self.suffix}"
-                )
-            ).select(
-                sf.col(self.item_col)
-                .cast(self.item_type)
-                .alias(self.item_col),
+            remaining_cols = df.drop("item_idx").columns
+            df = df.join(self.item_col_2_index_map, on="item_idx", how="left").select(
+                sf.col(self.item_col).cast(self.item_type).alias(self.item_col),
                 *remaining_cols,
             )
         if "user_idx" in df.columns:
-            remaining_cols = res.drop("user_idx").columns
-            res = self.inv_user_indexer.transform(
-                res.withColumnRenamed(
-                    "user_idx", f"{self.user_col}_{self.suffix}"
-                )
-            ).select(
-                sf.col(self.user_col)
-                .cast(self.user_type)
-                .alias(self.user_col),
+            remaining_cols = df.drop("user_idx").columns
+            df = df.join(self.user_col_2_index_map, on="user_idx", how="left").select(
+                sf.col(self.user_col).cast(self.user_type).alias(self.user_col),
                 *remaining_cols,
             )
-        return res
-
-
-class IterativeIndexerTransformer(Transformer, IndexerMLWritable, IndexerMLReadable):
-    suffix = "inner"
-
-    def __init__(
-            self,
-            user_col="user_id",
-            item_col="item_id",
-            user_type=None,
-            item_type=None,
-            item_indexer=None,
-            inv_item_indexer=None,
-            unique_user_ids_parts=None,
-            user_indexers=None,
-            inv_user_indexers=None
-    ):
-        self.user_col = user_col
-        self.item_col = item_col
-        self.user_type = user_type
-        self.item_type = item_type
-        self.item_indexer = item_indexer
-        self.inv_item_indexer = inv_item_indexer
-        self.unique_user_ids_parts = unique_user_ids_parts
-        self.user_indexers = user_indexers
-        self.inv_user_indexers = inv_user_indexers
-
-    @property
-    def _init_args(self):
-        return {
-            "user_col": self.user_col,
-            "item_col": self.item_col,
-        }
-
-    def _reindex(self, df: DataFrame, entity: str):
-        """
-        Update indexer with new entries.
-
-        :param df: DataFrame with users/items
-        :param entity: user or item
-        """
-        indexer = getattr(self, f"{entity}_indexer")
-        inv_indexer = getattr(self, f"inv_{entity}_indexer")
-        new_objects = set(
-            map(
-                str,
-                df.select(indexer.getInputCol())
-                .distinct()
-                .toPandas()[indexer.getInputCol()],
-            )
-        ).difference(indexer.labels)
-        if new_objects:
-            new_labels = indexer.labels + list(new_objects)
-            setattr(
-                self,
-                f"{entity}_indexer",
-                indexer.from_labels(
-                    new_labels,
-                    inputCol=indexer.getInputCol(),
-                    outputCol=indexer.getOutputCol(),
-                    handleInvalid="error",
-                ),
-            )
-            inv_indexer.setLabels(new_labels)
-
-    def _transform(self, df: DataFrame) -> DataFrame:
-        """
-        Convert raw ``user_col`` and ``item_col`` to numerical ``user_idx`` and ``item_idx``
-
-        :param df: dataframe with raw indexes
-        :return: dataframe with converted indexes
-        """
-        if self.item_col in df.columns:
-            remaining_cols = df.drop(self.item_col).columns
-            df = df.withColumnRenamed(
-                self.item_col, f"{self.item_col}_{self.suffix}"
-            )
-            self._reindex(df, "item")
-            df = self.item_indexer.transform(df).select(
-                sf.col("item_idx").cast("int").alias("item_idx"),
-                *remaining_cols,
-            )
-
-        indexed_df = None
-        prev_max_id = 0
-        for (unique_user_ids_part, user_indexer) in zip(self.unique_user_ids_parts, self.user_indexers):
-            log_part = df.join(unique_user_ids_part, on="user_id")
-
-            indexed_log_part = user_indexer.transform(log_part)
-            other_columns = [c for c in indexed_log_part.columns if c != "user_id" and c != "user_idx"]
-            # increase user_idx
-            indexed_log_part = indexed_log_part.select((sf.col("user_idx") + prev_max_id).alias("user_idx"),
-                                                       *other_columns)
-            prev_max_id += unique_user_ids_part.count()  # n_unique_ids
-
-            if indexed_df:
-                indexed_df = indexed_df.union(indexed_log_part)
-            else:
-                indexed_df = indexed_log_part
-
-        return indexed_df
-
-    def inverse_transform(self, df: DataFrame) -> DataFrame:
-        pass
+        return df
 
 
 class IndexerEstimator(Estimator):
-    suffix = "inner"
 
-    def __init__(self, user_col="user_id", item_col="item_id", rows_threshold=5_000_000, use_iterative=True, n_parts=4):
+    def __init__(self, user_col="user_id", item_col="item_id"):
         """
         Provide column names for indexer to use
         """
         self.user_col = user_col
         self.item_col = item_col
-        self.rows_threshold = rows_threshold
         self.user_col_2_index_map = None
         self.item_col_2_index_map = None
-        self.use_iterative = use_iterative
-        self.n_parts = n_parts
 
-    def _get_map(self, df: DataFrame, col_name: str) -> DataFrame:
-        print("start _get_map/zipWithIndex")
+    def _get_map(self, df: DataFrame, col_name: str, idx_col_name: str) -> DataFrame:
         uid_rdd = (
             df.select(col_name).distinct()
             .rdd.map(lambda x: x[col_name])
@@ -532,8 +328,7 @@ class IndexerEstimator(Estimator):
         )
 
         spark = SparkSession.getActiveSession()
-        _map = spark.createDataFrame(uid_rdd, [col_name, col_name.replace("_id", "_idx")])
-        print("end _get_map/zipWithIndex")
+        _map = spark.createDataFrame(uid_rdd, [col_name, idx_col_name])
         return _map
 
     def _fit(self, df: DataFrame) -> Transformer:
@@ -542,136 +337,25 @@ class IndexerEstimator(Estimator):
         :param df: DataFrame containing user column and item column
         :return:
         """
-        if df.count() > self.rows_threshold:
 
-            if self.use_iterative:
-                items = df.select(self.item_col).withColumnRenamed(
-                    self.item_col, f"{self.item_col}_{self.suffix}"
-                )
-                self.item_type = items.schema[
-                    f"{self.item_col}_{self.suffix}"
-                ].dataType
-                self.item_indexer = StringIndexer(
-                    inputCol=f"{self.item_col}_{self.suffix}", outputCol="item_idx"
-                ).fit(items)
-                self.inv_item_indexer = IndexToString(
-                    inputCol=f"{self.item_col}_{self.suffix}",
-                    outputCol=self.item_col,
-                    labels=self.item_indexer.labels,
-                )
+        self.user_col_2_index_map = self._get_map(df, self.user_col, "user_idx")
+        self.item_col_2_index_map = self._get_map(df, self.item_col, "item_idx")
 
-                # ===== user indexing =====
-                unique_user_ids = (
-                    df.select("user_id").distinct()
-                    .select('user_id', sf.rand(42).alias('rand_v'))
-                )
+        self.user_type = df.schema[
+            self.user_col
+        ].dataType
+        self.item_type = df.schema[
+            self.item_col
+        ].dataType
 
-                step = 1.0 / self.n_parts
-                self.unique_user_ids_parts = []
-                self.user_indexers = []
-                self.inv_user_indexers = []
-                for step_k in range(self.n_parts):
-                    left = step_k * step
-                    right = (step_k + 1) * step
-
-                    # get part dataframe
-                    unique_user_ids_part = unique_user_ids.where(
-                        (sf.col('rand_v') >= left) & (sf.col("rand_v") < right))
-                    # print(unique_user_ids_part.count())
-                    # n_unique_ids = unique_user_ids_part.count()
-                    self.unique_user_ids_parts.append(unique_user_ids_part)
-
-                    # fit indexer and inverse indexer
-                    user_indexer = StringIndexer(
-                        inputCol="user_id",
-                        outputCol="user_idx"
-                    ).fit(unique_user_ids_part)
-                    inv_user_indexer = IndexToString(
-                        inputCol="user_idx",
-                        outputCol="user_id",
-                        labels=user_indexer.labels,
-                    )
-                    self.user_indexers.append(user_indexer)
-                    self.inv_user_indexers.append(inv_user_indexer)
-
-                return IterativeIndexerTransformer(
-                    unique_user_ids_parts=self.unique_user_ids_parts,
-                    user_indexers=self.user_indexers,
-                    inv_user_indexers=self.inv_user_indexers,
-                    item_type=self.item_type,
-                    item_indexer=self.item_indexer,
-                    inv_item_indexer=self.inv_item_indexer
-                )
-            else:
-                items = df.select(self.item_col).withColumnRenamed(
-                    self.item_col, f"{self.item_col}_{self.suffix}"
-                )
-                self.item_type = items.schema[
-                    f"{self.item_col}_{self.suffix}"
-                ].dataType
-                self.item_indexer = StringIndexer(
-                    inputCol=f"{self.item_col}_{self.suffix}", outputCol="item_idx"
-                ).fit(items)
-                self.inv_item_indexer = IndexToString(
-                    inputCol=f"{self.item_col}_{self.suffix}",
-                    outputCol=self.item_col,
-                    labels=self.item_indexer.labels,
-                )
-
-                self.user_col_2_index_map = self._get_map(df, self.user_col)
-                # self.item_col_2_index_map = self._get_map(df, self.item_col)
-
-                return IndexerTransformer(
-                    user_col=self.user_col,
-                    item_col=self.item_col,
-                    item_type=self.item_type,
-                    item_indexer=self.item_indexer,
-                    inv_item_indexer=self.inv_item_indexer,
-                    user_col_2_index_map=self.user_col_2_index_map,
-                    # item_col_2_index_map=self.item_col_2_index_map
-                )
-        else:
-            users = df.select(self.user_col).withColumnRenamed(
-                self.user_col, f"{self.user_col}_{self.suffix}"
-            )
-            items = df.select(self.item_col).withColumnRenamed(
-                self.item_col, f"{self.item_col}_{self.suffix}"
-            )
-
-            self.user_type = users.schema[
-                f"{self.user_col}_{self.suffix}"
-            ].dataType
-            self.item_type = items.schema[
-                f"{self.item_col}_{self.suffix}"
-            ].dataType
-
-            self.user_indexer = StringIndexer(
-                inputCol=f"{self.user_col}_{self.suffix}", outputCol="user_idx"
-            ).fit(users)
-            self.item_indexer = StringIndexer(
-                inputCol=f"{self.item_col}_{self.suffix}", outputCol="item_idx"
-            ).fit(items)
-            self.inv_user_indexer = IndexToString(
-                inputCol=f"{self.user_col}_{self.suffix}",
-                outputCol=self.user_col,
-                labels=self.user_indexer.labels,
-            )
-            self.inv_item_indexer = IndexToString(
-                inputCol=f"{self.item_col}_{self.suffix}",
-                outputCol=self.item_col,
-                labels=self.item_indexer.labels,
-            )
-
-            return IndexerTransformer(
-                user_col=self.user_col,
-                user_type=self.user_type,
-                user_indexer=self.user_indexer,
-                inv_user_indexer=self.inv_user_indexer,
-                item_col=self.item_col,
-                item_indexer=self.item_indexer,
-                inv_item_indexer=self.inv_item_indexer,
-                item_type=self.item_type
-            )
+        return JoinIndexerTransformer(
+            user_col=self.user_col,
+            user_type=str(self.user_type),
+            item_col=self.item_col,
+            item_type=str(self.item_type),
+            user_col_2_index_map=self.user_col_2_index_map,
+            item_col_2_index_map=self.item_col_2_index_map
+        )
 
 
 class DataPreparator:
