@@ -191,7 +191,7 @@ class Indexer:  # pylint: disable=too-many-instance-attributes
 
 
 class JoinIndexerMLWriter(MLWriter):
-    """Implements saving an Estimator/Transformer instance to disk.
+    """Implements saving the JoinIndexerTransformer instance to disk.
     Used when saving a trained pipeline.
     Implements MLWriter.saveImpl(path) method.
     """
@@ -244,7 +244,8 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
             user_type: str,
             item_type: str,
             user_col_2_index_map: DataFrame,
-            item_col_2_index_map: DataFrame
+            item_col_2_index_map: DataFrame,
+            update_map_on_transform: bool = False
     ):
         self.user_col = user_col
         self.item_col = item_col
@@ -252,6 +253,7 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
         self.item_type = item_type
         self.user_col_2_index_map = user_col_2_index_map
         self.item_col_2_index_map = item_col_2_index_map
+        self.update_map_on_transform = update_map_on_transform
 
     @property
     def _init_args(self):
@@ -259,8 +261,13 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
             "user_col": self.user_col,
             "item_col": self.item_col,
             "user_type": self.user_type,
-            "item_type": self.item_type
+            "item_type": self.item_type,
+            "update_map_on_transform": self.update_map_on_transform
         }
+
+    def set_update_map_on_transform(self, value: bool):
+        """Sets 'update_map_on_transform' flag"""
+        self.update_map_on_transform = value
 
     def write(self) -> MLWriter:
         """Returns MLWriter instance that can save the Transformer instance."""
@@ -271,8 +278,35 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
         """Returns an MLReader instance for this class."""
         return JoinIndexerMLReader()
 
+    def _update_maps(self, df: DataFrame):
+
+        new_items = (
+            df.join(self.item_col_2_index_map, on=self.item_col, how="left_anti")
+            .select(self.item_col).distinct()
+        )
+        prev_item_count = self.item_col_2_index_map.count()
+        new_items_map = (
+            IndexerEstimator.get_map(new_items, self.item_col, "item_idx")
+            .select(self.item_col, (sf.col("item_idx") + prev_item_count).alias("item_idx"))
+        )
+        self.item_col_2_index_map = self.item_col_2_index_map.union(new_items_map)
+
+        new_users = (
+            df.join(self.user_col_2_index_map, on=self.user_col, how="left_anti")
+            .select(self.user_col).distinct()
+        )
+        prev_user_count = self.user_col_2_index_map.count()
+        new_users_map = (
+            IndexerEstimator.get_map(new_users, self.user_col, "user_idx")
+            .select(self.user_col, (sf.col("user_idx") + prev_user_count).alias("user_idx"))
+        )
+        self.user_col_2_index_map = self.user_col_2_index_map.union(new_users_map)
 
     def _transform(self, df: DataFrame) -> DataFrame:
+
+        if self.update_map_on_transform:
+            self._update_maps(df)
+
         if self.item_col in df.columns:
             remaining_cols = df.drop(self.item_col).columns
             df = df.join(self.item_col_2_index_map, on=self.item_col, how="left").select(
@@ -320,7 +354,8 @@ class IndexerEstimator(Estimator):
         self.user_col_2_index_map = None
         self.item_col_2_index_map = None
 
-    def _get_map(self, df: DataFrame, col_name: str, idx_col_name: str) -> DataFrame:
+    @staticmethod
+    def get_map(df: DataFrame, col_name: str, idx_col_name: str) -> DataFrame:
         uid_rdd = (
             df.select(col_name).distinct()
             .rdd.map(lambda x: x[col_name])
@@ -338,8 +373,8 @@ class IndexerEstimator(Estimator):
         :return:
         """
 
-        self.user_col_2_index_map = self._get_map(df, self.user_col, "user_idx")
-        self.item_col_2_index_map = self._get_map(df, self.item_col, "item_idx")
+        self.user_col_2_index_map = self.get_map(df, self.user_col, "user_idx")
+        self.item_col_2_index_map = self.get_map(df, self.item_col, "item_idx")
 
         self.user_type = df.schema[
             self.user_col

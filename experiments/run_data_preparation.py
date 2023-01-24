@@ -214,19 +214,19 @@ def main(spark: SparkSession, dataset_name: str):
             with log_exec_timer("Train/test datasets saving to parquet") as parquets_save_timer:
                 # WARN: 'fraction' is not fraction of test or train, it is fraction of input dataset.
                 train.write.mode('overwrite').parquet(
-                    f"/opt/spark_data/replay_datasets/MillionSongDataset/tmp_fraction_{fraction}_train.parquet"
+                    f"/opt/spark_data/replay_datasets/MillionSongDataset/fraction_{fraction}_train.parquet"
                 )
                 test.write.mode('overwrite').parquet(
-                    f"/opt/spark_data/replay_datasets/MillionSongDataset/tmp_fraction_{fraction}_test.parquet"
+                    f"/opt/spark_data/replay_datasets/MillionSongDataset/fraction_{fraction}_test.parquet"
                 )
             mlflow.log_metric(f"parquets{partition_num}_write_sec", parquets_save_timer.duration)
         else:
             with log_exec_timer("Train/test datasets saving to parquet") as parquets_save_timer:
                 train.write.mode('overwrite').parquet(
-                    f"/opt/spark_data/replay_datasets/MovieLens/tmp_train_{dataset_version}.parquet"
+                    f"/opt/spark_data/replay_datasets/MovieLens/train_{dataset_version}.parquet"
                 )
                 test.write.mode('overwrite').parquet(
-                    f"/opt/spark_data/replay_datasets/MovieLens/tmp_test_{dataset_version}.parquet"
+                    f"/opt/spark_data/replay_datasets/MovieLens/test_{dataset_version}.parquet"
                 )
             mlflow.log_metric(f"parquets{partition_num}_write_sec", parquets_save_timer.duration)
 
