@@ -131,7 +131,8 @@ class SLIM(NeighbourRec, NmslibHnswMixin):
             
             items_count = log.select(sf.max('item_idx')).first()[0] + 1 
             similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
-            self._build_nmslib_hnsw_index(similarity_df, None, self._nmslib_hnsw_params, index_type="sparse", items_count=items_count)
+            self._build_nmslib_hnsw_index(similarity_df, None, self._nmslib_hnsw_params, index_type="sparse",
+                                          items_count=items_count)
 
 
     # pylint: disable=too-many-arguments
@@ -147,24 +148,15 @@ class SLIM(NeighbourRec, NmslibHnswMixin):
     ) -> DataFrame:
         
         if self._nmslib_hnsw_params:
-
             params = self._nmslib_hnsw_params
-         
-            with JobGroup(
-                f"{self.__class__.__name__}._predict()",
-                "_infer_hnsw_index()",
-            ):
-                user_to_max_items = (
-                    log.groupBy('user_idx')
-                    .agg(sf.count('item_idx').alias('num_items'))
-                )
-
-                users = users.join(user_to_max_items, on="user_idx")
-
-                res = self._infer_nmslib_hnsw_index(users, "",
-                                                    params, k,
-                                                    index_type="sparse")
-
+            user_to_max_items = (
+                log.groupBy('user_idx')
+                .agg(sf.count('item_idx').alias('num_items'))
+            )
+            users = users.join(user_to_max_items, on="user_idx")
+            res = self._infer_nmslib_hnsw_index(users, "",
+                                                params, k,
+                                                index_type="sparse")
             return res
 
         return self._predict_pairs_inner(

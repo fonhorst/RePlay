@@ -115,74 +115,58 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
     ) -> None:
-        with log_exec_timer("idf calculation") as idf_timer, JobGroup(
-            f"{self.__class__.__name__}._fit(), idf calculation",
-            "Model training (inside 1.1)",
-        ):
-            self.idf = (
-                log.groupBy("item_idx")
-                .agg(sf.countDistinct("user_idx").alias("count"))
-                .withColumn(
-                    "idf",
-                    sf.log(sf.lit(self.users_count) / sf.col("count"))
-                    if self.use_idf
-                    else sf.lit(1.0),
-                )
-                .select("item_idx", "idf")
+        self.idf = (
+            log.groupBy("item_idx")
+            .agg(sf.countDistinct("user_idx").alias("count"))
+            .withColumn(
+                "idf",
+                sf.log(sf.lit(self.users_count) / sf.col("count"))
+                if self.use_idf
+                else sf.lit(1.0),
             )
-            self.idf.cache().count()
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_metric("_fit_idf_sec", idf_timer.duration)
+            .select("item_idx", "idf")
+        )
+        self.idf.cache().count()
 
-        with log_exec_timer("log_by_users calculation") as log_by_users_timer:
-            log_by_users = (
-                log.groupBy("user_idx")
-                .agg(
-                    sf.collect_list(sf.struct("timestamp", "item_idx")).alias(
-                        "ts_item_idx"
-                    )
+        log_by_users = (
+            log.groupBy("user_idx")
+            .agg(
+                sf.collect_list(sf.struct("timestamp", "item_idx")).alias(
+                    "ts_item_idx"
                 )
-                .withColumn("ts_item_idx", sf.array_sort("ts_item_idx"))
-                .withColumn(
-                    "items",
-                    sf.col("ts_item_idx.item_idx").cast(
-                        st.ArrayType(st.StringType())
-                    ),
-                )
-                .drop("ts_item_idx")
             )
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_metric("_fit_log_by_users_sec", log_by_users_timer.duration)
+            .withColumn("ts_item_idx", sf.array_sort("ts_item_idx"))
+            .withColumn(
+                "items",
+                sf.col("ts_item_idx.item_idx").cast(
+                    st.ArrayType(st.StringType())
+                ),
+            )
+            .drop("ts_item_idx")
+        )
 
         self.logger.debug("Model training")
 
         if self._num_partitions is None:
             self._num_partitions = log_by_users.rdd.getNumPartitions()
-        
-        with log_exec_timer("Word2Vec fit and select") as word2vec_fit_select_timer, JobGroup(
-            f"{self.__class__.__name__}._fit(), Word2Vec.fit()",
-            "Model training (inside 1.2)",
-        ):
-            word_2_vec = Word2Vec(
-                vectorSize=self.rank,
-                minCount=self.min_count,
-                numPartitions=self._num_partitions,
-                stepSize=self.step_size,
-                maxIter=self.max_iter,
-                inputCol="items",
-                outputCol="w2v_vector",
-                windowSize=self.window_size,
-                seed=self._seed,
-            )
-            self.vectors = (
-                word_2_vec.fit(log_by_users)
-                .getVectors()
-                .select(sf.col("word").cast("int").alias("item"), "vector")
-            )
-            self.vectors.cache().count()
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_param("numPartitions", self._num_partitions)
-            mlflow.log_metric("_fit_word2vec_fit_select_sec", word2vec_fit_select_timer.duration)
+
+        word_2_vec = Word2Vec(
+            vectorSize=self.rank,
+            minCount=self.min_count,
+            numPartitions=self._num_partitions,
+            stepSize=self.step_size,
+            maxIter=self.max_iter,
+            inputCol="items",
+            outputCol="w2v_vector",
+            windowSize=self.window_size,
+            seed=self._seed,
+        )
+        self.vectors = (
+            word_2_vec.fit(log_by_users)
+            .getVectors()
+            .select(sf.col("word").cast("int").alias("item"), "vector")
+        )
+        self.vectors.cache().count()
 
         if self._nmslib_hnsw_params:
             item_vectors = self._get_item_vectors()
@@ -193,7 +177,6 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
                         vector_to_array("item_vector").alias("item_vector")
                     )
             )
-
             self._build_nmslib_hnsw_index(item_vectors, 'item_vector', self._nmslib_hnsw_params)
 
         if self._hnswlib_params:
@@ -262,42 +245,24 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
                 f"log is not provided, {self} predict requires log."
             )
 
-        with JobGroup(
-            f"{self.__class__.__name__}._predict_pairs_inner(), _get_user_vectors()",
-            "Model inference (inside 2.1)",
-        ):
-            user_vectors = self._get_user_vectors(
-                pairs.select("user_idx").distinct(), log
-            )
-            # user_vectors = user_vectors.cache()
-            # user_vectors.write.mode("overwrite").format("noop").save()
-        with JobGroup(
-            f"{self.__class__.__name__}._predict_pairs_inner(), pairs_with_vectors",
-            "Model inference (inside 2.2.1)",
-        ): 
-            pairs_with_vectors = join_with_col_renaming(
-                pairs, user_vectors, on_col_name="user_idx", how="inner"
-            )
-            pairs_with_vectors = pairs_with_vectors.join(
-                self.vectors, on=sf.col("item_idx") == sf.col("item"), how="inner"
-            ).drop("item")
-            # pairs_with_vectors = pairs_with_vectors.cache()
-            # pairs_with_vectors.write.mode("overwrite").format("noop").save()
+        user_vectors = self._get_user_vectors(
+            pairs.select("user_idx").distinct(), log
+        )
+        pairs_with_vectors = join_with_col_renaming(
+            pairs, user_vectors, on_col_name="user_idx", how="inner"
+        )
+        pairs_with_vectors = pairs_with_vectors.join(
+            self.vectors, on=sf.col("item_idx") == sf.col("item"), how="inner"
+        ).drop("item")
 
-        with JobGroup(
-            f"{self.__class__.__name__}._predict_pairs_inner(), pairs_with_vectors",
-            "Model inference (inside 2.2.3)",
-        ):
-            res = pairs_with_vectors.select(
-                "user_idx",
-                sf.col("item_idx"),
-                (
-                    vector_dot(sf.col("vector"), sf.col("user_vector"))
-                    + sf.lit(self.rank)
-                ).alias("relevance"),
-            )
-            # res = res.cache()
-            # res.write.mode("overwrite").format("noop").save()
+        res = pairs_with_vectors.select(
+            "user_idx",
+            sf.col("item_idx"),
+            (
+                vector_dot(sf.col("vector"), sf.col("user_vector"))
+                + sf.lit(self.rank)
+            ).alias("relevance"),
+        )
     
         return res
 
@@ -317,28 +282,16 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
 
             params = self._nmslib_hnsw_params
 
-            with JobGroup(
-                "self._get_user_vectors()",
-                "_predict (inside 1)",
-            ):
-                user_vectors = self._get_user_vectors(users, log)
-                # user_vectors = user_vectors.cache()
-                # user_vectors.write.mode("overwrite").format("noop").save()
+            user_vectors = self._get_user_vectors(users, log)
 
-            with JobGroup(
-                "select vector_to_array",
-                "_predict (inside 2)",
-            ):
-                # converts to pandas_udf compatible format
-                user_vectors = (
-                        user_vectors
-                        .select(
-                            "user_idx",
-                            vector_to_array("user_vector").alias("user_vector")
-                        )
-                )
-                # user_vectors = user_vectors.cache()
-                # user_vectors.write.mode("overwrite").format("noop").save()
+            # converts to pandas_udf compatible format
+            user_vectors = (
+                    user_vectors
+                    .select(
+                        "user_idx",
+                        vector_to_array("user_vector").alias("user_vector")
+                    )
+            )
 
             user_to_max_items = (
                     log.groupBy('user_idx')

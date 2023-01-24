@@ -497,40 +497,25 @@ class BaseRecommender(ABC):
             message = f"k = {k} > number of items = {num_items}"
             self.logger.debug(message)
 
-        with log_exec_timer(f"{type(self).__name__}._predict()") as _predict_timer, JobGroup(
-            f"{type(self).__name__}._predict_wrap()", f"{type(self).__name__}._predict()"
-        ):
-            recs = self._predict(
-                log,
-                k,
-                users,
-                items,
-                user_features,
-                item_features,
-                filter_seen_items,
-            )
-            # recs = recs.cache()
-            # recs.write.mode("overwrite").format("noop").save()
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_metric("_predict_sec", _predict_timer.duration)
+        recs = self._predict(
+            log,
+            k,
+            users,
+            items,
+            user_features,
+            item_features,
+            filter_seen_items,
+        )
 
         if filter_seen_items and log:
-            with log_exec_timer("_filter_seen()") as _filter_seen_timer, JobGroup(
-                f"{type(self).__name__}._predict_wrap()", f"{self.__class__.__name__}._filter_seen()"
-            ):
-                recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
-                # recs = recs.cache()
-                # recs.write.mode("overwrite").format("noop").save()
-            if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-                mlflow.log_metric("filter_seen_sec", _filter_seen_timer.duration)
+            recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
         
         output = None
-        with JobGroup(f"{type(self).__name__}._predict_wrap()", f"{type(self).__name__}._predict_wrap()"):
-            if recs_file_path is not None:
-                recs.write.parquet(path=recs_file_path, mode="overwrite")
-            else:
-                output = recs.cache()
-                output.count()
+        if recs_file_path is not None:
+            recs.write.parquet(path=recs_file_path, mode="overwrite")
+        else:
+            output = recs.cache()
+            output.count()
 
         self._clear_model_temp_view("filter_seen_users_log")
         self._clear_model_temp_view("filter_seen_num_seen")

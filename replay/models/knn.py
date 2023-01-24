@@ -233,17 +233,13 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
     ) -> None:
-        with JobGroup(
-            f"{self.__class__.__name__}._fit()",
-            "self.similarity",
-        ):
-            df = log.select("user_idx", "item_idx", "relevance")
-            if not self.use_relevance:
-                df = df.withColumn("relevance", sf.lit(1))
+        df = log.select("user_idx", "item_idx", "relevance")
+        if not self.use_relevance:
+            df = df.withColumn("relevance", sf.lit(1))
 
-            similarity_matrix = self._get_similarity(df)
-            self.similarity = self._get_k_most_similar(similarity_matrix)
-            self.similarity.cache().count()
+        similarity_matrix = self._get_similarity(df)
+        self.similarity = self._get_k_most_similar(similarity_matrix)
+        self.similarity.cache().count()
 
         if self._nmslib_hnsw_params:
 
@@ -258,12 +254,8 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
 
             items_count = log.select(sf.max('item_idx')).first()[0] + 1 
             similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
-            self._build_nmslib_hnsw_index(similarity_df, None, self._nmslib_hnsw_params, index_type="sparse", items_count=items_count)
-
-            self._user_to_max_items = (
-                    log.groupBy('user_idx')
-                    .agg(sf.count('item_idx').alias('num_items'))
-            )
+            self._build_nmslib_hnsw_index(similarity_df, None, self._nmslib_hnsw_params, index_type="sparse",
+                                          items_count=items_count)
 
     def refit(
         self,
@@ -271,15 +263,7 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         previous_log: Optional[Union[str, DataFrame]] = None,
         merged_log_path: Optional[str] = None,
     ) -> None:
-
-        df = log.select("user_idx", "item_idx", "relevance")
-        if not self.use_relevance:
-            df = df.withColumn("relevance", sf.lit(1))
-
-        similarity_matrix = self._get_similarity_refit(df, previous_log)
-        # self.similarity = self._get_k_most_similar(similarity_matrix)
-        # self.similarity.cache().count()
-
+        pass
 
     # pylint: disable=too-many-arguments
     def _predict(
@@ -294,19 +278,15 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
     ) -> DataFrame:
         
         if self._nmslib_hnsw_params:
-
             params = self._nmslib_hnsw_params
-         
-            with JobGroup(
-                f"{self.__class__.__name__}._predict()",
-                "_infer_hnsw_index()",
-            ):
-                users = users.join(self._user_to_max_items, on="user_idx")
-                
-                res = self._infer_nmslib_hnsw_index(users, "",
-                                                    params, k,
-                                                    index_type="sparse")
-
+            user_to_max_items = (
+                log.groupBy('user_idx')
+                .agg(sf.count('item_idx').alias('num_items'))
+            )
+            users = users.join(user_to_max_items, on="user_idx")
+            res = self._infer_nmslib_hnsw_index(users, "",
+                                                params, k,
+                                                index_type="sparse")
             return res
 
         return self._predict_pairs_inner(
