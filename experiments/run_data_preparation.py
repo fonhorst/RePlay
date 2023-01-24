@@ -168,7 +168,7 @@ def main(spark: SparkSession, dataset_name: str):
             # indexer.fit(
             #     users=log.select("user_id"), items=log.select("item_id")
             # )
-            indexer_estimator = IndexerEstimator(user_col="user_id", item_col="item_id")  # , n_parts=4
+            indexer_estimator = IndexerEstimator(user_col="user_id", item_col="item_id")
             indexer = indexer_estimator.fit(log)
             # indexer.write().overwrite().save("file:///tmp/indexer_transformer")
         mlflow.log_metric("indexer_fit_sec", indexer_fit_timer.duration)
