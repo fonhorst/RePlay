@@ -75,6 +75,14 @@ All params:
 
     USE_BUCKETING: if set to "True", then train and test dataframes will be bucketed
 
+    DATASETS_DIR: where train and test datasets will be stored
+
+    FORCE_RECREATE_DATASETS: if set to "True", then train and test dataframes will be recreated
+
+    RS_DATASETS_DIR: where files will be downloaded by the rs_datasets package
+
+    FILTER_LOG: if set to "True", the log will be filtered by "relevance" >= 1
+
 """
 
 import logging
@@ -90,7 +98,7 @@ from experiment_utils import (
     get_spark_configs_as_dict,
     check_number_of_allocated_executors,
     get_partition_num,
-    get_log_info,
+    get_log_info, prepare_datasets,
 )
 from replay.dataframe_bucketizer import DataframeBucketizer
 from replay.experiment import Experiment
@@ -154,6 +162,8 @@ def main(spark: SparkSession, dataset_name: str):
             }
         )
         mlflow.log_params(params)
+
+        prepare_datasets(dataset_name, spark, partition_num)
 
         train, test, user_features = get_datasets(
             dataset_name, spark, partition_num
