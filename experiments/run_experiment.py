@@ -63,23 +63,17 @@ All params:
 
     ALS_RANK: rank for ALS model, i.e. length of ALS factor vectors
 
+    NUM_BLOCKS: num_item_blocks and num_user_blocks values in ALS model. Default: 10.
+
     WORD2VEC_RANK: rank of Word2Vec model
 
     NUM_NEIGHBOURS: ItemKNN param
 
     NUM_CLUSTERS: number of clusters in Cluster model
 
-    DRIVER_CORES:
-
-    DRIVER_MEMORY:
-
-    DRIVER_MAX_RESULT_SIZE:
-
-    EXECUTOR_CORES:
-
-    EXECUTOR_MEMORY:
-
     USE_SCALA_UDFS_METRICS: if set to "True", then metrics will be calculated via scala UDFs
+
+    USE_BUCKETING: if set to "True", then train and test dataframes will be bucketed
 
 """
 
@@ -141,7 +135,7 @@ def main(spark: SparkSession, dataset_name: str):
     mlflow_tracking_uri = os.environ.get(
         "MLFLOW_TRACKING_URI", "http://node2.bdcl:8822"
     )
-    model_name = os.environ.get("MODEL", "Word2VecRec")
+    model_name = os.environ["MODEL"]
 
     partition_num = get_partition_num(spark_conf)
 
