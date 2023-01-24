@@ -83,6 +83,7 @@ All params:
 
 """
 
+import logging
 import os
 
 import mlflow
@@ -111,6 +112,22 @@ from replay.utils import (
     log_exec_timer,
 )
 from replay.utils import logger
+
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
+spark_logger = logging.getLogger("py4j")
+spark_logger.setLevel(logging.WARN)
+
+formatter = logging.Formatter(
+    "%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%d/%m/%y %H:%M:%S",
+)
+hdlr = logging.StreamHandler()
+hdlr.setFormatter(formatter)
+logger.addHandler(hdlr)
+logger.setLevel(logging.DEBUG)
 
 
 def main(spark: SparkSession, dataset_name: str):
