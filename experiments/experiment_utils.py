@@ -109,31 +109,6 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
             num_user_blocks=num_blocks,
             hnswlib_params=hnswlib_params,
         )
-    # elif model_name == "ALS_SCANN":
-    #     als_rank = int(os.environ.get("ALS_RANK", 100))
-    #     build_index_on = "executor"  # driver executor
-    #     num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
-    #     scann_params = {
-    #         "distance_measure": "dot_product",
-    #         "num_neighbors": 10,
-    #         "index_path": f"/opt/spark_data/replay_datasets/scann_index_{spark_app_id}",
-    #         "build_index_on": build_index_on,
-    #     }
-    #     mlflow.log_params(
-    #         {
-    #             "ALS_rank": als_rank,
-    #             "num_blocks": num_blocks,
-    #             "build_index_on": build_index_on,
-    #             "scann_params": scann_params,
-    #         }
-    #     )
-    #     model = ALSWrap(
-    #         rank=als_rank,
-    #         seed=seed,
-    #         num_item_blocks=num_blocks,
-    #         num_user_blocks=num_blocks,
-    #         scann_params=scann_params,
-    #     )
     elif model_name == "SLIM":
         model = SLIM(seed=seed)
     elif model_name == "SLIM_NMSLIB_HNSW":

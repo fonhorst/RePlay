@@ -175,9 +175,6 @@ class NmslibHnswMixin:
                     row_ind = pdf["item_idx_two"].values
                     col_ind = pdf["item_idx_one"].values
 
-                    # M = pdf['item_idx_one'].max() + 1
-                    # N = pdf['item_idx_two'].max() + 1
-
                     sim_matrix_tmp = csr_matrix(
                         (data, (row_ind, col_ind)),
                         shape=(items_count, items_count),

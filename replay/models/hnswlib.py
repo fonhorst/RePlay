@@ -195,7 +195,6 @@ class HnswlibMixin:
             tmp_file_path = os.path.join(
                 temp_path, "hnswlib_index_" + self.uid
             )
-            # index.saveIndex(tmp_file_path)
             index.save_index(tmp_file_path)
             spark = SparkSession.getActiveSession()
             spark.sparkContext.addFile("file://" + tmp_file_path)
@@ -257,7 +256,7 @@ class HnswlibMixin:
         )
 
         @pandas_udf(return_type)
-        def infer_index( # user_ids: pd.Series,
+        def infer_index(
             vectors: pd.Series, num_items: pd.Series
         ) -> pd.DataFrame:
             index_file_manager = index_file_manager_broadcast.value
