@@ -2,7 +2,7 @@ import logging
 import os
 import shutil
 import weakref
-from typing import Any, Dict, Optional, Iterator
+from typing import Any, Dict, Optional, Iterator, Union
 import uuid
 
 import numpy as np
@@ -16,6 +16,8 @@ from pyspark.sql import SparkSession
 from pyspark.sql import DataFrame, Window, functions as sf
 from pyspark.sql.functions import pandas_udf
 from scipy.sparse import csr_matrix
+
+from replay.ann.ann_mixin import ANNMixin
 from replay.session_handler import State
 
 from replay.utils import FileSystem, JobGroup, get_filesystem
@@ -118,10 +120,19 @@ class NmslibIndexFileManager:
         return self._index
 
 
-class NmslibHnswMixin:
+class NmslibHnswMixin(ANNMixin):
     """Mixin that provides methods to build nmslib hnsw index and infer it.
     Also provides methods to saving and loading index to/from disk.
     """
+
+    def _infer_ann_index(self, vectors: DataFrame, features_col: str, params: Dict[str, Union[int, str]], k: int,
+                         index_dim: str = None, index_type: str = None) -> DataFrame:
+        return self._infer_nmslib_hnsw_index(vectors, features_col, params, k, index_type)
+
+    def _build_ann_index(self, vectors: DataFrame, features_col: str, params: Dict[str, Union[int, str]],
+                         dim: int = None, num_elements: int = None, id_col: Optional[str] = None,
+                         index_type: str = None, items_count: Optional[int] = None) -> None:
+        self._build_nmslib_hnsw_index(vectors, features_col, params, index_type, items_count)
 
     def __init__(self):
         # A unique id for the object.
@@ -134,7 +145,7 @@ class NmslibHnswMixin:
         params: Dict[str, Any],
         index_type: str = None,
         items_count: Optional[int] = None,
-    ):
+    ) -> None:
         """Builds hnsw index and dump it to hdfs or disk.
 
         Args:
@@ -404,7 +415,7 @@ class NmslibHnswMixin:
         params: Dict[str, Any],
         k: int,
         index_type: str = None,
-    ):
+    ) -> DataFrame:
 
         if params["build_index_on"] == "executor":
             filesystem, hdfs_uri, index_path = get_filesystem(

@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Dict, Any
 
 import numpy as np
 import pyspark.sql.functions as sf
@@ -20,6 +20,42 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
     """Wrapper for `Spark ALS
     <https://spark.apache.org/docs/latest/api/python/pyspark.mllib.html#pyspark.mllib.recommendation.ALS>`_.
     """
+
+    def _get_ann_infer_params(self) -> Dict[str, Any]:
+        return {
+            "features_col": "user_factors",
+            "params": self._hnswlib_params,
+            "index_dim": self.rank,
+        }
+
+    def _get_vectors_to_infer_ann(self, log: DataFrame, users: DataFrame) -> DataFrame:
+        user_vectors, _ = self.get_features(users)
+        user_to_max_items = (
+            log.groupBy('user_idx')
+            .agg(sf.count('item_idx').alias('num_items'))
+        )
+        user_vectors = user_vectors.join(user_to_max_items, on="user_idx")
+        return user_vectors
+
+    def _get_ann_build_params(self, log: DataFrame):
+        self.num_elements = log.select("item_idx").distinct().count()
+        return {
+            "features_col": "item_factors",
+            "params": self._hnswlib_params,
+            "dim": self.rank,
+            "num_elements": self.num_elements,
+            "id_col": "item_idx",
+        }
+
+    def _get_vectors_to_build_ann(self, log: DataFrame) -> DataFrame:
+        item_vectors, _ = self.get_features(
+            log.select("item_idx").distinct()
+        )
+        return item_vectors
+
+    @property
+    def _use_ann(self) -> bool:
+        return self._hnswlib_params is not None
 
     _seed: Optional[int] = None
     _search_space = {
@@ -98,16 +134,6 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         self.model.userFactors.cache()
         self.model.itemFactors.count()
         self.model.userFactors.count()
-
-        if self._hnswlib_params:
-            item_vectors, _ = self.get_features(
-                log.select("item_idx").distinct()
-            )
-
-            self.num_elements = log.select("item_idx").distinct().count()
-            print(f"index 'num_elements' = {self.num_elements}")
-            self._build_hnsw_index(item_vectors, 'item_factors', self._hnswlib_params, self.rank, self.num_elements,
-                                   id_col='item_idx')
 
     def refit(self, log: DataFrame, previous_log: Optional[Union[str, DataFrame]] = None, merged_log_path: Optional[str] = None) -> None:
         new_users = log.select('user_idx').distinct().join(previous_log.select('user_idx').distinct(), how='left_anti', on='user_idx')
@@ -293,18 +319,6 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
-        
-        if self._hnswlib_params:
-            params = self._hnswlib_params
-            user_vectors, _ = self.get_features(users)
-            user_to_max_items = (
-                    log.groupBy('user_idx')
-                    .agg(sf.count('item_idx').alias('num_items'))
-            )
-            user_vectors = user_vectors.join(user_to_max_items, on="user_idx")
-            res = self._infer_hnsw_index(user_vectors, "user_factors", params, k, self.rank)
-
-            return res
 
         max_seen = 0
         if filter_seen_items and log is not None:

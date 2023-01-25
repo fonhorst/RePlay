@@ -2,7 +2,7 @@ import logging
 import os
 import shutil
 import weakref
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, Optional, Union
 import uuid
 
 import numpy as np
@@ -15,6 +15,8 @@ from pyspark import SparkFiles
 from pyspark.sql import SparkSession
 from pyspark.sql import DataFrame, functions as sf
 from pyspark.sql.functions import pandas_udf
+
+from replay.ann.ann_mixin import ANNMixin
 from replay.session_handler import State
 
 from replay.utils import FileSystem, JobGroup, get_filesystem
@@ -77,10 +79,19 @@ class HnswlibIndexFileManager:
         return self._index
 
 
-class HnswlibMixin:
+class HnswlibMixin(ANNMixin):
     """Mixin that provides methods to build hnswlib index and infer it.
     Also provides methods to saving and loading index to/from disk.
     """
+
+    def _infer_ann_index(self, vectors: DataFrame, features_col: str, params: Dict[str, Union[int, str]], k: int,
+                         index_dim: str = None, index_type: str = None) -> DataFrame:
+        return self._infer_hnsw_index(vectors, features_col, params, k, index_dim)
+
+    def _build_ann_index(self, vectors: DataFrame, features_col: str, params: Dict[str, Union[int, str]],
+                         dim: int = None, num_elements: int = None, id_col: Optional[str] = None,
+                         index_type: str = None, items_count: Optional[int] = None) -> None:
+        self._build_hnsw_index(vectors, features_col, params, dim, num_elements, id_col)
 
     def __init__(self):
         #: A unique id for the object.
@@ -94,7 +105,7 @@ class HnswlibMixin:
         dim: int,
         num_elements: int,
         id_col: Optional[str] = None,
-    ):
+    ) -> None:
         """Builds hnsw index and dump it to hdfs or disk.
 
         Args:
