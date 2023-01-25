@@ -130,35 +130,22 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
         mlflow.log_param("num_neighbours", num_neighbours)
         model = ItemKNN(num_neighbours=num_neighbours)
     elif model_name == "ItemKNN_NMSLIB_HNSW":
+        num_neighbours = int(os.environ.get("NUM_NEIGHBOURS", 10))
         nmslib_hnsw_params = get_nmslib_hnsw_params(spark_app_id)
         mlflow.log_params(
             {
                 "build_index_on": nmslib_hnsw_params["build_index_on"],
                 "nmslib_hnsw_params": nmslib_hnsw_params,
+                "num_neighbours": num_neighbours
             }
         )
-        model = ItemKNN(nmslib_hnsw_params=nmslib_hnsw_params)
+        model = ItemKNN(num_neighbours=num_neighbours, nmslib_hnsw_params=nmslib_hnsw_params)
     elif model_name == "LightFM":
         model = LightFMWrap(random_state=seed)
     elif model_name == "Word2VecRec":
         word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
         mlflow.log_param("word2vec_rank", word2vec_rank)
         model = Word2VecRec(rank=word2vec_rank, seed=seed)
-    elif model_name == "Word2VecRec_NMSLIB_HNSW":
-        nmslib_hnsw_params = get_nmslib_hnsw_params(spark_app_id)
-        word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
-        mlflow.log_params(
-            {
-                "build_index_on": nmslib_hnsw_params["build_index_on"],
-                "nmslib_hnsw_params": nmslib_hnsw_params,
-                "word2vec_rank": word2vec_rank,
-            }
-        )
-        model = Word2VecRec(
-            rank=word2vec_rank,
-            seed=seed,
-            nmslib_hnsw_params=nmslib_hnsw_params,
-        )
     elif model_name == "Word2VecRec_HNSWLIB":
         hnswlib_params = get_hnswlib_params(spark_app_id)
         word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
