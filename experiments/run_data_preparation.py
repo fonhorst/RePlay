@@ -7,7 +7,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as sf
 from rs_datasets import MovieLens, MillionSongDataset
 
-from replay.data_preparator import DataPreparator, Indexer, IndexerEstimator, JoinIndexerTransformer
+from replay.data_preparator import DataPreparator, Indexer, JoinBasedIndexerEstimator, JoinBasedIndexerTransformer
 from replay.session_handler import get_spark_session
 from replay.splitters import DateSplitter, UserSplitter
 from replay.utils import log_exec_timer
@@ -168,7 +168,7 @@ def main(spark: SparkSession, dataset_name: str):
             # indexer.fit(
             #     users=log.select("user_id"), items=log.select("item_id")
             # )
-            indexer_estimator = IndexerEstimator(user_col="user_id", item_col="item_id")
+            indexer_estimator = JoinBasedIndexerEstimator(user_col="user_id", item_col="item_id")
             indexer = indexer_estimator.fit(log)
             # indexer.write().overwrite().save("file:///tmp/indexer_transformer")
         mlflow.log_metric("indexer_fit_sec", indexer_fit_timer.duration)

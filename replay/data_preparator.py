@@ -223,7 +223,7 @@ class JoinIndexerMLReader(MLReader):
         user_col_2_index_map = spark.read.parquet(join(path, "user_col_2_index_map.parquet"))
         item_col_2_index_map = spark.read.parquet(join(path, "item_col_2_index_map.parquet"))
 
-        indexer = JoinIndexerTransformer(
+        indexer = JoinBasedIndexerTransformer(
             user_col=args["user_col"],
             user_type=args["user_type"],
             user_col_2_index_map=user_col_2_index_map,
@@ -236,7 +236,7 @@ class JoinIndexerMLReader(MLReader):
         return indexer
 
 
-class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
+class JoinBasedIndexerTransformer(Transformer, MLWritable, MLReadable):
     def __init__(
             self,
             user_col: str,
@@ -245,7 +245,8 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
             item_type: str,
             user_col_2_index_map: DataFrame,
             item_col_2_index_map: DataFrame,
-            update_map_on_transform: bool = False
+            update_map_on_transform: bool = False,
+            force_broadcast_on_mapping_joins: bool = True
     ):
         self.user_col = user_col
         self.item_col = item_col
@@ -254,6 +255,7 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
         self.user_col_2_index_map = user_col_2_index_map
         self.item_col_2_index_map = item_col_2_index_map
         self.update_map_on_transform = update_map_on_transform
+        self.force_broadcast_on_mapping_joins = force_broadcast_on_mapping_joins
 
     @property
     def _init_args(self):
@@ -262,12 +264,31 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
             "item_col": self.item_col,
             "user_type": self.user_type,
             "item_type": self.item_type,
-            "update_map_on_transform": self.update_map_on_transform
+            "update_map_on_transform": self.update_map_on_transform,
+            "force_broadcast_on_mapping_joins": self.force_broadcast_on_mapping_joins
         }
 
     def set_update_map_on_transform(self, value: bool):
         """Sets 'update_map_on_transform' flag"""
         self.update_map_on_transform = value
+
+    def set_force_broadcast_on_mapping_joins(self, value: bool):
+        """Sets 'force_broadcast_on_mapping_joins' flag"""
+        self.force_broadcast_on_mapping_joins = value
+
+    def _get_item_mapping(self) -> DataFrame:
+        if self.force_broadcast_on_mapping_joins:
+            mapping = sf.broadcast(self.item_col_2_index_map)
+        else:
+            mapping = self.item_col_2_index_map
+        return mapping
+
+    def _get_user_mapping(self) -> DataFrame:
+        if self.force_broadcast_on_mapping_joins:
+            mapping = sf.broadcast(self.user_col_2_index_map)
+        else:
+            mapping = self.user_col_2_index_map
+        return mapping
 
     def write(self) -> MLWriter:
         """Returns MLWriter instance that can save the Transformer instance."""
@@ -281,23 +302,23 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
     def _update_maps(self, df: DataFrame):
 
         new_items = (
-            df.join(self.item_col_2_index_map, on=self.item_col, how="left_anti")
+            df.join(self._get_item_mapping(), on=self.item_col, how="left_anti")
             .select(self.item_col).distinct()
         )
         prev_item_count = self.item_col_2_index_map.count()
         new_items_map = (
-            IndexerEstimator.get_map(new_items, self.item_col, "item_idx")
+            JoinBasedIndexerEstimator.get_map(new_items, self.item_col, "item_idx")
             .select(self.item_col, (sf.col("item_idx") + prev_item_count).alias("item_idx"))
         )
         self.item_col_2_index_map = self.item_col_2_index_map.union(new_items_map)
 
         new_users = (
-            df.join(self.user_col_2_index_map, on=self.user_col, how="left_anti")
+            df.join(self._get_user_mapping(), on=self.user_col, how="left_anti")
             .select(self.user_col).distinct()
         )
         prev_user_count = self.user_col_2_index_map.count()
         new_users_map = (
-            IndexerEstimator.get_map(new_users, self.user_col, "user_idx")
+            JoinBasedIndexerEstimator.get_map(new_users, self.user_col, "user_idx")
             .select(self.user_col, (sf.col("user_idx") + prev_user_count).alias("user_idx"))
         )
         self.user_col_2_index_map = self.user_col_2_index_map.union(new_users_map)
@@ -309,13 +330,13 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
 
         if self.item_col in df.columns:
             remaining_cols = df.drop(self.item_col).columns
-            df = df.join(self.item_col_2_index_map, on=self.item_col, how="left").select(
+            df = df.join(self._get_item_mapping(), on=self.item_col, how="left").select(
                 sf.col("item_idx").cast("int").alias("item_idx"),
                 *remaining_cols,
             )
         if self.user_col in df.columns:
             remaining_cols = df.drop(self.user_col).columns
-            df = df.join(self.user_col_2_index_map, on=self.user_col, how="left").select(
+            df = df.join(self._get_user_mapping(), on=self.user_col, how="left").select(
                 sf.col("user_idx").cast("int").alias("user_idx"),
                 *remaining_cols,
             )
@@ -330,20 +351,20 @@ class JoinIndexerTransformer(Transformer, MLWritable, MLReadable):
         """
         if "item_idx" in df.columns:
             remaining_cols = df.drop("item_idx").columns
-            df = df.join(self.item_col_2_index_map, on="item_idx", how="left").select(
+            df = df.join(self._get_item_mapping(), on="item_idx", how="left").select(
                 sf.col(self.item_col).cast(self.item_type).alias(self.item_col),
                 *remaining_cols,
             )
         if "user_idx" in df.columns:
             remaining_cols = df.drop("user_idx").columns
-            df = df.join(self.user_col_2_index_map, on="user_idx", how="left").select(
+            df = df.join(self._get_user_mapping(), on="user_idx", how="left").select(
                 sf.col(self.user_col).cast(self.user_type).alias(self.user_col),
                 *remaining_cols,
             )
         return df
 
 
-class IndexerEstimator(Estimator):
+class JoinBasedIndexerEstimator(Estimator):
 
     def __init__(self, user_col="user_id", item_col="item_id"):
         """
@@ -383,7 +404,7 @@ class IndexerEstimator(Estimator):
             self.item_col
         ].dataType
 
-        return JoinIndexerTransformer(
+        return JoinBasedIndexerTransformer(
             user_col=self.user_col,
             user_type=str(self.user_type),
             item_col=self.item_col,
