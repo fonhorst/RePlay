@@ -1,27 +1,16 @@
-import os
-import tempfile
 from typing import Optional
-
-import mlflow
-import numpy as np
-import pandas as pd
-import nmslib
-
-from pyarrow import fs
 
 from pyspark.ml.feature import Word2Vec
 from pyspark.ml.functions import vector_to_array
+from pyspark.ml.stat import Summarizer
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
-# from pyspark.sql.functions import pandas_udf
-from pyspark.ml.stat import Summarizer
-# from pyspark.sql import SparkSession
 
 from replay.models.base_rec import Recommender, ItemVectorModel
 from replay.models.hnswlib import HnswlibMixin
 from replay.models.nmslib_hnsw import NmslibHnswMixin
-from replay.utils import JobGroup, log_exec_timer, multiply_scala_udf, vector_dot, vector_mult, join_with_col_renaming
+from replay.utils import multiply_scala_udf, vector_dot, join_with_col_renaming
 
 
 # pylint: disable=too-many-instance-attributes

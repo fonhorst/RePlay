@@ -15,7 +15,6 @@ import collections
 import logging
 from abc import ABC, abstractmethod
 from copy import deepcopy
-import os
 from typing import (
     Any,
     Dict,
@@ -28,7 +27,6 @@ from typing import (
     Tuple,
 )
 
-import mlflow
 import numpy as np
 import pandas as pd
 from numpy.random import default_rng
@@ -43,14 +41,11 @@ from replay.metrics import Metric, NDCG
 from replay.optuna_objective import SplitData, MainObjective
 from replay.session_handler import State
 from replay.utils import (
-    JobGroup,
     cache_temp_view,
     convert2spark,
     cosine_similarity,
     drop_temp_view,
     get_top_k,
-    get_top_k_recs,
-    log_exec_timer,
     vector_euclidean_distance_similarity,
     vector_dot,
 )

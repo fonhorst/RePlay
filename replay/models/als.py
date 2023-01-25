@@ -1,22 +1,19 @@
-import os
 from typing import Optional, Tuple, Union
 
-import pyspark.sql.functions as sf
-import mlflow
 import numpy as np
-
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.types import DoubleType
-from pyspark.sql.types import ArrayType, FloatType
+import pyspark.sql.functions as sf
+from pyspark.sql import DataFrame
 from pyspark.sql.functions import udf
+from pyspark.sql.types import ArrayType, FloatType
+from pyspark.sql.types import DoubleType
 from scipy.sparse import csr_matrix, csc_matrix
+from sklearn.linear_model import Ridge
 
 from replay.models.base_rec import Recommender, ItemVectorModel
 from replay.models.hnswlib import HnswlibMixin
-from replay.spark_custom_models.recommendation import ALS, ALSModel
 from replay.session_handler import State
-from replay.utils import JobGroup, list_to_vector_udf, log_exec_timer
-from sklearn.linear_model import Ridge
+from replay.spark_custom_models.recommendation import ALS, ALSModel
+from replay.utils import list_to_vector_udf
 
 
 class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):

@@ -4,20 +4,17 @@ Base classes for quality and diversity metrics.
 import logging
 import operator
 from abc import ABC, abstractmethod
-import os
 from typing import Dict, List, Tuple, Union, Optional
 
 import pandas as pd
-import mlflow
+from pyspark.sql import Column
 from pyspark.sql import DataFrame
+from pyspark.sql import Window
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
-from pyspark.sql import Window
 from scipy.stats import norm
-from pyspark.sql import Column
 
 from replay.constants import AnyDataFrame, IntOrList, NumType
-from replay.utils import JobGroup, convert2spark, log_exec_timer
 from replay.utils import convert2spark, get_top_k_recs
 
 

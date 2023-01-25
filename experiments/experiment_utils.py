@@ -24,7 +24,7 @@ from replay.models import (
     ClusterRec,
     UCB,
 )
-from replay.utils import log_exec_timer, getNumberOfAllocatedExecutors
+from replay.utils import log_exec_timer, get_number_of_allocated_executors
 from replay.data_preparator import DataPreparator, Indexer
 from replay.splitters import DateSplitter, UserSplitter
 
@@ -397,8 +397,6 @@ def get_datasets(
             test = spark.read.parquet(  # hdfs://node21.bdcl:9000
                 f"{os.environ['DATASETS_DIR']}MovieLens/test_{dataset_version}.parquet"
             )
-        train = train.repartition(partition_num)
-        test = test.repartition(partition_num)
     elif dataset_name.startswith("MillionSongDataset"):
         # MillionSongDataset__{fraction} pattern
         dataset_params = dataset_name.split("__")
@@ -417,8 +415,6 @@ def get_datasets(
                 test = spark.read.parquet(
                     f"{os.environ['DATASETS_DIR']}MillionSongDataset/fraction_{fraction}_test.parquet"
                 )
-                train = train.repartition(partition_num)
-                test = test.repartition(partition_num)
         else:
             if partition_num in {6, 12, 24, 48}:
                 with log_exec_timer(
@@ -444,8 +440,6 @@ def get_datasets(
                         f"{os.environ['DATASETS_DIR']}MillionSongDataset/"
                         f"fraction_{fraction}_test_24_partition.parquet"
                     )
-                    train = train.repartition(partition_num)
-                    test = test.repartition(partition_num)
     elif dataset_name == "ml1m":
         with log_exec_timer(
             "Train/test/user_features datasets reading to parquet"
@@ -460,8 +454,6 @@ def get_datasets(
             #     "/opt/spark_data/replay_datasets/ml1m_user_features.parquet"
             # )
             # .select("user_idx", "gender_idx", "age", "occupation", "zip_code_idx")
-            train = train.repartition(partition_num, "user_idx")
-            test = test.repartition(partition_num, "user_idx")
     elif dataset_name == "ml1m_first_level_default":
         with log_exec_timer(
             "Train/test/user_features datasets reading to parquet"
@@ -472,8 +464,6 @@ def get_datasets(
             test = spark.read.parquet(
                 "file:///opt/spark_data/replay/experiments/ml1m_first_level_default/test.parquet"
             )
-            train = train.repartition(partition_num, "user_idx")
-            test = test.repartition(partition_num, "user_idx")
     elif dataset_name == "ml1m_1m_users_3_7k_items":
         with log_exec_timer(
             "Train/test/user_features datasets reading to parquet"
@@ -488,9 +478,6 @@ def get_datasets(
                 "hdfs://node21.bdcl:9000/opt/spark_data/replay_datasets/"
                 "ml1m_1m_users_3_7k_items_user_features.parquet"
             )
-            print(user_features.printSchema())
-            train = train.repartition(partition_num, "user_idx")
-            test = test.repartition(partition_num, "user_idx")
     elif dataset_name == "ml1m_1m_users_37k_items":
         with log_exec_timer(
             "Train/test/user_features datasets reading to parquet"
@@ -504,10 +491,11 @@ def get_datasets(
             user_features = spark.read.parquet(
                 "/opt/spark_data/replay_datasets/ml1m_1m_users_37k_items_user_features.parquet"
             )
-            train = train.repartition(partition_num, "user_idx")
-            test = test.repartition(partition_num, "user_idx")
     else:
         raise ValueError("Unknown dataset.")
+
+    train = train.repartition(partition_num, "user_idx")
+    test = test.repartition(partition_num, "user_idx")
 
     mlflow.log_metric("parquets_read_sec", parquets_read_timer.duration)
 
@@ -539,11 +527,14 @@ def check_number_of_allocated_executors(spark: SparkSession):
         spark: spark session
     """
 
+    if os.environ.get('CHECK_NUMBER_OF_ALLOCATED_EXECUTORS') != "True":
+        return
+
     spark_conf: SparkConf = spark.sparkContext.getConf()
 
     # if enough executors is not allocated in the cluster mode, then we stop the experiment
     if spark_conf.get("spark.executor.instances"):
-        if getNumberOfAllocatedExecutors(spark) < int(
+        if get_number_of_allocated_executors(spark) < int(
             spark_conf.get("spark.executor.instances")
         ):
             raise Exception("Not enough executors to run experiment!")

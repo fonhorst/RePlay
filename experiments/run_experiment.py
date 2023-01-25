@@ -83,6 +83,11 @@ All params:
 
     FILTER_LOG: if set to "True", the log will be filtered by "relevance" >= 1
 
+    CHECK_NUMBER_OF_ALLOCATED_EXECUTORS: If set to "True", then number of allocated executors will be checked.
+    And if there are not enough executors, then the program will stop.
+
+    PARTITION_NUM: number of partition to repartition test and train dataframes.
+
 """
 
 import logging
