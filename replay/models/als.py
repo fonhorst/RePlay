@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Dict, Any
 
 import numpy as np
 import pyspark.sql.functions as sf
@@ -21,14 +21,14 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
     <https://spark.apache.org/docs/latest/api/python/pyspark.mllib.html#pyspark.mllib.recommendation.ALS>`_.
     """
 
-    def _get_ann_infer_params(self):
+    def _get_ann_infer_params(self) -> Dict[str, Any]:
         return {
             "features_col": "user_factors",
             "params": self._hnswlib_params,
             "index_dim": self.rank,
         }
 
-    def _get_vectors_to_infer_ann(self, log: DataFrame, users: DataFrame):
+    def _get_vectors_to_infer_ann(self, log: DataFrame, users: DataFrame) -> DataFrame:
         user_vectors, _ = self.get_features(users)
         user_to_max_items = (
             log.groupBy('user_idx')
@@ -47,14 +47,14 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
             "id_col": "item_idx",
         }
 
-    def _get_vectors_to_build_ann(self, log: DataFrame):
+    def _get_vectors_to_build_ann(self, log: DataFrame) -> DataFrame:
         item_vectors, _ = self.get_features(
             log.select("item_idx").distinct()
         )
         return item_vectors
 
     @property
-    def _use_ann(self):
+    def _use_ann(self) -> bool:
         return self._hnswlib_params is not None
 
     _seed: Optional[int] = None

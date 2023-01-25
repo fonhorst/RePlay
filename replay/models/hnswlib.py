@@ -85,12 +85,12 @@ class HnswlibMixin(ANNMixin):
     """
 
     def _infer_ann_index(self, vectors: DataFrame, features_col: str, params: Dict[str, Union[int, str]], k: int,
-                         index_dim: str = None, index_type: str = None):
+                         index_dim: str = None, index_type: str = None) -> DataFrame:
         return self._infer_hnsw_index(vectors, features_col, params, k, index_dim)
 
     def _build_ann_index(self, vectors: DataFrame, features_col: str, params: Dict[str, Union[int, str]],
                          dim: int = None, num_elements: int = None, id_col: Optional[str] = None,
-                         index_type: str = None, items_count: Optional[int] = None):
+                         index_type: str = None, items_count: Optional[int] = None) -> None:
         self._build_hnsw_index(vectors, features_col, params, dim, num_elements, id_col)
 
     def __init__(self):
@@ -105,7 +105,7 @@ class HnswlibMixin(ANNMixin):
         dim: int,
         num_elements: int,
         id_col: Optional[str] = None,
-    ):
+    ) -> None:
         """Builds hnsw index and dump it to hdfs or disk.
 
         Args:

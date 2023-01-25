@@ -65,7 +65,7 @@ class Word2VecRec(Recommender, ItemVectorModel, HnswlibMixin):
         return item_vectors
 
     @property
-    def _use_ann(self):
+    def _use_ann(self) -> bool:
         return self._hnswlib_params is not None
 
     idf: DataFrame

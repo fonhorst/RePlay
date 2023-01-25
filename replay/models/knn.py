@@ -43,7 +43,7 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         return similarity_df
 
     @property
-    def _use_ann(self):
+    def _use_ann(self) -> bool:
         return self._nmslib_hnsw_params is not None
 
     all_items: Optional[DataFrame]

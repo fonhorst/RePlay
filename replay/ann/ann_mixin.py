@@ -9,7 +9,7 @@ from replay.models.base_rec import BaseRecommender
 class ANNMixin(BaseRecommender):
     @property
     @abstractmethod
-    def _use_ann(self):
+    def _use_ann(self) -> bool:
         ...
 
     @abstractmethod
@@ -31,7 +31,7 @@ class ANNMixin(BaseRecommender):
         if self._use_ann:
             vectors = self._get_vectors_to_build_ann(log)
             ann_params = self._get_ann_build_params(log)
-            return self._build_ann_index(vectors, **ann_params)
+            self._build_ann_index(vectors, **ann_params)
 
     @abstractmethod
     def _get_vectors_to_infer_ann(
@@ -54,7 +54,7 @@ class ANNMixin(BaseRecommender):
         id_col: Optional[str] = None,
         index_type: str = None,
         items_count: Optional[int] = None,
-    ):
+    ) -> None:
         ...
 
     @abstractmethod
@@ -66,7 +66,7 @@ class ANNMixin(BaseRecommender):
         k: int,
         index_dim: str = None,
         index_type: str = None,
-    ):
+    ) -> DataFrame:
         ...
 
     def _inner_predict_wrap(
