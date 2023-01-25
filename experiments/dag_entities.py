@@ -249,9 +249,9 @@ DATASETS = {
     dataset.name: dataset for dataset in [
         DatasetInfo(
             name="ml100k",
-            log_path="/opt/spark_data/replay/ml100k_ratings.csv",
-            user_features_path="/opt/spark_data/replay/ml100k_users.csv",
-            item_features_path="/opt/spark_data/replay/ml100k_items.csv",
+            log_path="file:///opt/spark_data/replay/ml100k_ratings.csv",
+            user_features_path="file:///opt/spark_data/replay/ml100k_users.csv",
+            item_features_path="file:///opt/spark_data/replay/ml100k_items.csv",
             user_cat_features=["gender", "age", "occupation", "zip_code"],
             item_cat_features=['title', 'release_date', 'imdb_url', 'unknown',
                                'Action', 'Adventure', 'Animation', "Children's",
@@ -262,9 +262,9 @@ DATASETS = {
 
         DatasetInfo(
             name="ml1m",
-            log_path="/opt/spark_data/replay/ml1m_ratings.csv",
-            user_features_path="/opt/spark_data/replay/ml1m_users.csv",
-            item_features_path="/opt/spark_data/replay/ml1m_items.csv",
+            log_path="file:///opt/spark_data/replay/ml1m_ratings.csv",
+            user_features_path="file:///opt/spark_data/replay/ml1m_users.csv",
+            item_features_path="file:///opt/spark_data/replay/ml1m_items.csv",
             user_cat_features=["gender", "age", "occupation", "zip_code"],
             item_cat_features=['Crime', 'Romance', 'Thriller', 'Adventure',
                                "Children's", 'Drama', 'War', 'Documentary',
@@ -275,27 +275,27 @@ DATASETS = {
 
         DatasetInfo(
             name="ml10m",
-            log_path="/opt/spark_data/replay/ml10m_ratings.csv"
+            log_path="file:///opt/spark_data/replay/ml10m_ratings.csv"
         ),
 
         DatasetInfo(
             name="ml20m",
-            log_path="/opt/spark_data/replay/ml20m_ratings.csv"
+            log_path="file:///opt/spark_data/replay/ml20m_ratings.csv"
         ),
 
         DatasetInfo(
             name="ml25m",
-            log_path="/opt/spark_data/replay/ml25m_ratings.csv"
+            log_path="file:///opt/spark_data/replay/ml25m_ratings.csv"
         ),
 
         DatasetInfo(
             name="netflix",
-            log_path="/opt/spark_data/replay/netflix_correct_timestamp.csv"
+            log_path="file:///opt/spark_data/replay/netflix_correct_timestamp.csv"
         ),
 
         DatasetInfo(
             name="netflix_small",
-            log_path="/opt/spark_data/replay_datasets/Netflix/train_1m.parquet"
+            log_path="file:///opt/spark_data/replay_datasets/Netflix/train_1m.parquet"
         ),
 
         DatasetInfo(
@@ -305,7 +305,7 @@ DATASETS = {
 
         DatasetInfo(
             name="msd_small",
-            log_path="/opt/spark_data/replay_datasets/MillionSongDataset/train_1m.parquet"
+            log_path="file:///opt/spark_data/replay_datasets/MillionSongDataset/train_1m.parquet"
         )
     ]
 }

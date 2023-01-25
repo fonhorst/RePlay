@@ -359,31 +359,40 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
     return dag
 
 
-ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
-    dag_id="ml1m_first_level_dag",
+# ml1m_first_level_dag = build_fit_predict_first_level_models_dag(
+#     dag_id="ml1m_first_level_dag",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
+#     dataset=DATASETS["ml1m"]
+# )
+#
+# ml10m_first_level_dag = build_fit_predict_first_level_models_dag(
+#     dag_id="ml10m_first_level_dag",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
+#     dataset=DATASETS["ml10m"]
+# )
+#
+# ml20m_first_level_dag = build_fit_predict_first_level_models_dag(
+#     dag_id="ml20m_first_level_dag",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("ucb", "slim"),
+#     dataset=DATASETS["ml20m"]
+# )
+
+# DAG SUBMIT series
+
+ml1m_first_level_dag_submit = build_fit_predict_first_level_models_dag(
+    dag_id="ml1m_first_level_dag_submit",
     mlflow_exp_id="111",
-    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "cluster"),
+    model_params_map=_get_models_params("als"),
     dataset=DATASETS["ml1m"]
-)
-
-ml10m_first_level_dag = build_fit_predict_first_level_models_dag(
-    dag_id="ml10m_first_level_dag",
-    mlflow_exp_id="111",
-    model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
-    dataset=DATASETS["ml10m"]
-)
-
-ml20m_first_level_dag = build_fit_predict_first_level_models_dag(
-    dag_id="ml20m_first_level_dag",
-    mlflow_exp_id="111",
-    model_params_map=_get_models_params("ucb", "slim"),
-    dataset=DATASETS["ml20m"]
 )
 
 ml25m_first_level_dag_submit = build_fit_predict_first_level_models_dag(
     dag_id="ml25m_first_level_dag_submit",
     mlflow_exp_id="111",
-    model_params_map=_get_models_params("als"), #, "itemknn", "ucb", "slim"),
+    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "word2vec"), #, "itemknn", "ucb", "slim"),
     dataset=DATASETS["ml25m"]
 )
 
@@ -395,54 +404,54 @@ msd_first_level_dag_submit = build_fit_predict_first_level_models_dag(
 )
 
 
-netflix_first_level_dag = build_fit_predict_first_level_models_dag(
-    dag_id="netflix_first_level_dag",
-    mlflow_exp_id="111",
-    model_params_map=_get_models_params("ucb", "slim"),
-    dataset=DATASETS["netflix"]
-)
-
-netflix_small_first_level_dag = build_fit_predict_first_level_models_dag(
-    dag_id="netflix_small_first_level_dag",
-    mlflow_exp_id="111",
-    model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
-    dataset=DATASETS["netflix_small"]
-)
-
-
-msd_small_first_level_dag = build_fit_predict_first_level_models_dag(
-    dag_id="msd_small_first_level_dag",
-    mlflow_exp_id="111",
-    model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
-    dataset=DATASETS["msd_small"]
-)
-
-
-msd_small_combined_second_level_dag = build_combiner_second_level(
-    dag_id="msd_small_combined_second_level_dag",
-    mlflow_exp_id="111",
-    dataset=DATASETS["msd_small"]
-)
-
-
-msd_small_second_level_dag = build_fit_predict_second_level(
-    dag_id="msd_small_second_level_dag",
-    mlflow_exp_id="111",
-    model_name="lama_default",
-    dataset=DATASETS["msd_small"]
-)
-
-
-ml1m_second_level_dag = build_fit_predict_second_level(
-    dag_id="ml1m_second_level_dag",
-    mlflow_exp_id="111",
-    model_name="lama_default",
-    dataset=DATASETS["ml1m"]
-)
-
-
-ml1m_combined_second_level_dag = build_combiner_second_level(
-    dag_id="ml1m_combined_second_level_dag",
-    mlflow_exp_id="111",
-    dataset=DATASETS["ml1m"]
-)
+# netflix_first_level_dag = build_fit_predict_first_level_models_dag(
+#     dag_id="netflix_first_level_dag",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("ucb", "slim"),
+#     dataset=DATASETS["netflix"]
+# )
+#
+# netflix_small_first_level_dag = build_fit_predict_first_level_models_dag(
+#     dag_id="netflix_small_first_level_dag",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
+#     dataset=DATASETS["netflix_small"]
+# )
+#
+#
+# msd_small_first_level_dag = build_fit_predict_first_level_models_dag(
+#     dag_id="msd_small_first_level_dag",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("ucb", "slim", "als", "itemknn"),
+#     dataset=DATASETS["msd_small"]
+# )
+#
+#
+# msd_small_combined_second_level_dag = build_combiner_second_level(
+#     dag_id="msd_small_combined_second_level_dag",
+#     mlflow_exp_id="111",
+#     dataset=DATASETS["msd_small"]
+# )
+#
+#
+# msd_small_second_level_dag = build_fit_predict_second_level(
+#     dag_id="msd_small_second_level_dag",
+#     mlflow_exp_id="111",
+#     model_name="lama_default",
+#     dataset=DATASETS["msd_small"]
+# )
+#
+#
+# ml1m_second_level_dag = build_fit_predict_second_level(
+#     dag_id="ml1m_second_level_dag",
+#     mlflow_exp_id="111",
+#     model_name="lama_default",
+#     dataset=DATASETS["ml1m"]
+# )
+#
+#
+# ml1m_combined_second_level_dag = build_combiner_second_level(
+#     dag_id="ml1m_combined_second_level_dag",
+#     mlflow_exp_id="111",
+#     dataset=DATASETS["ml1m"]
+# )
