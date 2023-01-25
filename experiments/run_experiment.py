@@ -31,9 +31,7 @@ All params:
         ALS
         Explicit_ALS
         ALS_HNSWLIB
-        ALS_NMSLIB_HNSW (!)
         Word2VecRec
-        Word2VecRec_NMSLIB_HNSW
         Word2VecRec_HNSWLIB
         SLIM
         SLIM_NMSLIB_HNSW

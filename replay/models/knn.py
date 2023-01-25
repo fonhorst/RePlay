@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
@@ -9,11 +9,42 @@ from replay.models.base_rec import NeighbourRec
 from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.optuna_objective import ItemKNNObjective
 from replay.session_handler import State
-from replay.utils import JobGroup
 
 
 class ItemKNN(NeighbourRec, NmslibHnswMixin):
     """Item-based ItemKNN with modified cosine similarity measure."""
+
+    def _get_ann_infer_params(self) -> Dict[str, Any]:
+        return {
+            "features_col": "",
+            "params": self._nmslib_hnsw_params,
+            "index_type": "sparse",
+        }
+
+    def _get_vectors_to_infer_ann(self, log: DataFrame, users: DataFrame) -> DataFrame:
+        user_to_max_items = (
+            log.groupBy('user_idx')
+            .agg(sf.count('item_idx').alias('num_items'))
+        )
+        users = users.join(user_to_max_items, on="user_idx")
+        return users
+
+    def _get_ann_build_params(self, log: DataFrame) -> Dict[str, Any]:
+        items_count = log.select(sf.max('item_idx')).first()[0] + 1
+        return {
+            "features_col": None,
+            "params": self._nmslib_hnsw_params,
+            "index_type": "sparse",
+            "items_count": items_count,
+        }
+
+    def _get_vectors_to_build_ann(self, log: DataFrame) -> DataFrame:
+        similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
+        return similarity_df
+
+    @property
+    def _use_ann(self):
+        return self._nmslib_hnsw_params is not None
 
     all_items: Optional[DataFrame]
     dot_products: Optional[DataFrame]
@@ -252,11 +283,6 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
                     State().session.sparkContext.broadcast(interactions_matrix)
             )
 
-            items_count = log.select(sf.max('item_idx')).first()[0] + 1 
-            similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
-            self._build_nmslib_hnsw_index(similarity_df, None, self._nmslib_hnsw_params, index_type="sparse",
-                                          items_count=items_count)
-
     def refit(
         self,
         log: DataFrame,
@@ -276,18 +302,6 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
-        
-        if self._nmslib_hnsw_params:
-            params = self._nmslib_hnsw_params
-            user_to_max_items = (
-                log.groupBy('user_idx')
-                .agg(sf.count('item_idx').alias('num_items'))
-            )
-            users = users.join(user_to_max_items, on="user_idx")
-            res = self._infer_nmslib_hnsw_index(users, "",
-                                                params, k,
-                                                index_type="sparse")
-            return res
 
         return self._predict_pairs_inner(
             log=log,

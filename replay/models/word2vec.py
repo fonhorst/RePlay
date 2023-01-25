@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from pyspark.ml.feature import Word2Vec
 from pyspark.ml.functions import vector_to_array
@@ -9,15 +9,64 @@ from pyspark.sql import types as st
 
 from replay.models.base_rec import Recommender, ItemVectorModel
 from replay.models.hnswlib import HnswlibMixin
-from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.utils import multiply_scala_udf, vector_dot, join_with_col_renaming
 
 
 # pylint: disable=too-many-instance-attributes
-class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
+class Word2VecRec(Recommender, ItemVectorModel, HnswlibMixin):
     """
     Trains word2vec model where items ar treated as words and users as sentences.
     """
+
+    def _get_ann_infer_params(self) -> Dict[str, Any]:
+        return {
+            "features_col": "user_vector",
+            "params": self._hnswlib_params,
+            "index_dim": self.rank
+        }
+
+    def _get_vectors_to_infer_ann(self, log: DataFrame, users: DataFrame) -> DataFrame:
+        user_vectors = self._get_user_vectors(users, log)
+        # converts to pandas_udf compatible format
+        user_vectors = (
+            user_vectors
+            .select(
+                "user_idx",
+                vector_to_array("user_vector").alias("user_vector")
+            )
+        )
+        user_to_max_items = (
+            log.groupBy('user_idx')
+            .agg(sf.count('item_idx').alias('num_items'))
+        )
+        user_vectors = user_vectors.join(user_to_max_items, on="user_idx")
+        return user_vectors
+
+    def _get_ann_build_params(self, log: DataFrame) -> Dict[str, Any]:
+        self.num_elements = log.select("item_idx").distinct().count()
+        self.logger.debug(f"index 'num_elements' = {self.num_elements}")
+        return {
+            "features_col": "item_vector",
+            "params": self._hnswlib_params,
+            "dim": self.rank,
+            "num_elements": self.num_elements,
+            "id_col": "item_idx"
+        }
+
+    def _get_vectors_to_build_ann(self, log: DataFrame) -> DataFrame:
+        item_vectors = self._get_item_vectors()
+        item_vectors = (
+            item_vectors
+            .select(
+                "item_idx",
+                vector_to_array("item_vector").alias("item_vector")
+            )
+        )
+        return item_vectors
+
+    @property
+    def _use_ann(self):
+        return self._hnswlib_params is not None
 
     idf: DataFrame
     vectors: DataFrame
@@ -40,7 +89,6 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
         use_idf: bool = False,
         seed: Optional[int] = None,
         num_partitions: Optional[int] = None,
-        nmslib_hnsw_params: Optional[dict] = None,
         hnswlib_params: Optional[dict] = None,
     ):
         """
@@ -62,11 +110,8 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
         self.max_iter = max_iter
         self._seed = seed
         self._num_partitions = num_partitions
-        self._nmslib_hnsw_params = nmslib_hnsw_params
         self._hnswlib_params = hnswlib_params
 
-        if self._nmslib_hnsw_params:
-            NmslibHnswMixin.__init__(self)
         if self._hnswlib_params:
             HnswlibMixin.__init__(self)
 
@@ -80,21 +125,14 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
             "step_size": self.step_size,
             "max_iter": self.max_iter,
             "seed": self._seed,
-            "nmslib_hnsw_params": self._nmslib_hnsw_params,
             "hnswlib_params": self._hnswlib_params
         }
     
     def _save_model(self, path: str):
-        if self._nmslib_hnsw_params:
-            self._save_nmslib_hnsw_index(path)
-
         if self._hnswlib_params:
             self._save_hnswlib_index(path)
 
     def _load_model(self, path: str):
-        if self._nmslib_hnsw_params:
-            self._load_nmslib_hnsw_index(path)
-
         if self._hnswlib_params:
             self._load_hnswlib_index(path)
 
@@ -156,30 +194,6 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
             .select(sf.col("word").cast("int").alias("item"), "vector")
         )
         self.vectors.cache().count()
-
-        if self._nmslib_hnsw_params:
-            item_vectors = self._get_item_vectors()
-            item_vectors = (
-                    item_vectors
-                    .select(
-                        "item_idx",
-                        vector_to_array("item_vector").alias("item_vector")
-                    )
-            )
-            self._build_nmslib_hnsw_index(item_vectors, 'item_vector', self._nmslib_hnsw_params)
-
-        if self._hnswlib_params:
-            item_vectors = self._get_item_vectors()
-            item_vectors = (
-                    item_vectors
-                    .select(
-                        "item_idx",
-                        vector_to_array("item_vector").alias("item_vector")
-                    )
-            )
-            self.num_elements = log.select("item_idx").distinct().count()
-            self.logger.debug(f"index 'num_elements' = {self.num_elements}")
-            self._build_hnsw_index(item_vectors, 'item_vector', self._hnswlib_params, self.rank, self.num_elements, id_col='item_idx')
 
     def _clear_cache(self):
         if hasattr(self, "idf") and hasattr(self, "vectors"):
@@ -266,58 +280,6 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
-        
-        if self._nmslib_hnsw_params:
-
-            params = self._nmslib_hnsw_params
-
-            user_vectors = self._get_user_vectors(users, log)
-
-            # converts to pandas_udf compatible format
-            user_vectors = (
-                    user_vectors
-                    .select(
-                        "user_idx",
-                        vector_to_array("user_vector").alias("user_vector")
-                    )
-            )
-
-            user_to_max_items = (
-                    log.groupBy('user_idx')
-                    .agg(sf.count('item_idx').alias('num_items'))
-            )
-
-            user_vectors = user_vectors.join(user_to_max_items, on="user_idx")
-
-            res = self._infer_nmslib_hnsw_index(user_vectors, "user_vector", params, k)
-
-            return res
-
-        if self._hnswlib_params:
-
-            params = self._hnswlib_params
-
-            user_vectors = self._get_user_vectors(users, log)
-
-            # converts to pandas_udf compatible format
-            user_vectors = (
-                    user_vectors
-                    .select(
-                        "user_idx",
-                        vector_to_array("user_vector").alias("user_vector")
-                    )
-            )
-
-            user_to_max_items = (
-                    log.groupBy('user_idx')
-                    .agg(sf.count('item_idx').alias('num_items'))
-            )
-
-            user_vectors = user_vectors.join(user_to_max_items, on="user_idx")
-
-            res = self._infer_hnsw_index(user_vectors, "user_vector", params, k, self.rank)
-
-            return res
 
         return self._predict_pairs_inner(users.crossJoin(items), log, k)
 
@@ -346,7 +308,7 @@ class Word2VecRec(Recommender, ItemVectorModel, NmslibHnswMixin, HnswlibMixin):
         For each user return from `k` to `k + number of seen by user` recommendations.
         """
 
-        if not self._nmslib_hnsw_params and not self._hnswlib_params:
+        if not self._hnswlib_params:
             return Recommender._filter_seen(self, recs, log, k, users)
 
         users_log = log.join(users, on="user_idx")
