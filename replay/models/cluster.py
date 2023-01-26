@@ -27,6 +27,7 @@ class ClusterRec(UserRecommender):
         """
         self.num_clusters = num_clusters
         self._hnswlib_params = hnswlib_params
+        self.model: Optional[KMeansModel] = None
         self.users_clusters: Optional[DataFrame] = None
         self.item_rel_in_cluster: Optional[DataFrame] = None
         self.item_count_in_cluster: Optional[DataFrame] = None
@@ -48,19 +49,21 @@ class ClusterRec(UserRecommender):
     def _fit_partial(self, log: DataFrame, user_features: Optional[DataFrame] = None,) -> None:
         previous_dataframes = self._dataframes
 
-        user_features_vector = self._transform_features(user_features)
+        user_features_vector = self._transform_features(user_features) if user_features is not None else None
 
         if self.model is None:
+            assert user_features_vector is not None
             self.model = KMeans().setK(self.num_clusters).setFeaturesCol("features").fit(user_features_vector)
 
-        users_clusters = (
-            self.model
-                .transform(user_features_vector)
-                .select("user_idx", sf.col("prediction").alias('cluster'))
-        )
+        if user_features_vector is not None:
+            users_clusters = (
+                self.model
+                    .transform(user_features_vector)
+                    .select("user_idx", sf.col("prediction").alias('cluster'))
+            )
 
-        # update if we make fit_partial instead of just fit
-        self.users_clusters = unionify(users_clusters, self.users_clusters).drop_duplicates(["user_idx"])
+            # update if we make fit_partial instead of just fit
+            self.users_clusters = unionify(users_clusters, self.users_clusters).drop_duplicates(["user_idx"])
 
         item_count_in_cluster = (
             log.join(self.users_clusters, on="user_idx", how="left")
@@ -93,12 +96,13 @@ class ClusterRec(UserRecommender):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
     ) -> None:
-        self._fit_partial(log, user_features, item_features)
+        self._fit_partial(log, user_features)
 
-    def refit(
+    def fit_partial(
         self,
         log: DataFrame,
-        user_features: DataFrame,
+        user_features: Optional[DataFrame] = None,
+        previous_log: Optional[DataFrame] = None
     ) -> None:
         self._fit_partial(log, user_features)
 
