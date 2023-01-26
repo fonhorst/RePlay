@@ -150,7 +150,7 @@ class UCB(NonPersonalizedRecommender):
 
         self.fill = 1 + math.sqrt(math.log(self.coef * self.full_count))
 
-    def refit(
+    def fit_partial(
         self,
         log: DataFrame,
         previous_log: Optional[Union[str, DataFrame]] = None,

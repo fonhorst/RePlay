@@ -1319,9 +1319,9 @@ class Recommender(BaseRecommender, ABC):
         """
         return self._get_features_wrap(ids, None)
 
-    def refit(self,
-              log: DataFrame,
-              previous_log: Optional[DataFrame] = None) -> None:
+    def fit_partial(self,
+                    log: DataFrame,
+                    previous_log: Optional[DataFrame] = None) -> None:
         self._fit_partial(log,
                           user_features=None,
                           item_features=None,
@@ -1739,3 +1739,27 @@ class NonPersonalizedRecommender(Recommender, ABC):
             recs = users.withColumn("cnt", sf.lit(min(k, items_pd.shape[0])))
 
         return recs.groupby("user_idx").applyInPandas(grouped_map, REC_SCHEMA)
+
+    def fit_partial(self,
+                    log: DataFrame,
+                    previous_log: Optional[DataFrame] = None) -> None:
+        self._fit_partial(log,
+                          user_features=None,
+                          item_features=None,
+                          previous_log=previous_log)
+
+    def _fit(
+            self,
+            log: DataFrame,
+            user_features: Optional[DataFrame] = None,
+            item_features: Optional[DataFrame] = None) -> None:
+        self._fit_partial(log, user_features, item_features)
+
+    @abstractmethod
+    def _fit_partial(
+            self,
+            log: DataFrame,
+            user_features: Optional[DataFrame] = None,
+            item_features: Optional[DataFrame] = None,
+            previous_log: Optional[DataFrame] = None) -> None:
+        ...

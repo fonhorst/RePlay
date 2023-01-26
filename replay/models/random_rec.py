@@ -201,7 +201,7 @@ class RandomRec(NonPersonalizedRecommender):
             else 0.0
         )
 
-    def refit(
+    def fit_partial(
         self,
         log: DataFrame,
         previous_log: Optional[Union[str, DataFrame]] = None,

@@ -1,9 +1,10 @@
-from typing import Optional, Union
+from typing import Optional
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 
 from replay.models.base_rec import NonPersonalizedRecommender
+from replay.utils import unionify
 
 
 class PopRec(NonPersonalizedRecommender):
@@ -69,118 +70,45 @@ class PopRec(NonPersonalizedRecommender):
     def _init_args(self):
         return {"use_relevance": self.use_relevance}
 
-    def _fit(
-        self,
-        log: DataFrame,
-        user_features: Optional[DataFrame] = None,
-        item_features: Optional[DataFrame] = None,
-    ) -> None:
+    def _fit_partial(
+            self,
+            log: DataFrame,
+            user_features: Optional[DataFrame] = None,
+            item_features: Optional[DataFrame] = None,
+            previous_log: Optional[DataFrame] = None):
+        self.all_user_ids = unionify(log.select("user_idx"), self.all_user_ids).distinct().cache()
+        self._users_count = self.all_user_ids.count()
 
         if self.use_relevance:
             # we will save it to update fitted model
             self.item_abs_relevances = (
-                log.groupBy("item_idx")
-                .agg(sf.sum("relevance").alias("relevance"))
-            )
-            self._users_count = self.users_count
-            self.all_user_ids = log.select("user_idx").distinct()
-            self.item_abs_relevances = self.item_abs_relevances.cache()
-            self.all_user_ids = self.all_user_ids.cache()
+                unionify(log.select("item_idx", "relevance"), self.item_abs_relevances)
+                    .groupBy("item_idx")
+                    .agg(sf.sum("relevance").alias("relevance"))
+            ).cache()
 
             self.item_popularity = (
-                self.item_abs_relevances
-                .withColumn(
-                    "relevance", sf.col("relevance") / sf.lit(self._users_count)
-                )
+                self.item_abs_relevances.withColumn("relevance", sf.col("relevance") / sf.lit(self._users_count))
             )
         else:
-            self.item_users = (
-                log.groupBy("item_idx")
-                .agg(sf.collect_set('user_idx').alias('user_idx'))
+            log = log.union(previous_log)
+
+            # equal to store a whole old log which may be huge
+            item_users = (
+                log
+                    .groupBy("item_idx")
+                    .agg(sf.collect_set('user_idx').alias('user_idx'))
             )
-            self.item_users = self.item_users.cache()
-            self._users_count = self.users_count
-            self.all_user_ids = log.select("user_idx").distinct()
-            self.all_user_ids = self.all_user_ids.cache()
 
             self.item_popularity = (
-                self.item_users
-                .select(
+                item_users
+                    .select(
                     "item_idx",
-                    (sf.size("user_idx") / sf.lit(self.users_count)).alias(
-                        "relevance"
-                    ),
+                    (sf.size("user_idx") / sf.lit(self.users_count)).alias("relevance"),
                 )
             )
 
         self.item_popularity.cache().count()
-
-    def refit(self, log: DataFrame, previous_log: Optional[Union[str, DataFrame]] = None, merged_log_path: Optional[str] = None) -> None:
-
-        if self.use_relevance:
-
-            self.item_abs_relevances = (
-                log.select("item_idx", "relevance")
-                .union(self.item_abs_relevances)
-                .groupBy("item_idx")
-                .agg(sf.sum("relevance").alias("relevance"))
-            )
-            self.item_abs_relevances = self.item_abs_relevances.cache()
-
-            new_user_ids = log.select("user_idx").join(self.all_user_ids, on=["user_idx"], how="leftanti").distinct()
-            self.all_user_ids = self.all_user_ids.union(new_user_ids)
-            self.all_user_ids = self.all_user_ids.cache()
-            self._users_count = self._users_count + new_user_ids.count()
-
-            self.item_popularity = (
-                self.item_abs_relevances
-                .withColumn(
-                    "relevance", sf.col("relevance") / sf.lit(self._users_count)
-                )
-            )
-        else:
-            new_item_idx = log.select("item_idx", "user_idx").join(self.item_users.select("item_idx"), on=["item_idx"], how="leftanti").distinct()
-            # item_idx int, user_idx array<int>
-            new_item_users = (
-                new_item_idx.groupBy("item_idx")
-                .agg(sf.collect_set('user_idx').alias('user_idx'))
-            )
-
-            existing_item_idx = log.select("item_idx", "user_idx").join(self.item_users.select("item_idx"), on=["item_idx"], how="inner")
-            existing_item_groups = (
-                existing_item_idx.groupBy("item_idx")
-                .agg(sf.collect_set('user_idx').alias('new_user_idx'))
-            )
-
-            # item_idx int, user_idx array<int>
-            self.item_users = (
-                self.item_users.alias("a")
-                .join(existing_item_groups.alias("b"), on=["item_idx"], how="left")
-                .select("item_idx", sf.col("a.user_idx").alias("user_idx"), sf.col("b.new_user_idx").alias("new_user_idx"))
-                .select("item_idx", "user_idx", sf.coalesce("new_user_idx", sf.array().cast("array<integer>")).alias("new_user_idx")) # converts nulls to empty arrays
-                .select("item_idx", sf.array_union("user_idx", "new_user_idx").alias("user_idx"))
-            )
-
-            self.item_users = self.item_users.union(new_item_users)
-            self.item_users = self.item_users.cache()
-
-            new_user_ids = log.select("user_idx").join(self.all_user_ids, on=["user_idx"], how="leftanti").distinct()
-            self.all_user_ids = self.all_user_ids.union(new_user_ids)
-            self.all_user_ids = self.all_user_ids.cache()
-            self._users_count = self._users_count + new_user_ids.count()
-
-            self.item_popularity = (
-                self.item_users
-                .select(
-                    "item_idx",
-                    (sf.size("user_idx") / sf.lit(self._users_count)).alias(
-                        "relevance"
-                    ),
-                )
-            )
-
-        self.item_popularity = self.item_popularity.cache()
-        self.item_popularity.write.mode("overwrite").format("noop").save()
 
     # pylint: disable=too-many-arguments
     def _predict(

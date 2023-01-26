@@ -124,7 +124,7 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
                     .agg(sf.count('item_idx').alias('num_items'))
             )
 
-    def refit(self, log: DataFrame, previous_log: Optional[Union[str, DataFrame]] = None, merged_log_path: Optional[str] = None) -> None:
+    def fit_partial(self, log: DataFrame, previous_log: Optional[Union[str, DataFrame]] = None, merged_log_path: Optional[str] = None) -> None:
         new_users = log.select('user_idx').distinct().join(previous_log.select('user_idx').distinct(), how='left_anti', on='user_idx')
         old_items = previous_log.select('item_idx').distinct()
         old_users = previous_log.select('user_idx').distinct()

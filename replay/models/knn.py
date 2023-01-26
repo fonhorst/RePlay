@@ -265,7 +265,7 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
                     .agg(sf.count('item_idx').alias('num_items'))
             )
 
-    def refit(
+    def fit_partial(
         self,
         log: DataFrame,
         previous_log: Optional[Union[str, DataFrame]] = None,

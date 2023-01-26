@@ -71,7 +71,7 @@ class Wilson(PopRec):
         self.item_popularity = items_counts.drop("pos", "total")
         self.item_popularity.cache().count()
 
-    def refit(
+    def fit_partial(
         self,
         log: DataFrame,
         previous_log: Optional[Union[str, DataFrame]] = None,

@@ -86,7 +86,7 @@ class UserPopRec(Recommender):
         )
         self.user_item_popularity.cache().count()
 
-    def refit(self, log: DataFrame, previous_log: Optional[Union[str, DataFrame]] = None, merged_log_path: Optional[str] = None) -> None:
+    def fit_partial(self, log: DataFrame, previous_log: Optional[Union[str, DataFrame]] = None, merged_log_path: Optional[str] = None) -> None:
 
         self.relevance_sums = (
             log.select("user_idx", "item_idx", "relevance")

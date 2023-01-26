@@ -329,7 +329,7 @@ def main(spark: SparkSession, dataset_name: str):
         ) as train_timer, JobGroup(
             "Model training (additional)", f"{model.__class__.__name__}.fit()"
         ):
-            model.refit(log=train_diff80, previous_log=train70)
+            model.fit_partial(log=train_diff80, previous_log=train70)
         mlflow.log_metric("train_diff_sec", train_timer.duration)
 
         with log_exec_timer(f"{MODEL} prediction") as infer_timer, JobGroup(

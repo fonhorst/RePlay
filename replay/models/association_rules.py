@@ -207,7 +207,7 @@ class AssociationRulesItemRec(Recommender):
         self.pair_metrics.cache().count()
         frequent_items_cached.unpersist()
 
-    def refit(
+    def fit_partial(
         self,
         log: DataFrame,
         previous_log: Optional[Union[str, DataFrame]] = None,
