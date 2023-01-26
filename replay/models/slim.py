@@ -154,12 +154,6 @@ class SLIM(NeighbourRec, NmslibHnswMixin):
         )
         self.similarity.cache().count()
 
-        if self._nmslib_hnsw_params:
-
-            self._interactions_matrix_broadcast = (
-                    State().session.sparkContext.broadcast(interactions_matrix.tocsr(copy=False))
-            )
-
     # pylint: disable=too-many-arguments
     def _predict(
         self,
