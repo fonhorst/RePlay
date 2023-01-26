@@ -65,10 +65,26 @@ class PopRec(NonPersonalizedRecommender):
         :param use_relevance: flag to use relevance values as is or to treat them as 1
         """
         self.use_relevance = use_relevance
+        self.all_user_ids: Optional[DataFrame] = None
+        self.item_abs_relevances: Optional[DataFrame] = None
+        self.item_popularity: Optional[DataFrame] = None
 
     @property
     def _init_args(self):
         return {"use_relevance": self.use_relevance}
+
+    @property
+    def _dataframes(self):
+        return {
+            "all_user_ids": self.all_user_ids,
+            "item_abs_relevances": self.item_abs_relevances,
+            "item_popularity": self.item_popularity
+        }
+
+    def _clear_cache(self):
+        for df in self._dataframes.values():
+            if df is not None:
+                df.unpersist()
 
     def _fit_partial(
             self,
@@ -91,7 +107,7 @@ class PopRec(NonPersonalizedRecommender):
                 self.item_abs_relevances.withColumn("relevance", sf.col("relevance") / sf.lit(self._users_count))
             )
         else:
-            log = log.union(previous_log)
+            log = unionify(log, previous_log)
 
             # equal to store a whole old log which may be huge
             item_users = (
