@@ -309,7 +309,7 @@ class Word2VecRec(Recommender, ItemVectorModel, HnswlibMixin):
         """
 
         if not self._hnswlib_params:
-            return Recommender._filter_seen(self, recs, log, k, users)
+            return super()._filter_seen(recs, log, k, users)
 
         users_log = log.join(users, on="user_idx")
         self._cache_model_temp_view(users_log, "filter_seen_users_log")
