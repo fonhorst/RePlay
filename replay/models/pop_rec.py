@@ -4,7 +4,7 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 
 from replay.models.base_rec import NonPersonalizedRecommender
-from replay.utils import unionify
+from replay.utils import unionify, unpersist_after
 
 
 class PopRec(NonPersonalizedRecommender):
@@ -92,39 +92,40 @@ class PopRec(NonPersonalizedRecommender):
             user_features: Optional[DataFrame] = None,
             item_features: Optional[DataFrame] = None,
             previous_log: Optional[DataFrame] = None):
-        self.all_user_ids = unionify(log.select("user_idx"), self.all_user_ids).distinct().cache()
-        self._users_count = self.all_user_ids.count()
+        with unpersist_after(self._dataframes):
+            self.all_user_ids = unionify(log.select("user_idx"), self.all_user_ids).distinct().cache()
+            self._users_count = self.all_user_ids.count()
 
-        if self.use_relevance:
-            # we will save it to update fitted model
-            self.item_abs_relevances = (
-                unionify(log.select("item_idx", "relevance"), self.item_abs_relevances)
-                .groupBy("item_idx")
-                .agg(sf.sum("relevance").alias("relevance"))
-            ).cache()
+            if self.use_relevance:
+                # we will save it to update fitted model
+                self.item_abs_relevances = (
+                    unionify(log.select("item_idx", "relevance"), self.item_abs_relevances)
+                    .groupBy("item_idx")
+                    .agg(sf.sum("relevance").alias("relevance"))
+                ).cache()
 
-            self.item_popularity = (
-                self.item_abs_relevances.withColumn("relevance", sf.col("relevance") / sf.lit(self._users_count))
-            )
-        else:
-            log = unionify(log, previous_log)
-
-            # equal to store a whole old log which may be huge
-            item_users = (
-                log
-                .groupBy("item_idx")
-                .agg(sf.collect_set('user_idx').alias('user_idx'))
-            )
-
-            self.item_popularity = (
-                item_users
-                .select(
-                    "item_idx",
-                    (sf.size("user_idx") / sf.lit(self.users_count)).alias("relevance"),
+                self.item_popularity = (
+                    self.item_abs_relevances.withColumn("relevance", sf.col("relevance") / sf.lit(self._users_count))
                 )
-            )
+            else:
+                log = unionify(log, previous_log)
 
-        self.item_popularity.cache().count()
+                # equal to store a whole old log which may be huge
+                item_users = (
+                    log
+                    .groupBy("item_idx")
+                    .agg(sf.collect_set('user_idx').alias('user_idx'))
+                )
+
+                self.item_popularity = (
+                    item_users
+                    .select(
+                        "item_idx",
+                        (sf.size("user_idx") / sf.lit(self.users_count)).alias("relevance"),
+                    )
+                )
+
+            self.item_popularity.cache().count()
 
     # pylint: disable=too-many-arguments
     def _predict(

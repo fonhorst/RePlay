@@ -908,3 +908,12 @@ def unionify(df: DataFrame, df_2: Optional[DataFrame] = None) -> DataFrame:
     if df_2 is not None:
         df = df.unionByName(df_2)
     return df
+
+
+@contextmanager
+def unpersist_after(dfs: Dict[str, Optional[DataFrame]]):
+    yield
+
+    for df in dfs.values():
+        if df is not None:
+            df.unpersist()

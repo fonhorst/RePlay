@@ -6,7 +6,7 @@ from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as sf
 
 from replay.models.base_rec import UserRecommender
-from replay.utils import unionify
+from replay.utils import unionify, unpersist_after
 
 
 class ClusterRec(UserRecommender):
@@ -47,48 +47,42 @@ class ClusterRec(UserRecommender):
         raise NotImplementedError()
 
     def _fit_partial(self, log: DataFrame, user_features: Optional[DataFrame] = None,) -> None:
-        previous_dataframes = self._dataframes
+        with unpersist_after(self._dataframes):
+            user_features_vector = self._transform_features(user_features) if user_features is not None else None
 
-        user_features_vector = self._transform_features(user_features) if user_features is not None else None
+            if self.model is None:
+                assert user_features_vector is not None
+                self.model = KMeans().setK(self.num_clusters).setFeaturesCol("features").fit(user_features_vector)
 
-        if self.model is None:
-            assert user_features_vector is not None
-            self.model = KMeans().setK(self.num_clusters).setFeaturesCol("features").fit(user_features_vector)
+            if user_features_vector is not None:
+                users_clusters = (
+                    self.model
+                        .transform(user_features_vector)
+                        .select("user_idx", sf.col("prediction").alias('cluster'))
+                )
 
-        if user_features_vector is not None:
-            users_clusters = (
-                self.model
-                    .transform(user_features_vector)
-                    .select("user_idx", sf.col("prediction").alias('cluster'))
+                # update if we make fit_partial instead of just fit
+                self.users_clusters = unionify(users_clusters, self.users_clusters).drop_duplicates(["user_idx"])
+
+            item_count_in_cluster = (
+                log.join(self.users_clusters, on="user_idx", how="left")
+                .groupBy(["cluster", "item_idx"])
+                .agg(sf.count("item_idx").alias("item_count"))
             )
 
             # update if we make fit_partial instead of just fit
-            self.users_clusters = unionify(users_clusters, self.users_clusters).drop_duplicates(["user_idx"])
+            self.item_count_in_cluster = (
+                unionify(item_count_in_cluster, self.item_count_in_cluster)
+                .groupBy(["cluster", "item_idx"])
+                .agg(sf.sum("item_count").alias("item_count"))
+            )
 
-        item_count_in_cluster = (
-            log.join(self.users_clusters, on="user_idx", how="left")
-            .groupBy(["cluster", "item_idx"])
-            .agg(sf.count("item_idx").alias("item_count"))
-        )
+            self.item_rel_in_cluster = self.item_count_in_cluster.withColumn(
+                "relevance", sf.col("item_count") / sf.max("item_count").over(Window.partitionBy("cluster"))
+            ).drop("item_count", "max_count_in_cluster").cache()
 
-        # update if we make fit_partial instead of just fit
-        self.item_count_in_cluster = (
-            unionify(item_count_in_cluster, self.item_count_in_cluster)
-            .groupBy(["cluster", "item_idx"])
-            .agg(sf.sum("item_count").alias("item_count"))
-        )
-
-        self.item_rel_in_cluster = self.item_count_in_cluster.withColumn(
-            "relevance", sf.col("item_count") / sf.max("item_count").over(Window.partitionBy("cluster"))
-        ).drop("item_count", "max_count_in_cluster").cache()
-
-        # materialize datasets
-        self.item_rel_in_cluster.count()
-
-        # clear previous DataFrames because they have been just replaces with new ones
-        for df in previous_dataframes.values():
-            if df is not None:
-                df.unpersist()
+            # materialize datasets
+            self.item_rel_in_cluster.count()
 
     def _fit(
         self,

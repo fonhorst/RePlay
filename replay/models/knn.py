@@ -9,7 +9,7 @@ from replay.models.base_rec import NeighbourRec
 from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.optuna_objective import ItemKNNObjective
 from replay.session_handler import State
-from replay.utils import JobGroup, unionify
+from replay.utils import JobGroup, unionify, unpersist_after
 
 
 class ItemKNN(NeighbourRec, NmslibHnswMixin):
@@ -259,14 +259,14 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             f"{self.__class__.__name__}._fit()",
             "self.similarity",
         ):
+            with unpersist_after(self._dataframes):
+                log = self._project_fields(log)
+                previous_log = self._project_fields(previous_log)
 
-            log = self._project_fields(log)
-            previous_log = self._project_fields(previous_log)
-
-            similarity_matrix = self._get_similarity(log, previous_log)
-            similarity_matrix = unionify(similarity_matrix, self.similarity)
-            self.similarity = self._get_k_most_similar(similarity_matrix)
-            self.similarity.cache().count()
+                similarity_matrix = self._get_similarity(log, previous_log)
+                similarity_matrix = unionify(similarity_matrix, self.similarity)
+                self.similarity = self._get_k_most_similar(similarity_matrix)
+                self.similarity.cache().count()
 
         # TODO: fit_partial integration with ANN index
         # TODO: no need for special integration, because you need to rebuild the whole index if set of items have been chnaged
