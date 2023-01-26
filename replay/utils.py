@@ -902,3 +902,9 @@ def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
     recs = pairs.groupby("user_idx").applyInPandas(grouped_map, REC_SCHEMA)
 
     return recs
+
+
+def unionify(df: DataFrame, df_2: Optional[DataFrame] = None) -> DataFrame:
+    if df_2 is not None:
+        df = df.unionByName(df_2)
+    return df
