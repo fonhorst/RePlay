@@ -9,7 +9,7 @@ from replay.models.base_rec import NeighbourRec
 from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.optuna_objective import ItemKNNObjective
 from replay.session_handler import State
-from replay.utils import JobGroup
+from replay.utils import JobGroup, unionify
 
 
 class ItemKNN(NeighbourRec, NmslibHnswMixin):
@@ -50,6 +50,7 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             raise ValueError(f"weighting must be one of {valid_weightings}")
         self.weighting = weighting
         self._nmslib_hnsw_params = nmslib_hnsw_params
+        self.similarity = None
 
     @property
     def _init_args(self):
@@ -68,14 +69,21 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             / (sf.col("norm1") * sf.col("norm2") + shrink),
         ).select("item_idx_one", "item_idx_two", "similarity")
 
-    def _get_similarity(self, log: DataFrame) -> DataFrame:
+    def _get_similarity(self, log: DataFrame, previous_log: Optional[DataFrame] = None) -> DataFrame:
         """
         Calculate item similarities
 
         :param log: DataFrame with interactions, `[user_idx, item_idx, relevance]`
         :return: similarity matrix `[item_idx_one, item_idx_two, similarity]`
         """
-        dot_products = self._get_products(log)
+
+        if previous_log is not None:
+            log_part = log
+            log = previous_log
+        else:
+            log_part = None
+
+        dot_products = self._get_products(log, log_part)
         similarity = self._shrink(dot_products, self.shrink)
         return similarity
 
@@ -159,7 +167,7 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
 
         return idf
 
-    def _get_products(self, log: DataFrame) -> DataFrame:
+    def _get_products(self, log: DataFrame, log_part: Optional[DataFrame] = None) -> DataFrame:
         """
         Calculate item dot products
 
@@ -168,11 +176,12 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         """
         if self.weighting:
             log = self._reweight_log(log)
+            log_part = self._reweight_log(log_part) if log_part is not None else None
 
         left = log.withColumnRenamed(
             "item_idx", "item_idx_one"
         ).withColumnRenamed("relevance", "rel_one")
-        right = log.withColumnRenamed(
+        right = (log_part if log_part is not None else log).withColumnRenamed(
             "item_idx", "item_idx_two"
         ).withColumnRenamed("relevance", "rel_two")
 
@@ -193,9 +202,22 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         norm1 = item_norms.withColumnRenamed(
             "item_idx", "item_id1"
         ).withColumnRenamed("norm", "norm1")
-        norm2 = item_norms.withColumnRenamed(
-            "item_idx", "item_id2"
-        ).withColumnRenamed("norm", "norm2")
+
+        if log_part is not None:
+            item_norms_part = (
+                log_part.withColumn("relevance", sf.col("relevance") ** 2)
+                .groupBy("item_idx")
+                .agg(sf.sum("relevance").alias("square_norm"))
+                .select(sf.col("item_idx"), sf.sqrt("square_norm").alias("norm"))
+            )
+
+            norm2 = item_norms_part.withColumnRenamed(
+                "item_idx", "item_id2"
+            ).withColumnRenamed("norm", "norm2")
+        else:
+            norm2 = item_norms.withColumnRenamed(
+                "item_idx", "item_id2"
+            ).withColumnRenamed("norm", "norm2")
 
         dot_products = dot_products.join(
             norm1, how="inner", on=sf.col("item_id1") == sf.col("item_idx_one")
@@ -227,27 +249,30 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             .drop("similarity_order")
         )
 
-    def _fit(
-        self,
-        log: DataFrame,
-        user_features: Optional[DataFrame] = None,
-        item_features: Optional[DataFrame] = None,
-    ) -> None:
+    def _fit_partial(
+            self,
+            log: DataFrame,
+            user_features: Optional[DataFrame] = None,
+            item_features: Optional[DataFrame] = None,
+            previous_log: Optional[DataFrame] = None) -> None:
         with JobGroup(
             f"{self.__class__.__name__}._fit()",
             "self.similarity",
         ):
-            df = log.select("user_idx", "item_idx", "relevance")
-            if not self.use_relevance:
-                df = df.withColumn("relevance", sf.lit(1))
 
-            similarity_matrix = self._get_similarity(df)
+            log = self._project_fields(log)
+            previous_log = self._project_fields(previous_log)
+
+            similarity_matrix = self._get_similarity(log, previous_log)
+            similarity_matrix = unionify(similarity_matrix, self.similarity)
             self.similarity = self._get_k_most_similar(similarity_matrix)
             self.similarity.cache().count()
 
+        # TODO: fit_partial integration with ANN index
+        # TODO: no need for special integration, because you need to rebuild the whole index if set of items have been chnaged
+        #  and no need for rebuilding if only user sets have changed
         if self._nmslib_hnsw_params:
-
-            pandas_log = df.select("user_idx", "item_idx", "relevance").toPandas()
+            pandas_log = log.select("user_idx", "item_idx", "relevance").toPandas()
             interactions_matrix = csr_matrix(
                 (pandas_log.relevance, (pandas_log.user_idx, pandas_log.item_idx)),
                 shape=(self._user_dim, self._item_dim),
@@ -256,7 +281,7 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
                     State().session.sparkContext.broadcast(interactions_matrix)
             )
 
-            items_count = log.select(sf.max('item_idx')).first()[0] + 1 
+            items_count = log.select(sf.max('item_idx')).first()[0] + 1
             similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
             self._build_nmslib_hnsw_index(similarity_df, None, self._nmslib_hnsw_params, index_type="sparse", items_count=items_count)
 
@@ -265,21 +290,10 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
                     .agg(sf.count('item_idx').alias('num_items'))
             )
 
-    def fit_partial(
-        self,
-        log: DataFrame,
-        previous_log: Optional[Union[str, DataFrame]] = None,
-        merged_log_path: Optional[str] = None,
-    ) -> None:
-
-        df = log.select("user_idx", "item_idx", "relevance")
-        if not self.use_relevance:
-            df = df.withColumn("relevance", sf.lit(1))
-
-        similarity_matrix = self._get_similarity_refit(df, previous_log)
-        # self.similarity = self._get_k_most_similar(similarity_matrix)
-        # self.similarity.cache().count()
-
+    def _project_fields(self, log: Optional[DataFrame]):
+        if log is None:
+            return None
+        return log.select("user_idx", "item_idx", "relevance" if self.use_relevance else sf.lit(1))
 
     # pylint: disable=too-many-arguments
     def _predict(
