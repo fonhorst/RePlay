@@ -83,8 +83,8 @@ class PopRec(NonPersonalizedRecommender):
             # we will save it to update fitted model
             self.item_abs_relevances = (
                 unionify(log.select("item_idx", "relevance"), self.item_abs_relevances)
-                    .groupBy("item_idx")
-                    .agg(sf.sum("relevance").alias("relevance"))
+                .groupBy("item_idx")
+                .agg(sf.sum("relevance").alias("relevance"))
             ).cache()
 
             self.item_popularity = (
@@ -96,13 +96,13 @@ class PopRec(NonPersonalizedRecommender):
             # equal to store a whole old log which may be huge
             item_users = (
                 log
-                    .groupBy("item_idx")
-                    .agg(sf.collect_set('user_idx').alias('user_idx'))
+                .groupBy("item_idx")
+                .agg(sf.collect_set('user_idx').alias('user_idx'))
             )
 
             self.item_popularity = (
                 item_users
-                    .select(
+                .select(
                     "item_idx",
                     (sf.size("user_idx") / sf.lit(self.users_count)).alias("relevance"),
                 )
