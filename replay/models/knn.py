@@ -6,12 +6,11 @@ from pyspark.sql.window import Window
 from scipy.sparse import csr_matrix
 
 from replay.models.base_rec import NeighbourRec
-from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.optuna_objective import ItemKNNObjective
 from replay.session_handler import State
 
 
-class ItemKNN(NeighbourRec, NmslibHnswMixin):
+class ItemKNN(NeighbourRec):
     """Item-based ItemKNN with modified cosine similarity measure."""
 
     def _get_ann_infer_params(self) -> Dict[str, Any]:
@@ -81,6 +80,9 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             raise ValueError(f"weighting must be one of {valid_weightings}")
         self.weighting = weighting
         self._nmslib_hnsw_params = nmslib_hnsw_params
+
+        if self._nmslib_hnsw_params:
+            super().__init__()
 
     @property
     def _init_args(self):
