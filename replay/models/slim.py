@@ -72,9 +72,6 @@ class SLIM(NeighbourRec):
         self.seed = seed
         self._nmslib_hnsw_params = nmslib_hnsw_params
 
-        if self._nmslib_hnsw_params:
-            super().__init__()
-
     @property
     def _init_args(self):
         return {
