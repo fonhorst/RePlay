@@ -1,13 +1,12 @@
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Dict, Any
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql.window import Window
-from scipy.sparse import csr_matrix
 
 from replay.models.base_rec import NeighbourRec
 from replay.optuna_objective import ItemKNNObjective
-from replay.session_handler import State
+from replay.utils import unionify
 
 
 class ItemKNN(NeighbourRec):
@@ -288,20 +287,19 @@ class ItemKNN(NeighbourRec):
             .drop("similarity_order")
         )
 
-def _fit_partial(
+    def _fit_partial(
             self,
             log: DataFrame,
             user_features: Optional[DataFrame] = None,
             item_features: Optional[DataFrame] = None,
             previous_log: Optional[DataFrame] = None) -> None:
-        df = log.select("user_idx", "item_idx", "relevance")
-        if not self.use_relevance:
-            df = df.withColumn("relevance", sf.lit(1))
+        log = log.select("user_idx", "item_idx", "relevance" if self.use_relevance else sf.lit(1))
 
-	# TODO: fit_partial integration with ANN index
-        # TODO: no need for special integration, because you need to rebuild the whole index if set of items have been chnaged
-        #  and no need for rebuilding if only user sets have changed	
-	similarity_matrix = self._get_similarity(log, previous_log)
+        # TODO: fit_partial integration with ANN index
+        # TODO: no need for special integration, because you need to rebuild the whole
+        #  index if set of items have been chnaged
+        #  and no need for rebuilding if only user sets have changes
+        similarity_matrix = self._get_similarity(log, previous_log)
         similarity_matrix = unionify(similarity_matrix, self.similarity)
         self.similarity = self._get_k_most_similar(similarity_matrix)
         self.similarity.cache().count()
