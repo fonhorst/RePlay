@@ -6,12 +6,11 @@ from pyspark.sql.window import Window
 from scipy.sparse import csr_matrix
 
 from replay.models.base_rec import NeighbourRec
-from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.optuna_objective import ItemKNNObjective
 from replay.session_handler import State
 
 
-class ItemKNN(NeighbourRec, NmslibHnswMixin):
+class ItemKNN(NeighbourRec):
     """Item-based ItemKNN with modified cosine similarity measure."""
 
     def _get_ann_infer_params(self) -> Dict[str, Any]:
@@ -89,7 +88,16 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             "use_relevance": self.use_relevance,
             "num_neighbours": self.num_neighbours,
             "weighting": self.weighting,
+            "nmslib_hnsw_params": self._nmslib_hnsw_params,
         }
+
+    def _save_model(self, path: str):
+        if self._nmslib_hnsw_params:
+            self._save_nmslib_hnsw_index(path, sparse=True)
+
+    def _load_model(self, path: str):
+        if self._nmslib_hnsw_params:
+            self._load_nmslib_hnsw_index(path, sparse=True)
 
     @staticmethod
     def _shrink(dot_products: DataFrame, shrink: float) -> DataFrame:
