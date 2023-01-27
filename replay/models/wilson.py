@@ -1,10 +1,11 @@
-from typing import Optional, Union
+from typing import Optional
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from scipy.stats import norm
 
 from replay.models.pop_rec import PopRec
+from replay.utils import unionify, unpersist_after
 
 
 class Wilson(PopRec):
@@ -30,89 +31,50 @@ class Wilson(PopRec):
         """
         :param alpha: significance level, default 0.05
         """
-        # pylint: disable=super-init-not-called
+        super().__init__()
         self.alpha = alpha
+        self.items_counts_aggr: Optional[DataFrame] = None
 
     @property
     def _init_args(self):
         return {"alpha": self.alpha}
 
-    def _fit(
-        self,
-        log: DataFrame,
-        user_features: Optional[DataFrame] = None,
-        item_features: Optional[DataFrame] = None,
-    ) -> None:
+    @property
+    def _dataframes(self):
+        return {
+            "item_popularity": self.item_popularity,
+            "items_counts_aggr": self.items_counts_aggr
+        }
 
-        self._check_relevance(log)
+    def _fit_partial(self,
+                     log: DataFrame,
+                     user_features: Optional[DataFrame] = None,
+                     item_features: Optional[DataFrame] = None,
+                     previous_log: Optional[DataFrame] = None) -> None:
+        with unpersist_after(self._dataframes):
+            self._check_relevance(log)
 
-        self.items_counts_aggr = log.groupby("item_idx").agg(
-            sf.sum("relevance").alias("pos"),
-            sf.count("relevance").alias("total"),
-        )
-        self.items_counts_aggr = self.items_counts_aggr.cache()
+            log = log.select("item_idx", sf.col("relevance").alias("pos"), sf.lit(1).alias("total"))
 
-        # https://en.wikipedia.org/w/index.php?title=Binomial_proportion_confidence_interval
-        crit = norm.isf(self.alpha / 2.0)
-        items_counts = self.items_counts_aggr.withColumn(
-            "relevance",
-            (sf.col("pos") + sf.lit(0.5 * crit**2))
-            / (sf.col("total") + sf.lit(crit**2))
-            - sf.lit(crit)
-            / (sf.col("total") + sf.lit(crit**2))
-            * sf.sqrt(
-                (sf.col("total") - sf.col("pos"))
-                * sf.col("pos")
-                / sf.col("total")
-                + crit**2 / 4
-            ),
-        )
-
-        self.item_popularity = items_counts.drop("pos", "total")
-        self.item_popularity.cache().count()
-
-    def fit_partial(
-        self,
-        log: DataFrame,
-        previous_log: Optional[Union[str, DataFrame]] = None,
-        merged_log_path: Optional[str] = None,
-    ) -> None:
-
-        items_counts = log.groupby("item_idx").agg(
-            sf.sum("relevance").alias("pos"),
-            sf.count("relevance").alias("total"),
-        )
-
-        self.items_counts_aggr = (
-            self.items_counts_aggr.union(items_counts)
-            .groupby("item_idx")
-            .agg(
-                sf.sum("pos").alias("pos"),
-                sf.sum("total").alias("total"),
-            )
-        )
-        self.items_counts_aggr = self.items_counts_aggr.cache()
-
-        # https://en.wikipedia.org/w/index.php?title=Binomial_proportion_confidence_interval
-        crit = norm.isf(self.alpha / 2.0)
-        self.item_popularity = self.items_counts_aggr.select(
-            "item_idx",
-            (
-                (sf.col("pos") + sf.lit(0.5 * crit**2))
-                / (sf.col("total") + sf.lit(crit**2))
-                - sf.lit(crit)
-                / (sf.col("total") + sf.lit(crit**2))
-                * sf.sqrt(
-                    (sf.col("total") - sf.col("pos"))
-                    * sf.col("pos")
-                    / sf.col("total")
-                    + crit**2 / 4
+            self.items_counts_aggr = (
+                unionify(log, self.items_counts_aggr)
+                .groupby("item_idx").agg(
+                    sf.sum("pos").alias("pos"),
+                    sf.sum("total").alias("total")
                 )
-            ).alias("relevance")
-        )
+            ).cache()
 
-        self.item_popularity = self.item_popularity.drop("pos", "total")
+            # https://en.wikipedia.org/w/index.php?title=Binomial_proportion_confidence_interval
+            crit = norm.isf(self.alpha / 2.0)
+            pos, total = sf.col("pos"), sf.col("total")
 
-        self.item_popularity = self.item_popularity.cache()
-        self.item_popularity.write.mode("overwrite").format("noop").save()
-        
+            self.item_popularity = self.items_counts_aggr.select(
+                "item_idx",
+                (
+                    (pos + sf.lit(0.5 * crit**2)) / (total + sf.lit(crit**2))
+                    - sf.lit(crit) / (total + sf.lit(crit**2)) * sf.sqrt((total - sf.col("pos")) * pos / total
+                    + crit**2 / 4)
+                ).alias("relevance")
+            )
+
+            self.item_popularity.cache().count()
