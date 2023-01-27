@@ -293,7 +293,7 @@ class ItemKNN(NeighbourRec):
             user_features: Optional[DataFrame] = None,
             item_features: Optional[DataFrame] = None,
             previous_log: Optional[DataFrame] = None) -> None:
-        log = log.select("user_idx", "item_idx", "relevance" if self.use_relevance else sf.lit(1))
+        log = log.select("user_idx", "item_idx", "relevance" if self.use_relevance else sf.lit(1).alias("relevance"))
 
         # TODO: fit_partial integration with ANN index
         # TODO: no need for special integration, because you need to rebuild the whole
