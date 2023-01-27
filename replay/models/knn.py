@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
@@ -6,14 +6,44 @@ from pyspark.sql.window import Window
 from scipy.sparse import csr_matrix
 
 from replay.models.base_rec import NeighbourRec
-from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.optuna_objective import ItemKNNObjective
 from replay.session_handler import State
-from replay.utils import JobGroup, unionify, unpersist_after
 
 
-class ItemKNN(NeighbourRec, NmslibHnswMixin):
+class ItemKNN(NeighbourRec):
     """Item-based ItemKNN with modified cosine similarity measure."""
+
+    def _get_ann_infer_params(self) -> Dict[str, Any]:
+        return {
+            "features_col": "",
+            "params": self._nmslib_hnsw_params,
+            "index_type": "sparse",
+        }
+
+    def _get_vectors_to_infer_ann(self, log: DataFrame, users: DataFrame) -> DataFrame:
+        user_to_max_items = (
+            log.groupBy('user_idx')
+            .agg(sf.count('item_idx').alias('num_items'))
+        )
+        users = users.join(user_to_max_items, on="user_idx")
+        return users
+
+    def _get_ann_build_params(self, log: DataFrame) -> Dict[str, Any]:
+        items_count = log.select(sf.max('item_idx')).first()[0] + 1
+        return {
+            "features_col": None,
+            "params": self._nmslib_hnsw_params,
+            "index_type": "sparse",
+            "items_count": items_count,
+        }
+
+    def _get_vectors_to_build_ann(self, log: DataFrame) -> DataFrame:
+        similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
+        return similarity_df
+
+    @property
+    def _use_ann(self) -> bool:
+        return self._nmslib_hnsw_params is not None
 
     all_items: Optional[DataFrame]
     dot_products: Optional[DataFrame]
@@ -59,7 +89,16 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             "use_relevance": self.use_relevance,
             "num_neighbours": self.num_neighbours,
             "weighting": self.weighting,
+            "nmslib_hnsw_params": self._nmslib_hnsw_params,
         }
+
+    def _save_model(self, path: str):
+        if self._nmslib_hnsw_params:
+            self._save_nmslib_hnsw_index(path, sparse=True)
+
+    def _load_model(self, path: str):
+        if self._nmslib_hnsw_params:
+            self._load_nmslib_hnsw_index(path, sparse=True)
 
     @staticmethod
     def _shrink(dot_products: DataFrame, shrink: float) -> DataFrame:
@@ -249,46 +288,23 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             .drop("similarity_order")
         )
 
-    def _fit_partial(
+def _fit_partial(
             self,
             log: DataFrame,
             user_features: Optional[DataFrame] = None,
             item_features: Optional[DataFrame] = None,
             previous_log: Optional[DataFrame] = None) -> None:
-        with JobGroup(
-            f"{self.__class__.__name__}._fit()",
-            "self.similarity",
-        ):
-            with unpersist_after(self._dataframes):
-                log = self._project_fields(log)
-                previous_log = self._project_fields(previous_log)
+        df = log.select("user_idx", "item_idx", "relevance")
+        if not self.use_relevance:
+            df = df.withColumn("relevance", sf.lit(1))
 
-                similarity_matrix = self._get_similarity(log, previous_log)
-                similarity_matrix = unionify(similarity_matrix, self.similarity)
-                self.similarity = self._get_k_most_similar(similarity_matrix)
-                self.similarity.cache().count()
-
-        # TODO: fit_partial integration with ANN index
+	# TODO: fit_partial integration with ANN index
         # TODO: no need for special integration, because you need to rebuild the whole index if set of items have been chnaged
-        #  and no need for rebuilding if only user sets have changed
-        if self._nmslib_hnsw_params:
-            pandas_log = log.select("user_idx", "item_idx", "relevance").toPandas()
-            interactions_matrix = csr_matrix(
-                (pandas_log.relevance, (pandas_log.user_idx, pandas_log.item_idx)),
-                shape=(self._user_dim, self._item_dim),
-            )
-            self._interactions_matrix_broadcast = (
-                    State().session.sparkContext.broadcast(interactions_matrix)
-            )
-
-            items_count = log.select(sf.max('item_idx')).first()[0] + 1
-            similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
-            self._build_nmslib_hnsw_index(similarity_df, None, self._nmslib_hnsw_params, index_type="sparse", items_count=items_count)
-
-            self._user_to_max_items = (
-                    log.groupBy('user_idx')
-                    .agg(sf.count('item_idx').alias('num_items'))
-            )
+        #  and no need for rebuilding if only user sets have changed	
+	similarity_matrix = self._get_similarity(log, previous_log)
+        similarity_matrix = unionify(similarity_matrix, self.similarity)
+        self.similarity = self._get_k_most_similar(similarity_matrix)
+        self.similarity.cache().count()
 
     def _project_fields(self, log: Optional[DataFrame]):
         if log is None:
@@ -306,22 +322,6 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
-        
-        if self._nmslib_hnsw_params:
-
-            params = self._nmslib_hnsw_params
-         
-            with JobGroup(
-                f"{self.__class__.__name__}._predict()",
-                "_infer_hnsw_index()",
-            ):
-                users = users.join(self._user_to_max_items, on="user_idx")
-                
-                res = self._infer_nmslib_hnsw_index(users, "",
-                                                    params, k,
-                                                    index_type="sparse")
-
-            return res
 
         return self._predict_pairs_inner(
             log=log,
