@@ -23,16 +23,19 @@ class SLIM(NeighbourRec):
             "index_type": "sparse",
         }
 
-    def _get_vectors_to_infer_ann(self, log: DataFrame, users: DataFrame) -> DataFrame:
-        user_to_max_items = (
-            log.groupBy('user_idx')
-            .agg(sf.count('item_idx').alias('num_items'))
-        )
-        users = users.join(user_to_max_items, on="user_idx")
+    def _get_vectors_to_infer_ann(
+        self, log: DataFrame, users: DataFrame, filter_seen_items: bool
+    ) -> DataFrame:
+        if filter_seen_items:
+            user_to_max_items = log.groupBy("user_idx").agg(
+                sf.count("item_idx").alias("num_items"),
+                sf.collect_set("item_idx").alias("seen_item_idxs"),
+            )
+            users = users.join(user_to_max_items, on="user_idx")
         return users
 
     def _get_ann_build_params(self, log: DataFrame) -> Dict[str, Any]:
-        items_count = log.select(sf.max('item_idx')).first()[0] + 1
+        items_count = log.select(sf.max("item_idx")).first()[0] + 1
         return {
             "features_col": None,
             "params": self._nmslib_hnsw_params,
@@ -41,7 +44,9 @@ class SLIM(NeighbourRec):
         }
 
     def _get_vectors_to_build_ann(self, log: DataFrame) -> DataFrame:
-        similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
+        similarity_df = self.similarity.select(
+            "similarity", "item_idx_one", "item_idx_two"
+        )
         return similarity_df
 
     @property
