@@ -1,25 +1,24 @@
 import logging
 import os
 import shutil
+import tempfile
+import uuid
 import weakref
 from typing import Any, Dict, Iterator, Optional, Union
-import uuid
 
+import hnswlib
 import numpy as np
 import pandas as pd
-import hnswlib
-import tempfile
-
 from pyarrow import fs
 from pyspark import SparkFiles
-from pyspark.sql import SparkSession
 from pyspark.sql import DataFrame, functions as sf
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import pandas_udf
 
 from replay.ann.ann_mixin import ANNMixin
+from replay.ann.utils import save_index_to_destination_fs
 from replay.session_handler import State
-
-from replay.utils import FileSystem, JobGroup, get_filesystem
+from replay.utils import FileSystem, get_filesystem
 
 logger = logging.getLogger("replay")
 
@@ -59,9 +58,7 @@ class HnswlibIndexFileManager:
         if self._index_path:
             if self._filesystem == FileSystem.HDFS:
                 with tempfile.TemporaryDirectory() as temp_path:
-                    tmp_file_path = os.path.join(
-                        temp_path, INDEX_FILENAME
-                    )
+                    tmp_file_path = os.path.join(temp_path, INDEX_FILENAME)
                     source_filesystem = fs.HadoopFileSystem.from_uri(
                         self._hdfs_uri
                     )
@@ -86,14 +83,35 @@ class HnswlibMixin(ANNMixin):
     Also provides methods to saving and loading index to/from disk.
     """
 
-    def _infer_ann_index(self, vectors: DataFrame, features_col: str, params: Dict[str, Union[int, str]], k: int,
-                         index_dim: str = None, index_type: str = None) -> DataFrame:
-        return self._infer_hnsw_index(vectors, features_col, params, k, index_dim)
+    def _infer_ann_index(
+        self,
+        vectors: DataFrame,
+        features_col: str,
+        params: Dict[str, Union[int, str]],
+        k: int,
+        filter_seen_items: bool,
+        index_dim: str = None,
+        index_type: str = None,
+        log: DataFrame = None,
+    ) -> DataFrame:
+        return self._infer_hnsw_index(
+            vectors, features_col, params, k, filter_seen_items, index_dim
+        )
 
-    def _build_ann_index(self, vectors: DataFrame, features_col: str, params: Dict[str, Union[int, str]],
-                         dim: int = None, num_elements: int = None, id_col: Optional[str] = None,
-                         index_type: str = None, items_count: Optional[int] = None) -> None:
-        self._build_hnsw_index(vectors, features_col, params, dim, num_elements, id_col)
+    def _build_ann_index(
+        self,
+        vectors: DataFrame,
+        features_col: str,
+        params: Dict[str, Union[int, str]],
+        dim: int = None,
+        num_elements: int = None,
+        id_col: Optional[str] = None,
+        index_type: str = None,
+        items_count: Optional[int] = None,
+    ) -> None:
+        self._build_hnsw_index(
+            vectors, features_col, params, dim, num_elements, id_col
+        )
 
     def _build_hnsw_index(
         self,
@@ -150,24 +168,14 @@ class HnswlibMixin(ANNMixin):
                         # ids will be from [0, ..., len(vectors_np)]
                         index.add_items(np.stack(vectors_np))
 
-                if filesystem == FileSystem.HDFS:
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        tmp_file_path = os.path.join(
-                            temp_dir, INDEX_FILENAME
-                        )
-                        index.save_index(tmp_file_path)
-
-                        destination_filesystem = fs.HadoopFileSystem.from_uri(
-                            hdfs_uri
-                        )
-                        fs.copy_files(
-                            "file://" + tmp_file_path,
-                            index_path,
-                            destination_filesystem=destination_filesystem,
-                        )
-                        # param use_threads=True (?)
-                else:
-                    index.save_index(index_path)
+                save_index_to_destination_fs(
+                    index,
+                    sparse=False,
+                    save_index=lambda path: index.save_index(path),
+                    filesystem=filesystem,
+                    destination_path=index_path,
+                    hdfs_uri=hdfs_uri,
+                )
 
                 yield pd.DataFrame(data={"_success": 1}, index=[0])
 
@@ -192,9 +200,7 @@ class HnswlibMixin(ANNMixin):
             )
 
             if id_col:
-                index.add_items(
-                    np.stack(vectors_np), vectors[id_col].values
-                )
+                index.add_items(np.stack(vectors_np), vectors[id_col].values)
             else:
                 index.add_items(np.stack(vectors_np))
 
@@ -217,7 +223,9 @@ class HnswlibMixin(ANNMixin):
         num_elements: int,
     ):
         index = hnswlib.Index(space=params["space"], dim=dim)
-        index_path = SparkFiles.get(f"{INDEX_FILENAME}_{self._spark_index_file_uid}")
+        index_path = SparkFiles.get(
+            f"{INDEX_FILENAME}_{self._spark_index_file_uid}"
+        )
         index.load_index(index_path, max_elements=num_elements)
         item_vectors = item_vectors.toPandas()
         item_vectors_np = np.squeeze(item_vectors[features_col].values)
@@ -239,6 +247,7 @@ class HnswlibMixin(ANNMixin):
         features_col: str,
         params: Dict[str, Any],
         k: int,
+        filter_seen_items: bool,
         index_dim: str = None,
     ):
 
@@ -260,55 +269,78 @@ class HnswlibMixin(ANNMixin):
             _index_file_manager
         )
 
-        return_type = (
-            "item_idx array<int>, distance array<double>"
-        )
+        return_type = "item_idx array<int>, distance array<double>"
 
-        @pandas_udf(return_type)
-        def infer_index(
-            vectors: pd.Series, num_items: pd.Series
-        ) -> pd.DataFrame:
-            index_file_manager = index_file_manager_broadcast.value
-            index = index_file_manager.index
+        if filter_seen_items:
 
-            # max number of items to retrieve per batch
-            max_items_to_retrieve = num_items.max()
+            @pandas_udf(return_type)
+            def infer_index(
+                vectors: pd.Series,
+                num_items: pd.Series,
+                seen_item_idxs: pd.Series,
+            ) -> pd.DataFrame:
+                index_file_manager = index_file_manager_broadcast.value
+                index = index_file_manager.index
 
-            labels, distances = index.knn_query(
-                np.stack(vectors.values), k=k + max_items_to_retrieve,
-                num_threads=1
-            )
+                # max number of items to retrieve per batch
+                max_items_to_retrieve = num_items.max()
 
-            pd_res = pd.DataFrame(
-                {"item_idx": list(labels), "distance": list(distances)}
-            )
+                labels, distances = index.knn_query(
+                    np.stack(vectors.values),
+                    k=k + max_items_to_retrieve,
+                    num_threads=1,
+                )
 
-            return pd_res
+                filtered_labels = []
+                filtered_distances = []
+                for i, item_idxs in enumerate(labels):
+                    non_seen_item_indexes = ~np.isin(
+                        item_idxs, seen_item_idxs[i], assume_unique=True
+                    )
+                    filtered_labels.append(
+                        (item_idxs[non_seen_item_indexes])[:k]
+                    )
+                    filtered_distances.append(
+                        (distances[i][non_seen_item_indexes])[:k]
+                    )
+
+                pd_res = pd.DataFrame(
+                    {
+                        "item_idx": filtered_labels,
+                        "distance": filtered_distances,
+                    }
+                )
+
+                return pd_res
+
+        else:
+
+            @pandas_udf(return_type)
+            def infer_index(vectors: pd.Series) -> pd.DataFrame:
+                index_file_manager = index_file_manager_broadcast.value
+                index = index_file_manager.index
+
+                labels, distances = index.knn_query(
+                    np.stack(vectors.values),
+                    k=k,
+                    num_threads=1,
+                )
+
+                pd_res = pd.DataFrame(
+                    {"item_idx": list(labels), "distance": list(distances)}
+                )
+
+                return pd_res
+
+        cols = []
+        if filter_seen_items:
+            cols = ["num_items", "seen_item_idxs"]
 
         res = vectors.select(
             "user_idx",
-            infer_index(features_col, "num_items").alias("r")
+            infer_index(features_col, *cols).alias("neighbours"),
         )
-
-        res = res.select(
-            "user_idx",
-            sf.explode(sf.arrays_zip("r.item_idx", "r.distance")).alias(
-                "zip_exp"
-            ),
-        )
-
-        # Fix arrays_zip random behavior. It can return zip_exp.0 or zip_exp.item_idx in different machines
-        fields = res.schema["zip_exp"].jsonValue()["type"]["fields"]
-        item_idx_field_name: str = fields[0]["name"]
-        distance_field_name: str = fields[1]["name"]
-
-        res = res.select(
-            "user_idx",
-            sf.col(f"zip_exp.{item_idx_field_name}").alias("item_idx"),
-            (
-                sf.lit(-1.0) * sf.col(f"zip_exp.{distance_field_name}")
-            ).alias("relevance"),
-        )
+        res = self._unpack_infer_struct(res)
 
         return res
 
@@ -325,13 +357,13 @@ class HnswlibMixin(ANNMixin):
         if params["build_index_on"] == "executor":
             index_path = params["index_path"]
         elif params["build_index_on"] == "driver":
-            index_path = SparkFiles.get(f"{INDEX_FILENAME}_{self._spark_index_file_uid}")
+            index_path = SparkFiles.get(
+                f"{INDEX_FILENAME}_{self._spark_index_file_uid}"
+            )
         else:
             raise ValueError("Unknown 'build_index_on' param.")
 
-        from_filesystem, from_hdfs_uri, from_path = get_filesystem(
-            index_path
-        )
+        from_filesystem, from_hdfs_uri, from_path = get_filesystem(index_path)
         to_filesystem, to_hdfs_uri, to_path = get_filesystem(path)
         self.logger.debug(f"Index file coping from '{index_path}' to '{path}'")
 
@@ -368,7 +400,9 @@ class HnswlibMixin(ANNMixin):
 
         to_path = tempfile.mkdtemp()
         weakref.finalize(self, shutil.rmtree, to_path)
-        to_path = os.path.join(to_path, f"{INDEX_FILENAME}_{self._spark_index_file_uid}")
+        to_path = os.path.join(
+            to_path, f"{INDEX_FILENAME}_{self._spark_index_file_uid}"
+        )
 
         if from_filesystem == FileSystem.HDFS:
             source_filesystem = fs.HadoopFileSystem.from_uri(from_hdfs_uri)
