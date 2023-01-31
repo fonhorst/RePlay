@@ -53,6 +53,7 @@ class Wilson(PopRec):
                      previous_log: Optional[DataFrame] = None) -> None:
         with unpersist_after(self._dataframes):
             self._check_relevance(log)
+            self._check_relevance(previous_log)
 
             log = log.select("item_idx", sf.col("relevance").alias("pos"), sf.lit(1).alias("total"))
 

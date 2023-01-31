@@ -1639,7 +1639,9 @@ class NonPersonalizedRecommender(Recommender, ABC):
             self.item_popularity.unpersist()
 
     @staticmethod
-    def _check_relevance(log: DataFrame):
+    def _check_relevance(log: Optional[DataFrame] = None):
+        if log is None:
+            return
 
         vals = log.select("relevance").where(
             (sf.col("relevance") != 1) & (sf.col("relevance") != 0)
