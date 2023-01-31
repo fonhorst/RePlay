@@ -169,3 +169,7 @@ airflow.yaml
 
 # temporary
 experiments/tests
+/experiments/make_build.sh
+/experiments/launch_exp.sh
+/experiments/update_project.sh
+/experiments/fix_metric.ipynb

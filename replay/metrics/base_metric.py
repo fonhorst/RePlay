@@ -70,18 +70,31 @@ def get_enriched_recommendations(
     true_items_by_users = ground_truth.groupby("user_idx").agg(
         sf.collect_set("item_idx").alias("ground_truth")
     )
-    sort_udf = sf.udf(
-        sorter,
-        returnType=st.ArrayType(ground_truth.schema["item_idx"].dataType),
-    )
+    # sort_udf = sf.udf(
+    #     sorter,
+    #     returnType=st.ArrayType(ground_truth.schema["item_idx"].dataType),
+    # )
 
     recommendations = get_top_k_recs(recommendations, k=max_k)
+    # recommendations = (
+    #     recommendations.groupby("user_idx")
+    #     .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))
+    #     .select("user_idx", sort_udf(sf.col("pred")).alias("pred"))
+    #     .join(true_items_by_users, how="right", on=["user_idx"])
+    # )
     recommendations = (
-        recommendations.groupby("user_idx")
-        .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))
-        .select("user_idx", sort_udf(sf.col("pred")).alias("pred"))
+        recommendations.withColumn("_num", sf.row_number().over(
+            Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
+        .drop("_num")  # deduplicating
+        .groupby("user_idx")
+        .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias(
+            "pred"))  # .select("user_idx", sort_udf(sf.col("pred")).alias("pred"))
+        .withColumn('pred', sf.reverse(sf.array_sort('pred')))  # sort
+        .withColumn('pred', sf.col('pred.item_idx'))  # get item_idx only
+        .withColumn("pred", sf.col("pred").cast(st.ArrayType(ground_truth.schema["item_idx"].dataType, True)))
         .join(true_items_by_users, how="right", on=["user_idx"])
     )
+
 
     return recommendations.withColumn(
         "pred",
