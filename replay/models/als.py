@@ -28,16 +28,8 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
             "index_dim": self.rank,
         }
 
-    def _get_vectors_to_infer_ann(
-        self, log: DataFrame, users: DataFrame, filter_seen_items: bool
-    ) -> DataFrame:
+    def _get_vectors_to_infer_ann_inner(self, log: DataFrame, users: DataFrame) -> DataFrame:
         user_vectors, _ = self.get_features(users)
-        if filter_seen_items:
-            user_to_max_items = log.groupBy("user_idx").agg(
-                sf.count("item_idx").alias("num_items"),
-                sf.collect_set("item_idx").alias("seen_item_idxs"),
-            )
-            user_vectors = user_vectors.join(user_to_max_items, on="user_idx")
         return user_vectors
 
     def _get_ann_build_params(self, log: DataFrame):

@@ -41,10 +41,26 @@ class ANNMixin(BaseRecommender):
             self._build_ann_index(vectors, **ann_params)
 
     @abstractmethod
+    def _get_vectors_to_infer_ann_inner(
+        self, log: DataFrame, users: DataFrame
+    ) -> DataFrame:
+        ...
+
     def _get_vectors_to_infer_ann(
         self, log: DataFrame, users: DataFrame, filter_seen_items: bool
     ) -> DataFrame:
-        ...
+
+        users = self._get_vectors_to_infer_ann_inner(log, users)
+
+        # here we add `seen_item_idxs` to filter the viewed items in UDFs (see infer_index)
+        if filter_seen_items:
+            user_to_max_items = log.groupBy("user_idx").agg(
+                sf.count("item_idx").alias("num_items"),
+                sf.collect_set("item_idx").alias("seen_item_idxs"),
+            )
+            users = users.join(user_to_max_items, on="user_idx")
+
+        return users
 
     @abstractmethod
     def _get_ann_infer_params(self) -> Dict[str, Any]:
@@ -159,7 +175,7 @@ class ANNMixin(BaseRecommender):
     ):
         """
         Overridden _filter_seen method from base class.
-        Filtering is not necessary for ann methods, because the data is already filtered in udf.
+        Filtering is not needed for ann methods, because the data is already filtered in udf.
         """
 
         return recs
