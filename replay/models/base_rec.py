@@ -15,7 +15,6 @@ import collections
 import logging
 from abc import ABC, abstractmethod
 from copy import deepcopy
-import os
 from typing import (
     Any,
     Dict,
@@ -28,7 +27,6 @@ from typing import (
     Tuple,
 )
 
-import mlflow
 import numpy as np
 import pandas as pd
 from numpy.random import default_rng
@@ -43,14 +41,11 @@ from replay.metrics import Metric, NDCG
 from replay.optuna_objective import SplitData, MainObjective
 from replay.session_handler import State
 from replay.utils import (
-    JobGroup,
     cache_temp_view,
     convert2spark,
     cosine_similarity,
     drop_temp_view,
     get_top_k,
-    get_top_k_recs,
-    log_exec_timer,
     vector_euclidean_distance_similarity,
     vector_dot,
 )
@@ -428,30 +423,23 @@ class BaseRecommender(ABC):
 
         # filter recommendations presented in interactions log
         recs = recs.join(
-            sf.broadcast(users_log.withColumnRenamed("item_idx", "item")
+            users_log.withColumnRenamed("item_idx", "item")
             .withColumnRenamed("user_idx", "user")
-            .select("user", "item")),
+            .select("user", "item"),
             on=(sf.col("user_idx") == sf.col("user"))
             & (sf.col("item_idx") == sf.col("item")),
             how="anti",
         ).drop("user", "item")
 
-        # because relevances are already sorted, we can return the first k values
-        # for every user_idx
-        def get_top_k(iterator):
-            current_user_idx = None
-            n = 0
-            for row in iterator:
-                if row.user_idx == current_user_idx and n <= k:
-                    n += 1
-                    yield row
-                elif row.user_idx != current_user_idx:
-                    current_user_idx = row.user_idx
-                    n = 1
-                    yield row
-
-        # recs = recs.rdd.mapPartitions(get_top_k).toDF(["user_idx", "item_idx", "relevance"])
-        recs = recs.rdd.mapPartitions(get_top_k).toDF()
+        # crop recommendations to first k + max_seen items for each user
+        recs = recs.withColumn(
+            "temp_rank",
+            sf.row_number().over(
+                Window.partitionBy("user_idx").orderBy(
+                    sf.col("relevance").desc()
+                )
+            ),
+        ).filter(sf.col("temp_rank") <= sf.lit(k))
 
         return recs
 
@@ -491,63 +479,41 @@ class BaseRecommender(ABC):
             or None if `file_path` is provided
         """
         self.logger.debug("Starting predict %s", type(self).__name__)
-        with log_exec_timer("_get_ids() and _filter_cold_for_predict()") as before_predict_timer:
-            user_data = users or log or user_features or self.fit_users
-            users = self._get_ids(user_data, "user_idx")
-            users, log = self._filter_cold_for_predict(users, log, "user")
+        user_data = users or log or user_features or self.fit_users
+        users = self._get_ids(user_data, "user_idx")
+        users, log = self._filter_cold_for_predict(users, log, "user")
 
-            item_data = items or self.fit_items
-            items = self._get_ids(item_data, "item_idx")
-            items, log = self._filter_cold_for_predict(items, log, "item")
+        item_data = items or self.fit_items
+        items = self._get_ids(item_data, "item_idx")
+        items, log = self._filter_cold_for_predict(items, log, "item")
 
-            num_items = items.count()
-            if num_items < k:
-                message = f"k = {k} > number of items = {num_items}"
-                self.logger.debug(message)
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_metric("before_predict_sec", before_predict_timer.duration)
+        num_items = items.count()
+        if num_items < k:
+            message = f"k = {k} > number of items = {num_items}"
+            self.logger.debug(message)
 
-        with log_exec_timer(f"{self.__class__.__name__} execution") as _predict_timer, JobGroup(
-            "Model inference (inside 1)", f"{self.__class__.__name__}._predict()"
-        ):
-            recs = self._predict(
-                log,
-                k,
-                users,
-                items,
-                user_features,
-                item_features,
-                filter_seen_items,
-            )
-            # recs = recs.cache()
-            # recs.write.mode("overwrite").format("noop").save()
-
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_metric("_predict_sec", _predict_timer.duration)
+        recs = self._inner_predict_wrap(
+            log,
+            k,
+            users,
+            items,
+            user_features,
+            item_features,
+            filter_seen_items,
+        )
 
         if filter_seen_items and log:
-            with log_exec_timer("_filter_seen()") as _filter_seen_timer, JobGroup(
-                "Model inference (inside 2)", f"{self.__class__.__name__}._filter_seen()"
-            ):
-                recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
-                # recs = recs.cache()
-                # recs.write.mode("overwrite").format("noop").save()
-            if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-                mlflow.log_metric("filter_seen_sec", _filter_seen_timer.duration)
+            recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
         
         output = None
-        with JobGroup("Model inference (inside 4)", f"{self.__class__.__name__}._predict()"):
-            if recs_file_path is not None:
-                recs.write.parquet(path=recs_file_path, mode="overwrite")
-            else:
-                output = recs.cache()
-                output.count()
+        if recs_file_path is not None:
+            recs.write.parquet(path=recs_file_path, mode="overwrite")
+        else:
+            output = recs.cache()
+            output.count()
 
-        with log_exec_timer("_clear_model_temp_view()") as _clear_model_temp_view_timer:
-            self._clear_model_temp_view("filter_seen_users_log")
-            self._clear_model_temp_view("filter_seen_num_seen")
-        if os.environ.get("LOG_TO_MLFLOW", None) == "True":
-            mlflow.log_metric("clear_model_temp_view_sec", _clear_model_temp_view_timer.duration)
+        self._clear_model_temp_view("filter_seen_users_log")
+        self._clear_model_temp_view("filter_seen_num_seen")
         return output
 
     @staticmethod
@@ -647,6 +613,48 @@ class BaseRecommender(ABC):
         :return: recommendation dataframe
             ``[user_idx, item_idx, relevance]``
         """
+
+    def _inner_predict_wrap(
+        self,
+        log: DataFrame,
+        k: int,
+        users: DataFrame,
+        items: DataFrame,
+        user_features: Optional[DataFrame] = None,
+        item_features: Optional[DataFrame] = None,
+        filter_seen_items: bool = True,
+    ) -> DataFrame:
+        """
+        Inner method that wrap _predict method. Can be overwritten.
+
+        :param log: historical log of interactions
+            ``[user_idx, item_idx, timestamp, relevance]``
+        :param k: number of recommendations for each user
+        :param users: users to create recommendations for
+            dataframe containing ``[user_idx]`` or ``array-like``;
+            if ``None``, recommend to all users from ``log``
+        :param items: candidate items for recommendations
+            dataframe containing ``[item_idx]`` or ``array-like``;
+            if ``None``, take all items from ``log``.
+            If it contains new items, ``relevance`` for them will be ``0``.
+        :param user_features: user features
+            ``[user_idx , timestamp]`` + feature columns
+        :param item_features: item features
+            ``[item_idx , timestamp]`` + feature columns
+        :param filter_seen_items: flag to remove seen items from recommendations based on ``log``.
+        :return: recommendation dataframe
+            ``[user_idx, item_idx, relevance]``
+        """
+
+        return self._predict(
+            log,
+            k,
+            users,
+            items,
+            user_features,
+            item_features,
+            filter_seen_items,
+        )
 
     @property
     def logger(self) -> logging.Logger:
@@ -1417,7 +1425,10 @@ class UserRecommender(BaseRecommender, ABC):
         )
 
 
-class NeighbourRec(Recommender, ABC):
+from replay.models.nmslib_hnsw import NmslibHnswMixin
+
+
+class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
     """Base class that requires log at prediction time"""
 
     similarity: Optional[DataFrame]
@@ -1460,12 +1471,12 @@ class NeighbourRec(Recommender, ABC):
         recs = (
             log.join(users, how="inner", on="user_idx")
             .join(
-                sf.broadcast(self.similarity),
+                self.similarity,
                 how="inner",
                 on=sf.col("item_idx") == sf.col("item_idx_one"),
             )
             .join(
-                sf.broadcast(filter_df),
+                filter_df,
                 how="inner",
                 on=condition,
             )
@@ -1567,6 +1578,24 @@ class NeighbourRec(Recommender, ABC):
         return similarity_filtered.select(
             "item_idx_one", "item_idx_two", "similarity"
         )
+
+    def _get_ann_build_params(self, log: DataFrame) -> Dict[str, Any]:
+        items_count = log.select(sf.max("item_idx")).first()[0] + 1
+        return {
+            "features_col": None,
+            "params": self._nmslib_hnsw_params,
+            "index_type": "sparse",
+            "items_count": items_count,
+        }
+
+    def _get_vectors_to_build_ann(self, log: DataFrame) -> DataFrame:
+        similarity_df = self.similarity.select(
+            "similarity", "item_idx_one", "item_idx_two"
+        )
+        return similarity_df
+
+    def _get_vectors_to_infer_ann_inner(self, log: DataFrame, users: DataFrame) -> DataFrame:
+        return users
 
 
 class NonPersonalizedRecommender(Recommender, ABC):

@@ -1,20 +1,33 @@
 # pylint: disable=wildcard-import,invalid-name,unused-wildcard-import,unspecified-encoding
-import json
 import os
+import json
 import pickle
-from collections import namedtuple
+import shutil
 from inspect import getfullargspec
-from os.path import join
+from collections import namedtuple
+
+import joblib
+from os.path import exists, join
 
 import pyspark.sql.types as st
 from pyspark.ml.feature import StringIndexerModel, IndexToString
 
 from replay.data_preparator import Indexer
+from replay.models import *
 from replay.models.base_rec import BaseRecommender
 from replay.session_handler import State
 from replay.splitters import *
 from replay.utils import do_path_exists
 from replay.models import *
+
+
+def prepare_dir(path):
+    """
+    Create empty `path` dir
+    """
+    if exists(path):
+        shutil.rmtree(path)
+    os.makedirs(path)
 
 
 def save(model: BaseRecommender, path: str, overwrite: bool = False):
@@ -26,13 +39,15 @@ def save(model: BaseRecommender, path: str, overwrite: bool = False):
     :return:
     """
     spark = State().session
-    
+
+    fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
     if not overwrite:
-        is_exists = do_path_exists(path)
+        is_exists = fs.exists(spark._jvm.org.apache.hadoop.fs.Path(path))
         if is_exists:
             raise FileExistsError(f"Path '{path}' already exists. Mode is 'overwrite = False'.")
     # list_status = fs.listStatus(spark._jvm.org.apache.hadoop.fs.Path(path))
 
+    fs.mkdirs(spark._jvm.org.apache.hadoop.fs.Path(join(path, "model")))
     model._save_model(join(path, "model"))
 
     init_args = model._init_args
@@ -63,7 +78,7 @@ def load(path: str) -> BaseRecommender:
     :return: Restored trained model
     """
     spark = State().session
-    args = spark.read.json(join(path, "init_args.json")).first().asDict()
+    args = spark.read.json(join(path, "init_args.json")).first().asDict(recursive=True)
     name = args["_model_name"]
     del args["_model_name"]
 
@@ -83,10 +98,13 @@ def load(path: str) -> BaseRecommender:
         model.arg = extra_args[arg]
 
     df_path = join(path, "dataframes")
-    dataframes = os.listdir(df_path)
-    for name in dataframes:
-        df = spark.read.parquet(join(df_path, name))
-        setattr(model, name, df)
+    fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
+    statuses = fs.listStatus(spark._jvm.org.apache.hadoop.fs.Path(df_path))
+    dataframes_paths = [str(f.getPath()) for f in statuses]
+    for dataframe_path in dataframes_paths:
+        df = spark.read.parquet(dataframe_path)
+        attr_name = dataframe_path.split("/")[-1]
+        setattr(model, attr_name, df)
 
     model._load_model(join(path, "model"))
     df = spark.read.parquet(join(path, "study"))

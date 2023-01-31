@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union, Dict, Any
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
@@ -6,14 +6,23 @@ from pyspark.sql.window import Window
 from scipy.sparse import csr_matrix
 
 from replay.models.base_rec import NeighbourRec
-from replay.models.nmslib_hnsw import NmslibHnswMixin
 from replay.optuna_objective import ItemKNNObjective
 from replay.session_handler import State
-from replay.utils import JobGroup
 
 
-class ItemKNN(NeighbourRec, NmslibHnswMixin):
+class ItemKNN(NeighbourRec):
     """Item-based ItemKNN with modified cosine similarity measure."""
+
+    def _get_ann_infer_params(self) -> Dict[str, Any]:
+        return {
+            "features_col": "",
+            "params": self._nmslib_hnsw_params,
+            "index_type": "sparse",
+        }
+
+    @property
+    def _use_ann(self) -> bool:
+        return self._nmslib_hnsw_params is not None
 
     all_items: Optional[DataFrame]
     dot_products: Optional[DataFrame]
@@ -58,7 +67,16 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
             "use_relevance": self.use_relevance,
             "num_neighbours": self.num_neighbours,
             "weighting": self.weighting,
+            "nmslib_hnsw_params": self._nmslib_hnsw_params,
         }
+
+    def _save_model(self, path: str):
+        if self._nmslib_hnsw_params:
+            self._save_nmslib_hnsw_index(path, sparse=True)
+
+    def _load_model(self, path: str):
+        if self._nmslib_hnsw_params:
+            self._load_nmslib_hnsw_index(path, sparse=True)
 
     @staticmethod
     def _shrink(dot_products: DataFrame, shrink: float) -> DataFrame:
@@ -164,7 +182,7 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         Calculate item dot products
 
         :param log: DataFrame with interactions, `[user_idx, item_idx, relevance]`
-        :return: similarity matrix `[item_idx_one, item_idx_two, norm1, norm2]`
+        :return: similarity matrix `[item_idx_one, item_idx_two, norm1, norm2, dot_product]`
         """
         if self.weighting:
             log = self._reweight_log(log)
@@ -233,38 +251,21 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
     ) -> None:
-        with JobGroup(
-            f"{self.__class__.__name__}._fit()",
-            "self.similarity",
-        ):
-            df = log.select("user_idx", "item_idx", "relevance")
-            if not self.use_relevance:
-                df = df.withColumn("relevance", sf.lit(1))
+        df = log.select("user_idx", "item_idx", "relevance")
+        if not self.use_relevance:
+            df = df.withColumn("relevance", sf.lit(1))
 
-            similarity_matrix = self._get_similarity(df)
-            self.similarity = self._get_k_most_similar(similarity_matrix)
-            self.similarity.cache().count()
+        similarity_matrix = self._get_similarity(df)
+        self.similarity = self._get_k_most_similar(similarity_matrix)
+        self.similarity.cache().count()
 
-        if self._nmslib_hnsw_params:
-
-            pandas_log = df.select("user_idx", "item_idx", "relevance").toPandas()
-            interactions_matrix = csr_matrix(
-                (pandas_log.relevance, (pandas_log.user_idx, pandas_log.item_idx)),
-                shape=(self._user_dim, self._item_dim),
-            )
-            self._interactions_matrix_broadcast = (
-                    State().session.sparkContext.broadcast(interactions_matrix)
-            )
-
-            items_count = log.select(sf.max('item_idx')).first()[0] + 1 
-            similarity_df = self.similarity.select("similarity", 'item_idx_one', 'item_idx_two')
-            self._build_hnsw_index(similarity_df, None, self._nmslib_hnsw_params, index_type="sparse", items_count=items_count)
-
-            self._user_to_max_items = (
-                    log.groupBy('user_idx')
-                    .agg(sf.count('item_idx').alias('num_items'))
-            )
-
+    def refit(
+        self,
+        log: DataFrame,
+        previous_log: Optional[Union[str, DataFrame]] = None,
+        merged_log_path: Optional[str] = None,
+    ) -> None:
+        pass
 
     # pylint: disable=too-many-arguments
     def _predict(
@@ -277,22 +278,6 @@ class ItemKNN(NeighbourRec, NmslibHnswMixin):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
-        
-        if self._nmslib_hnsw_params:
-
-            params = self._nmslib_hnsw_params
-         
-            with JobGroup(
-                f"{self.__class__.__name__}._predict()",
-                "_infer_hnsw_index()",
-            ):
-                users = users.join(self._user_to_max_items, on="user_idx")
-                
-                res = self._infer_hnsw_index(users, "", 
-                    params, k,
-                    index_type="sparse")
-
-            return res
 
         return self._predict_pairs_inner(
             log=log,

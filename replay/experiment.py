@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -6,6 +7,7 @@ from replay.constants import IntOrList, NumType
 from replay.utils import JobGroup, convert2spark
 from replay.metrics.base_metric import (
     Metric,
+    NCISMetric,
     RecOnlyMetric,
     get_enriched_recommendations,
 )
@@ -92,16 +94,13 @@ class Experiment:
                 else (current_k, max_k)
             )
 
-        with JobGroup("Experiment.add_result()", "get_enriched_recommendations()"):
-            recs = get_enriched_recommendations(pred, self.test, max_k).cache() 
-            recs.write.mode("overwrite").format("noop").save()
+        recs = get_enriched_recommendations(pred, self.test, max_k).cache()
 
         for metric, k_list in sorted(
             self.metrics.items(), key=lambda x: str(x[0])
         ):
             enriched = None
             if isinstance(metric, RecOnlyMetric):
-                print("Calc metric._get_enriched_recommendations()")
                 enriched = metric._get_enriched_recommendations(
                     pred, self.test, max_k
                 )

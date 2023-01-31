@@ -45,10 +45,8 @@ llvmlite = ">=0.32.1"
 seaborn = "*"
 pyarrow = "*"
 implicit = ">=0.5"
-pyspark-hnsw = "*"
 nmslib = "*"
-torchvision = "0.9.1"
-sparklightautoml-dev = { version = "0.3.2", optional = true }
+hnswlib = "*"
 
 [tool.poetry.dev-dependencies]
 # dev only
@@ -80,6 +78,8 @@ virtualenv = "*"
 data-science-types = "*"
 pyspark-stubs = "*"
 autopep8 = "^1.7.0"
+# logging
+mlflow-skinny = "*"
 
 [tool.poetry.extras]
 slama = ["sparklightautoml-dev"]

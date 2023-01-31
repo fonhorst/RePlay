@@ -152,14 +152,25 @@ docs/_build/
 # Spark files
 metastore_db/
 
+# VSCode scala exstention files
 .vscode
+.metals
+.bloop
+.bsp
+
+# supplementary files
+rsync-repo.sh
+requirements.txt
+airflow.yaml
+
+# temporary
+experiments/tests
 
 experiments/tests/mlruns
 requirements.txt
 airflow.yaml
 
+# meld
 *.orig
-
-rsync-repo.sh
 
 **/spark-warehouse/

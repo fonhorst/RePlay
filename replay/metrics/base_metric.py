@@ -7,14 +7,14 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Union, Optional
 
 import pandas as pd
+from pyspark.sql import Column
 from pyspark.sql import DataFrame
+from pyspark.sql import Window
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
-from pyspark.sql import Window
 from scipy.stats import norm
 
 from replay.constants import AnyDataFrame, IntOrList, NumType
-from replay.utils import JobGroup, convert2spark
 from replay.utils import convert2spark, get_top_k_recs
 
 
@@ -117,6 +117,9 @@ class Metric(ABC):
 
     _logger: Optional[logging.Logger] = None
 
+    def __init__(self, use_scala_udf: bool = False) -> None:
+        self._use_scala_udf = use_scala_udf
+
     @property
     def logger(self) -> logging.Logger:
         """
@@ -155,35 +158,25 @@ class Metric(ABC):
         res = {}
         quantile = norm.ppf((1 + alpha) / 2)
         for k in k_list:
-            with JobGroup(
-                "_conf_interval()",
-                "self._get_metric_distribution()",
-            ):
-                distribution = self._get_metric_distribution(recs, k)    
-                distribution = distribution.cache()
-                distribution.write.mode("overwrite").format("noop").save()
-            
-            with JobGroup(
-                "_conf_interval()",
-                "distribution.agg()",
-            ):
-                value = (
-                    distribution.agg(
-                        sf.stddev("value").alias("std"),
-                        sf.count("value").alias("count"),
-                    )
-                    .select(
-                        sf.when(
-                            sf.isnan(sf.col("std")) | sf.col("std").isNull(),
-                            sf.lit(0.0),
-                        )
-                        .otherwise(sf.col("std"))
-                        .cast("float")
-                        .alias("std"),
-                        "count",
-                    )
-                    .first()
+            distribution = self._get_metric_distribution(recs, k)
+
+            value = (
+                distribution.agg(
+                    sf.stddev("value").alias("std"),
+                    sf.count("value").alias("count"),
                 )
+                .select(
+                    sf.when(
+                        sf.isnan(sf.col("std")) | sf.col("std").isNull(),
+                        sf.lit(0.0),
+                    )
+                    .otherwise(sf.col("std"))
+                    .cast("float")
+                    .alias("std"),
+                    "count",
+                )
+                .first()
+            )
             res[k] = quantile * value["std"] / (value["count"] ** 0.5)
         return res
 
@@ -215,6 +208,14 @@ class Metric(ABC):
         :param k: depth cut-off
         :return: metric distribution for different cut-offs and users
         """
+        if self._use_scala_udf:
+            # Possibly bad approach to define column names for udf call
+            # because we don't know columns ordering
+            # and we don't know exactly what is columns in recs
+            cols = [col for col in recs.columns if col != "user_idx"]
+            metric_value_col = self._get_metric_value_by_user_scala_udf(sf.lit(k).alias("k"), *cols).alias("value")
+            return recs.select("user_idx", metric_value_col)
+
         cur_class = self.__class__
         distribution = recs.rdd.flatMap(
             # pylint: disable=protected-access
@@ -225,6 +226,12 @@ class Metric(ABC):
             f"user_idx {recs.schema['user_idx'].dataType.typeName()}, value double"
         )
         return distribution
+
+    @staticmethod
+    @abstractmethod
+    def _get_metric_value_by_user_scala_udf(k, pred, ground_truth) -> Column:
+        """Returns scala udf that calcs metric for one user as Column
+        """
 
     @staticmethod
     @abstractmethod
@@ -346,6 +353,7 @@ class NCISMetric(Metric):
         prev_policy_weights: AnyDataFrame,
         threshold: float = 10.0,
         activation: Optional[str] = None,
+        use_scala_udf: bool = False,
     ):  # pylint: disable=super-init-not-called
         """
         :param prev_policy_weights: historical item of user-item relevance (previous policy values)
@@ -354,6 +362,7 @@ class NCISMetric(Metric):
         :activation: activation function, applied over relevance values.
             "logit"/"sigmoid", "softmax" or None
         """
+        self._use_scala_udf = use_scala_udf
         self.prev_policy_weights = convert2spark(
             prev_policy_weights
         ).withColumnRenamed("relevance", "prev_relevance")
