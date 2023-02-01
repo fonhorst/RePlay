@@ -1,8 +1,7 @@
-from typing import Optional, Union
+from typing import Optional
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
-from pyspark.sql.window import Window
 
 from replay.models.base_rec import NonPersonalizedRecommender
 from replay.utils import unpersist_after, unionify
@@ -197,7 +196,7 @@ class RandomRec(NonPersonalizedRecommender):
                 self.total_relevance = self.total_relevance + log.agg(sf.sum("relevance")).first()[0]
 
                 self.relevance_sums = (
-                    unionify(log, self.relevance_sums)
+                    unionify(log.select("item_idx", "relevance"), self.relevance_sums)
                     .groupBy("item_idx")
                     .agg(sf.sum("relevance").alias("relevance"))
                     .cache()
