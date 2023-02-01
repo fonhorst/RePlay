@@ -3,11 +3,11 @@ from typing import Optional, Union
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as sf
 
-from replay.models.base_rec import Recommender
+from replay.models.base_rec import Recommender, PartialFitMixin
 from replay.utils import unionify, unpersist_after
 
 
-class UserPopRec(Recommender):
+class UserPopRec(Recommender, PartialFitMixin):
     """
     Recommends old objects from each user's personal top.
     Input is the number of interactions between users and items.

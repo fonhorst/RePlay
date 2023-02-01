@@ -5,11 +5,11 @@ from pyspark.ml.feature import VectorAssembler
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as sf
 
-from replay.models.base_rec import UserRecommender
+from replay.models.base_rec import UserRecommender, PartialFitMixin
 from replay.utils import unionify, unpersist_after
 
 
-class ClusterRec(UserRecommender):
+class ClusterRec(UserRecommender, PartialFitMixin):
     """
     Generate recommendations for cold users using k-means clusters
     """

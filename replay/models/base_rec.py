@@ -504,7 +504,7 @@ class BaseRecommender(ABC):
 
         if filter_seen_items and log:
             recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
-        
+
         output = None
         if recs_file_path is not None:
             recs.write.parquet(path=recs_file_path, mode="overwrite")
@@ -1037,6 +1037,38 @@ class ItemVectorModel(BaseRecommender):
         )
 
         return similarity_matrix
+
+
+class PartialFitMixin(BaseRecommender):
+    def fit_partial(self,
+                    log: DataFrame,
+                    previous_log: Optional[DataFrame] = None) -> None:
+        self._fit_partial(log,
+                          user_features=None,
+                          item_features=None,
+                          previous_log=previous_log)
+
+    def _fit(
+            self,
+            log: DataFrame,
+            user_features: Optional[DataFrame] = None,
+            item_features: Optional[DataFrame] = None) -> None:
+        self._fit_partial(log, user_features, item_features)
+
+    @abstractmethod
+    def _fit_partial(
+            self,
+            log: DataFrame,
+            user_features: Optional[DataFrame] = None,
+            item_features: Optional[DataFrame] = None,
+            previous_log: Optional[DataFrame] = None) -> None:
+        ...
+
+    def _clear_cache(self):
+        super(PartialFitMixin, self)._clear_cache()
+        for df in self._dataframes.values():
+            if df is not None:
+                df.unpersist()
 
 
 # pylint: disable=abstract-method
@@ -1622,7 +1654,7 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
         return users
 
 
-class NonPersonalizedRecommender(Recommender, ABC):
+class NonPersonalizedRecommender(Recommender, PartialFitMixin, ABC):
     """Base class for non-personalized recommenders with popularity statistics."""
 
     can_predict_cold_users = True
@@ -1778,27 +1810,3 @@ class NonPersonalizedRecommender(Recommender, ABC):
             recs = users.withColumn("cnt", sf.lit(min(k, items_pd.shape[0])))
 
         return recs.groupby("user_idx").applyInPandas(grouped_map, REC_SCHEMA)
-
-    def fit_partial(self,
-                    log: DataFrame,
-                    previous_log: Optional[DataFrame] = None) -> None:
-        self._fit_partial(log,
-                          user_features=None,
-                          item_features=None,
-                          previous_log=previous_log)
-
-    def _fit(
-            self,
-            log: DataFrame,
-            user_features: Optional[DataFrame] = None,
-            item_features: Optional[DataFrame] = None) -> None:
-        self._fit_partial(log, user_features, item_features)
-
-    @abstractmethod
-    def _fit_partial(
-            self,
-            log: DataFrame,
-            user_features: Optional[DataFrame] = None,
-            item_features: Optional[DataFrame] = None,
-            previous_log: Optional[DataFrame] = None) -> None:
-        ...

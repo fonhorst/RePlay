@@ -4,14 +4,14 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql.window import Window
 
-from replay.models.base_rec import NeighbourRec
+from replay.models.base_rec import NeighbourRec, PartialFitMixin
 from replay.optuna_objective import ItemKNNObjective
 from replay.utils import unionify
 
 import warnings
 
 
-class ItemKNN(NeighbourRec):
+class ItemKNN(NeighbourRec, PartialFitMixin):
     """Item-based ItemKNN with modified cosine similarity measure."""
 
     def _get_ann_infer_params(self) -> Dict[str, Any]:
