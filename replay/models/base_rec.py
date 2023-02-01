@@ -12,9 +12,12 @@ Base abstract classes:
     with popularity statistics
 """
 import collections
+import joblib
+import os
 import logging
 from abc import ABC, abstractmethod
 from copy import deepcopy
+from os.path import join
 from typing import (
     Any,
     Dict,
@@ -504,7 +507,7 @@ class BaseRecommender(ABC):
 
         if filter_seen_items and log:
             recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
-
+        
         output = None
         if recs_file_path is not None:
             recs.write.parquet(path=recs_file_path, mode="overwrite")
@@ -749,6 +752,7 @@ class BaseRecommender(ABC):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
         recs_file_path: Optional[str] = None,
+        k: Optional[int] = None,
     ) -> Optional[DataFrame]:
         """
         This method
@@ -783,12 +787,22 @@ class BaseRecommender(ABC):
             item_features=item_features,
         )
 
-        if recs_file_path is None:
-            pred.cache().count()
-            return pred
+        if k:
+            pred = get_top_k(
+                dataframe=pred,
+                partition_by_col=sf.col("user_idx"),
+                order_by_col=[
+                    sf.col("relevance").desc(),
+                ],
+                k=k,
+            )
 
-        pred.write.parquet(path=recs_file_path, mode="overwrite")
-        return None
+        if recs_file_path is not None:
+            pred.write.parquet(path=recs_file_path, mode="overwrite")
+            return None
+
+        pred.cache().count()
+        return pred
 
     def _predict_pairs(
         self,
@@ -1197,6 +1211,7 @@ class HybridRecommender(BaseRecommender, ABC):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
         recs_file_path: Optional[str] = None,
+        k: Optional[int] = None,
     ) -> Optional[DataFrame]:
         """
         Get recommendations for specific user-item ``pairs``.
@@ -1212,15 +1227,17 @@ class HybridRecommender(BaseRecommender, ABC):
             ``[item_idx , timestamp]`` + feature columns
         :param recs_file_path: save recommendations at the given absolute path as parquet file.
             If None, cached and materialized recommendations dataframe  will be returned
+        :param k: top-k items for each user from pairs.
         :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
             or None if `file_path` is provided
         """
         return self._predict_pairs_wrap(
-            pairs,
-            log,
-            user_features,
-            item_features,
+            pairs=pairs,
+            log=log,
+            user_features=user_features,
+            item_features=item_features,
             recs_file_path=recs_file_path,
+            k=k,
         )
 
     def get_features(
@@ -1299,6 +1316,7 @@ class Recommender(BaseRecommender, ABC):
         pairs: DataFrame,
         log: Optional[DataFrame] = None,
         recs_file_path: Optional[str] = None,
+        k: Optional[int] = None,
     ) -> Optional[DataFrame]:
         """
         Get recommendations for specific user-item ``pairs``.
@@ -1310,11 +1328,15 @@ class Recommender(BaseRecommender, ABC):
             ``[user_idx, item_idx, timestamp, relevance]``
         :param recs_file_path: save recommendations at the given absolute path as parquet file.
             If None, cached and materialized recommendations dataframe  will be returned
+        :param k: top-k items for each user from pairs.
         :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
             or None if `file_path` is provided
         """
         return self._predict_pairs_wrap(
-            pairs, log, None, None, recs_file_path=recs_file_path
+            pairs=pairs,
+            log=log,
+            recs_file_path=recs_file_path,
+            k=k,
         )
 
     # pylint: disable=too-many-arguments
@@ -1366,30 +1388,6 @@ class Recommender(BaseRecommender, ABC):
             If a model does not have a vector for some ids they are not present in the final result.
         """
         return self._get_features_wrap(ids, None)
-
-    def fit_partial(self,
-                    log: DataFrame,
-                    previous_log: Optional[DataFrame] = None) -> None:
-        self._fit_partial(log,
-                          user_features=None,
-                          item_features=None,
-                          previous_log=previous_log)
-
-    def _fit(
-            self,
-            log: DataFrame,
-            user_features: Optional[DataFrame] = None,
-            item_features: Optional[DataFrame] = None) -> None:
-        self._fit_partial(log, user_features, item_features)
-
-    @abstractmethod
-    def _fit_partial(
-            self,
-            log: DataFrame,
-            user_features: Optional[DataFrame] = None,
-            item_features: Optional[DataFrame] = None,
-            previous_log: Optional[DataFrame] = None) -> None:
-        ...
 
 
 class UserRecommender(BaseRecommender, ABC):
@@ -1460,6 +1458,7 @@ class UserRecommender(BaseRecommender, ABC):
         user_features: DataFrame,
         log: Optional[DataFrame] = None,
         recs_file_path: Optional[str] = None,
+        k: Optional[int] = None,
     ) -> Optional[DataFrame]:
         """
         Get recommendations for specific user-item ``pairs``.
@@ -1473,11 +1472,16 @@ class UserRecommender(BaseRecommender, ABC):
             ``[user_idx, item_idx, timestamp, relevance]``
         :param recs_file_path: save recommendations at the given absolute path as parquet file.
             If None, cached and materialized recommendations dataframe  will be returned
+        :param k: top-k items for each user from pairs.
         :return: cached recommendation dataframe with columns ``[user_idx, item_idx, relevance]``
             or None if `file_path` is provided
         """
         return self._predict_pairs_wrap(
-            pairs, log, user_features, None, recs_file_path=recs_file_path
+            pairs=pairs,
+            log=log,
+            user_features=user_features,
+            recs_file_path=recs_file_path,
+            k=k,
         )
 
 
@@ -1490,6 +1494,9 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
     similarity: Optional[DataFrame]
     can_predict_item_to_item: bool = True
     can_predict_cold_users: bool = True
+    can_change_metric: bool = False
+    item_to_item_metrics = ["similarity"]
+    _similarity_metric = "similarity"
 
     @property
     def _dataframes(self):
@@ -1498,6 +1505,22 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
     def _clear_cache(self):
         if hasattr(self, "similarity"):
             self.similarity.unpersist()
+
+    # pylint: disable=missing-function-docstring
+    @property
+    def similarity_metric(self):
+        return self._similarity_metric
+
+    @similarity_metric.setter
+    def similarity_metric(self, value):
+        if not self.can_change_metric:
+            raise ValueError("This class does not support changing similarity metrics")
+        if value not in self.item_to_item_metrics:
+            raise ValueError(
+                f"Select one of the valid metrics for predict: "
+                f"{self.item_to_item_metrics}"
+            )
+        self._similarity_metric = value
 
     def _predict_pairs_inner(
         self,
@@ -1537,7 +1560,7 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
                 on=condition,
             )
             .groupby("user_idx", "item_idx_two")
-            .agg(sf.sum("similarity").alias("relevance"))
+            .agg(sf.sum(self.similarity_metric).alias("relevance"))
             .withColumnRenamed("item_idx_two", "item_idx")
         )
         return recs
@@ -1553,6 +1576,7 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
+
         return self._predict_pairs_inner(
             log=log,
             filter_df=items.withColumnRenamed("item_idx", "item_idx_filter"),
@@ -1567,6 +1591,12 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
         user_features: Optional[DataFrame] = None,
         item_features: Optional[DataFrame] = None,
     ) -> DataFrame:
+
+        if log is None:
+            raise ValueError(
+                "log is not provided, but it is required for prediction"
+            )
+
         return self._predict_pairs_inner(
             log=log,
             filter_df=(
@@ -1600,6 +1630,7 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
             where bigger value means greater similarity.
             spark-dataframe with columns ``[item_idx, neighbour_item_idx, similarity]``
         """
+
         if metric is not None:
             self.logger.debug(
                 "Metric is not used to determine nearest items in %s model",
@@ -1609,7 +1640,7 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
         return self._get_nearest_items_wrap(
             items=items,
             k=k,
-            metric=None,
+            metric=metric,
             candidates=candidates,
         )
 
@@ -1632,7 +1663,7 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
             )
 
         return similarity_filtered.select(
-            "item_idx_one", "item_idx_two", "similarity"
+            "item_idx_one", "item_idx_two", "similarity" if metric is None else metric
         )
 
     def _get_ann_build_params(self, log: DataFrame) -> Dict[str, Any]:
@@ -1658,28 +1689,84 @@ class NonPersonalizedRecommender(Recommender, PartialFitMixin, ABC):
     """Base class for non-personalized recommenders with popularity statistics."""
 
     can_predict_cold_users = True
+    can_predict_cold_items = True
     item_popularity: DataFrame
+    add_cold_items: bool
+    cold_weight: float
+    sample: bool
     fill: float
-    seed: int
+    seed: Optional[int] = None
+
+    def __init__(self, add_cold_items: bool, cold_weight: float):
+        self.add_cold_items = add_cold_items
+        if 0 < cold_weight <= 1:
+            self.cold_weight = cold_weight
+        else:
+            raise ValueError(
+                "`cold_weight` value should be in interval (0, 1]"
+            )
 
     @property
     def _dataframes(self):
         return {"item_popularity": self.item_popularity}
+
+    def _save_model(self, path: str):
+        joblib.dump({"fill": self.fill}, join(path, "params.dump"))
+
+    def _load_model(self, path: str):
+        self.fill = joblib.load(join(path, "params.dump"))["fill"]
 
     def _clear_cache(self):
         if hasattr(self, "item_popularity"):
             self.item_popularity.unpersist()
 
     @staticmethod
-    def _check_relevance(log: Optional[DataFrame] = None):
-        if log is None:
-            return
+    def _calc_fill(item_popularity: DataFrame, weight: float) -> float:
+        """
+        Calculating a fill value a the minimal relevance
+        calculated during model training multiplied by weight.
+        """
+        return (
+            item_popularity.select(sf.min("relevance")).collect()[0][0]
+            * weight
+        )
+
+    @staticmethod
+    def _check_relevance(log: DataFrame):
 
         vals = log.select("relevance").where(
             (sf.col("relevance") != 1) & (sf.col("relevance") != 0)
         )
         if vals.count() > 0:
             raise ValueError("Relevance values in log must be 0 or 1")
+
+    def _get_selected_item_popularity(self, items: DataFrame) -> DataFrame:
+        """
+        Choose only required item from `item_popularity` dataframe
+        for further recommendations generation.
+        """
+        return self.item_popularity.join(
+            items,
+            on="item_idx",
+            how="right" if self.add_cold_items else "inner",
+        ).fillna(value=self.fill, subset=["relevance"])
+
+    @staticmethod
+    def _calc_max_hist_len(log: DataFrame, users: DataFrame) -> int:
+        max_hist_len = (
+            (
+                log.join(users, on="user_idx")
+                .groupBy("user_idx")
+                .agg(sf.countDistinct("item_idx").alias("items_count"))
+            )
+            .select(sf.max("items_count"))
+            .collect()[0][0]
+        )
+        # all users have empty history
+        if max_hist_len is None:
+            max_hist_len = 0
+
+        return max_hist_len
 
     # pylint: disable=too-many-arguments
     def _predict_without_sampling(
@@ -1690,20 +1777,11 @@ class NonPersonalizedRecommender(Recommender, PartialFitMixin, ABC):
         items: DataFrame,
         filter_seen_items: bool = True,
     ) -> DataFrame:
-
-        if hasattr(self, "fill") and self.fill is not None:
-            selected_item_popularity = self.item_popularity.join(
-                items,
-                on="item_idx",
-                how="right",
-            ).fillna(value=self.fill, subset=["relevance"])
-        else:
-            selected_item_popularity = self.item_popularity.join(
-                items,
-                on="item_idx",
-                how="inner",
-            )
-
+        """
+        Regular prediction for popularity-based models,
+        top-k most relevant items from `items` are chosen for each user
+        """
+        selected_item_popularity = self._get_selected_item_popularity(items)
         selected_item_popularity = selected_item_popularity.withColumn(
             "rank",
             sf.row_number().over(
@@ -1748,18 +1826,28 @@ class NonPersonalizedRecommender(Recommender, PartialFitMixin, ABC):
         users: DataFrame,
         items: DataFrame,
         filter_seen_items: bool = True,
-        add_cold_items: bool = True,
     ) -> DataFrame:
-
-        selected_item_popularity = self.item_popularity.join(
-            items, on="item_idx", how="right" if add_cold_items else "inner"
-        ).fillna(value=self.fill, subset=["relevance"])
+        """
+        Randomized prediction for popularity-based models,
+        top-k items from `items` are sampled for each user based with
+        probability proportional to items' popularity
+        """
+        selected_item_popularity = self._get_selected_item_popularity(items)
+        selected_item_popularity = selected_item_popularity.withColumn(
+            "relevance",
+            sf.when(sf.col("relevance") == sf.lit(0.0), 0.1**6).otherwise(
+                sf.col("relevance")
+            ),
+        )
 
         items_pd = selected_item_popularity.withColumn(
             "probability",
             sf.col("relevance")
             / selected_item_popularity.select(sf.sum("relevance")).first()[0],
         ).toPandas()
+
+        if items_pd.shape[0] == 0:
+            return State().session.createDataFrame([], REC_SCHEMA)
 
         seed = self.seed
         class_name = self.__class__.__name__
@@ -1810,3 +1898,41 @@ class NonPersonalizedRecommender(Recommender, PartialFitMixin, ABC):
             recs = users.withColumn("cnt", sf.lit(min(k, items_pd.shape[0])))
 
         return recs.groupby("user_idx").applyInPandas(grouped_map, REC_SCHEMA)
+
+    # pylint: disable=too-many-arguments
+    def _predict(
+        self,
+        log: DataFrame,
+        k: int,
+        users: DataFrame,
+        items: DataFrame,
+        user_features: Optional[DataFrame] = None,
+        item_features: Optional[DataFrame] = None,
+        filter_seen_items: bool = True,
+    ) -> DataFrame:
+
+        if self.sample:
+            return self._predict_with_sampling(
+                log=log,
+                k=k,
+                users=users,
+                items=items,
+                filter_seen_items=filter_seen_items,
+            )
+        else:
+            return self._predict_without_sampling(
+                log, k, users, items, filter_seen_items
+            )
+
+    def _predict_pairs(
+        self,
+        pairs: DataFrame,
+        log: Optional[DataFrame] = None,
+        user_features: Optional[DataFrame] = None,
+        item_features: Optional[DataFrame] = None,
+    ) -> DataFrame:
+        return pairs.join(
+            self.item_popularity,
+            on="item_idx",
+            how="left" if self.add_cold_items else "inner",
+        ).fillna(value=self.fill, subset=["relevance"]).select("user_idx", "item_idx", "relevance")
