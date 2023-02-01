@@ -449,6 +449,6 @@ def main(spark: SparkSession, dataset_name: str):
 if __name__ == "__main__":
     spark_sess = get_spark_session()
     dataset = os.environ.get("DATASET", "ml1m")  # ml1m
-    os.environ["MODEL"] = "UCB"
+    os.environ["MODEL"] = "RandomRec_popular_based"
     main(spark=spark_sess, dataset_name=dataset)
     spark_sess.stop()
