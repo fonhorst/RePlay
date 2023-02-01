@@ -8,6 +8,8 @@ from replay.models.base_rec import NeighbourRec
 from replay.optuna_objective import ItemKNNObjective
 from replay.utils import unionify
 
+import warnings
+
 
 class ItemKNN(NeighbourRec):
     """Item-based ItemKNN with modified cosine similarity measure."""
@@ -265,6 +267,16 @@ class ItemKNN(NeighbourRec):
             .filter(sf.col("similarity_order") <= self.num_neighbours)
             .drop("similarity_order")
         )
+
+    def fit_partial(self, log: DataFrame, previous_log: Optional[DataFrame] = None) -> None:
+        super().fit_partial(log, previous_log)
+
+        if self._use_ann:
+            warnings.warn("ItemKNN fit_partial is used wth 'use_ann' flag. "
+                          "It means full ann index rebuilding for this particular model.", RuntimeWarning)
+            vectors = self._get_vectors_to_build_ann(log)
+            ann_params = self._get_ann_build_params(log)
+            self._build_ann_index(vectors, **ann_params)
 
     def _fit_partial(
             self,
