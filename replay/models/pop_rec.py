@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
@@ -87,9 +87,9 @@ class PopRec(NonPersonalizedRecommender):
         self.all_user_ids: Optional[DataFrame] = None
         self.item_abs_relevances: Optional[DataFrame] = None
         self.item_popularity: Optional[DataFrame] = None
-	super().__init__(
-            add_cold_items=add_cold_items, cold_weight=cold_weight
-        )
+        super().__init__(
+                add_cold_items=add_cold_items, cold_weight=cold_weight
+            )
 
     @property
     def _init_args(self):
@@ -107,8 +107,7 @@ class PopRec(NonPersonalizedRecommender):
             "item_popularity": self.item_popularity
         }
 
-
-   def _clear_cache(self):
+    def _clear_cache(self):
         for df in self._dataframes.values():
             if df is not None:
                 df.unpersist()
@@ -122,7 +121,6 @@ class PopRec(NonPersonalizedRecommender):
         with unpersist_after(self._dataframes):
             self.all_user_ids = unionify(log.select("user_idx"), self.all_user_ids).distinct().cache()
             self._users_count = self.all_user_ids.count()
-
             if self.use_relevance:
                 # we will save it to update fitted model
                 self.item_abs_relevances = (
@@ -136,14 +134,14 @@ class PopRec(NonPersonalizedRecommender):
                 )
             else:
                 log = unionify(log, previous_log)
-
                 # equal to storing a whole old log which may be huge
-                 self.item_popularity = (
+                self.item_popularity = (
                     log
                     .groupBy("item_idx")
-                    .agg(sf.countDistinct("user_idx").alias("relevance") / sf.lit(self._users_count))
+                    .agg(
+                        (sf.countDistinct("user_idx").alias("relevance") / sf.lit(self._users_count)).alias("relevance")
+                    )
                 )
 
             self.item_popularity.cache().count()
-	    self.fill = self._calc_fill(self.item_popularity, self.cold_weight)
-
+            self.fill = self._calc_fill(self.item_popularity, self.cold_weight)

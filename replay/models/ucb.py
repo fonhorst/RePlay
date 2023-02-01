@@ -1,9 +1,8 @@
-import joblib
 import math
-
 from os.path import join
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
+import joblib
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 
@@ -70,10 +69,10 @@ class UCB(NonPersonalizedRecommender):
         self.coef = exploration_coef
         self.sample = sample
         self.seed = seed
-	self.items_counts_aggr: Optional[DataFrame] = None
+        self.items_counts_aggr: Optional[DataFrame] = None
         self.item_popularity: Optional[DataFrame] = None
         self.full_count = 0
-	super().__init__(add_cold_items=True, cold_weight=1)
+        super().__init__(add_cold_items=True, cold_weight=1)
 
     @property
     def _init_args(self):
@@ -156,7 +155,7 @@ class UCB(NonPersonalizedRecommender):
             ).cache()
 
             # we save this variable for the refit() method
-            self.full_count = self.full_count + log.count()
+            self.full_count += log.count()
             self.item_popularity = self.items_counts_aggr.withColumn(
                 "relevance",
                 sf.col("pos") / sf.col("total") + sf.sqrt(sf.log(sf.lit(self.coef * self.full_count)) / sf.col("total"))
@@ -184,8 +183,7 @@ class UCB(NonPersonalizedRecommender):
                 k=k,
                 users=users,
                 items=items,
-                filter_seen_items=filter_seen_items,
-                add_cold_items=True,
+                filter_seen_items=filter_seen_items
             )
         else:
             return self._predict_without_sampling(

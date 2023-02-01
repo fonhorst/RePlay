@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
@@ -151,7 +151,7 @@ class RandomRec(NonPersonalizedRecommender):
         self.distribution = distribution
         self.alpha = alpha
         self.seed = seed
-	self.total_relevance = 0.0
+        self.total_relevance = 0.0
         self.relevance_sums: Optional[DataFrame] = None
         self.item_popularity: Optional[DataFrame] = None
         self.sample = sample
@@ -215,19 +215,17 @@ class RandomRec(NonPersonalizedRecommender):
                     .agg(sf.sum("relevance").alias("relevance"))
                     .cache()
                 )
-		
-		item_popularity = self.relevance_sums
+                item_popularity = self.relevance_sums
             else:
                 item_popularity = unionify(
                     log.select("item_idx", sf.lit(1.0).alias("relevance")),
                     self.item_popularity
                 ).drop_duplicates(["item_idx"])
 
-	
-	    self.item_popularity = item_popularity.select(
+            self.item_popularity = item_popularity.select(
                     "item_idx",
                     (sf.col("relevance") / item_popularity.agg(sf.sum("relevance")).first()[0]).alias("relevance")
             )
 
             self.item_popularity.cache().count()
-            self.fill = self._calc_fill(self.item_popularity, self.cold_weight
+            self.fill = self._calc_fill(self.item_popularity, self.cold_weight)

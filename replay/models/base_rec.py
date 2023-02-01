@@ -1726,13 +1726,12 @@ class NonPersonalizedRecommender(Recommender, PartialFitMixin, ABC):
         Calculating a fill value a the minimal relevance
         calculated during model training multiplied by weight.
         """
-        return (
-            item_popularity.select(sf.min("relevance")).collect()[0][0]
-            * weight
-        )
+        return item_popularity.select(sf.min("relevance")).first()[0] * weight
 
     @staticmethod
-    def _check_relevance(log: DataFrame):
+    def _check_relevance(log: Optional[DataFrame] = None):
+        if log is None:
+            return
 
         vals = log.select("relevance").where(
             (sf.col("relevance") != 1) & (sf.col("relevance") != 0)
@@ -1800,24 +1799,6 @@ class NonPersonalizedRecommender(Recommender, PartialFitMixin, ABC):
         return users.crossJoin(
             selected_item_popularity.filter(sf.col("rank") <= k + max_hist_len)
         ).drop("rank")
-
-    @staticmethod
-    def _calc_max_hist_len(log: DataFrame, users: DataFrame) -> int:
-
-        max_hist_len = (
-            (
-                log.join(users, on="user_idx")
-                .groupBy("user_idx")
-                .agg(sf.countDistinct("item_idx").alias("items_count"))
-            )
-            .select(sf.max("items_count"))
-            .collect()[0][0]
-        )
-        # all users have empty history
-        if max_hist_len is None:
-            max_hist_len = 0
-
-        return max_hist_len
 
     def _predict_with_sampling(
         self,

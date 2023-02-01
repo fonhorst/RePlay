@@ -59,7 +59,7 @@ class Wilson(PopRec):
         super().__init__()
         self.alpha = alpha
         self.items_counts_aggr: Optional[DataFrame] = None
-	self.sample = sample
+        self.sample = sample
         self.seed = seed
         super().__init__(
             add_cold_items=add_cold_items, cold_weight=cold_weight
@@ -115,4 +115,4 @@ class Wilson(PopRec):
             )
 
             self.item_popularity.cache().count()
-	    self.fill = self._calc_fill(self.item_popularity, self.cold_weight)
+            self.fill = self._calc_fill(self.item_popularity, self.cold_weight)
