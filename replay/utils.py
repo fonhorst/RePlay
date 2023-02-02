@@ -904,36 +904,3 @@ def unpersist_after(dfs: Dict[str, Optional[DataFrame]]):
     for df in dfs.values():
         if df is not None:
             df.unpersist()
-
-
-def get_log_info2(
-    log: DataFrame, user_col="user_idx", item_col="item_idx"
-) -> Tuple[int, int, int]:
-    """
-    Basic log statistics
-
-    >>> from replay.session_handler import State
-    >>> spark = State().session
-    >>> log = spark.createDataFrame([(1, 2), (3, 4), (5, 2)]).toDF("user_idx", "item_idx")
-    >>> log.show()
-    +--------+--------+
-    |user_idx|item_idx|
-    +--------+--------+
-    |       1|       2|
-    |       3|       4|
-    |       5|       2|
-    +--------+--------+
-    <BLANKLINE>
-    >>> get_log_info2(log)
-    (3, 3, 2)
-
-    :param log: interaction log containing ``user_idx`` and ``item_idx``
-    :param user_col: name of a columns containing users' identificators
-    :param item_col: name of a columns containing items' identificators
-
-    :returns: statistics string
-    """
-    cnt = log.count()
-    user_cnt = log.select(user_col).distinct().count()
-    item_cnt = log.select(item_col).distinct().count()
-    return cnt, user_cnt, item_cnt

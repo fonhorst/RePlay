@@ -23,7 +23,6 @@ from replay.utils import (
     get_number_of_allocated_executors,
     log_exec_timer,
 )
-from replay.utils import get_log_info2
 from replay.utils import logger
 
 import warnings
