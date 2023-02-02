@@ -9,6 +9,7 @@ from replay.metrics.base_metric import (
     RecOnlyMetric,
     sorter,
     fill_na_with_empty_array,
+    filter_sort
 )
 
 from pyspark.sql import SparkSession, Column
@@ -88,17 +89,8 @@ class Unexpectedness(RecOnlyMetric):
         # if there are duplicates in recommendations,
         # we will leave fewer than k recommendations after sort_udf
         recommendations = get_top_k_recs(recommendations, k=max_k)
-        recommendations = (
-            recommendations.withColumn("_num", sf.row_number().over(
-                Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
-            .drop("_num")  # deduplicating
-            .groupby("user_idx")
-            .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))  #
-            .withColumn('pred', sf.reverse(sf.array_sort('pred')))
-            .withColumn('pred', sf.col('pred.item_idx'))
-            .withColumn("pred", sf.col("pred").cast(st.ArrayType(ground_truth.schema["item_idx"].dataType, True)))
-            .join(base_recs, how="right", on=["user_idx"])
-        )
+        recommendations = filter_sort(recommendations)
+        recommendations = recommendations.join(base_recs, how="right", on=["user_idx"])
 
         if ground_truth_users is not None:
             recommendations = recommendations.join(

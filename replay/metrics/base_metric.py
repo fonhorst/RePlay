@@ -100,6 +100,23 @@ def preprocess_gt(
     return true_items_by_users
 
 
+def filter_sort(recommendations: AnyDataFrame) -> DataFrame:
+    """
+    Filter duplicated predictions by choosing the most relevant,
+     and sort items in predictions by relevance
+    """
+    return (
+        recommendations.withColumn("_num", sf.row_number().over(
+            Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
+        .drop("_num")
+        .groupby("user_idx")
+        .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))
+        .withColumn('pred', sf.reverse(sf.array_sort('pred')))
+        .withColumn('pred', sf.col('pred.item_idx'))
+        .withColumn("pred", sf.col("pred").cast(st.ArrayType(recommendations.schema["item_idx"].dataType, True)))
+    )
+
+
 def get_enriched_recommendations(
     recommendations: AnyDataFrame,
     ground_truth: AnyDataFrame,
@@ -125,17 +142,7 @@ def get_enriched_recommendations(
     recommendations = get_top_k_recs(recommendations, k=max_k)
 
     true_items_by_users = preprocess_gt(ground_truth, ground_truth_users)
-    joined = (
-        recommendations.withColumn("_num", sf.row_number().over(
-            Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
-        .drop("_num")
-        .groupby("user_idx")
-        .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))
-        .withColumn('pred', sf.reverse(sf.array_sort('pred')))
-        .withColumn('pred', sf.col('pred.item_idx'))
-        .withColumn("pred", sf.col("pred").cast(st.ArrayType(recommendations.schema["item_idx"].dataType, True)))
-        .join(true_items_by_users, how="right", on=["user_idx"])
-    )
+    joined = filter_sort(recommendations).join(true_items_by_users, how="right", on=["user_idx"])
 
     return fill_na_with_empty_array(
         joined, "pred", recommendations.schema["item_idx"].dataType
