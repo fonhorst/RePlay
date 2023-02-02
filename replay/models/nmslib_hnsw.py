@@ -10,15 +10,18 @@ import numpy as np
 import pandas as pd
 from pyarrow import fs
 from pyspark import SparkFiles
-from pyspark.sql import DataFrame, functions as sf
+from pyspark.sql import DataFrame
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import pandas_udf
 from scipy.sparse import csr_matrix
 
 from replay.ann.ann_mixin import ANNMixin
-from replay.ann.utils import save_index_to_destination_fs
+from replay.ann.utils import (
+    save_index_to_destination_fs,
+    load_index_from_source_fs,
+)
 from replay.session_handler import State
-from replay.utils import FileSystem, get_filesystem
+from replay.utils import FileSystem, get_filesystem, FileInfo
 
 logger = logging.getLogger("replay")
 
@@ -34,20 +37,14 @@ class NmslibIndexFileManager:
         self,
         index_params,
         index_type: str,
-        index_path: Optional[str] = None,
-        filesystem: Optional[FileSystem] = None,
-        hdfs_uri: Optional[str] = None,
-        index_filename: Optional[str] = None,
+        index_file: Union[FileInfo, str]
     ) -> None:
 
         self._method = index_params["method"]
         self._space = index_params["space"]
         self._efS = index_params.get("efS")
         self._index_type = index_type
-        self._index_path = index_path
-        self._filesystem = filesystem
-        self._hdfs_uri = hdfs_uri
-        self._index_filename = index_filename
+        self._index_file = index_file
         self._index = None
 
     @property
@@ -61,33 +58,17 @@ class NmslibIndexFileManager:
                 space=self._space,
                 data_type=nmslib.DataType.SPARSE_VECTOR,
             )
-            if self._index_path:
-                if self._filesystem == FileSystem.HDFS:
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        tmp_file_path = os.path.join(temp_dir, INDEX_FILENAME)
-                        source_filesystem = fs.HadoopFileSystem.from_uri(
-                            self._hdfs_uri
-                        )
-                        fs.copy_files(
-                            self._index_path,
-                            "file://" + tmp_file_path,
-                            source_filesystem=source_filesystem,
-                        )
-                        fs.copy_files(
-                            self._index_path + ".dat",
-                            "file://" + tmp_file_path + ".dat",
-                            source_filesystem=source_filesystem,
-                        )
-                        self._index.loadIndex(tmp_file_path, load_data=True)
-                elif self._filesystem == FileSystem.LOCAL:
-                    self._index.loadIndex(self._index_path, load_data=True)
-                else:
-                    raise ValueError(
-                        "`filesystem` must be specified if `index_path` is specified!"
-                    )
+            if isinstance(self._index_file, FileInfo):
+                load_index_from_source_fs(
+                    sparse=True,
+                    load_index=lambda path: self._index.loadIndex(
+                        path, load_data=True
+                    ),
+                    source=self._index_file
+                )
             else:
                 self._index.loadIndex(
-                    SparkFiles.get(self._index_filename), load_data=True
+                    SparkFiles.get(self._index_file), load_data=True
                 )
         else:
             self._index = nmslib.init(
@@ -95,23 +76,14 @@ class NmslibIndexFileManager:
                 space=self._space,
                 data_type=nmslib.DataType.DENSE_VECTOR,
             )
-            if self._index_path:
-                if self._filesystem == FileSystem.HDFS:
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        tmp_file_path = os.path.join(temp_dir, INDEX_FILENAME)
-                        source_filesystem = fs.HadoopFileSystem.from_uri(
-                            self._hdfs_uri
-                        )
-                        fs.copy_files(
-                            self._index_path,
-                            "file://" + tmp_file_path,
-                            source_filesystem=source_filesystem,
-                        )
-                        self._index.loadIndex(tmp_file_path)
-                else:
-                    self._index.loadIndex(self._index_path)
+            if isinstance(self._index_file, FileInfo):
+                load_index_from_source_fs(
+                    sparse=False,
+                    load_index=lambda path: self._index.loadIndex(path),
+                    source=self._index_file
+                )
             else:
-                self._index.loadIndex(SparkFiles.get(self._index_filename))
+                self._index.loadIndex(SparkFiles.get(self._index_file))
 
         if self._efS:
             self._index.setQueryTimeParams({"efSearch": self._efS})
@@ -129,12 +101,19 @@ class NmslibHnswMixin(ANNMixin):
         features_col: str,
         params: Dict[str, Union[int, str]],
         k: int,
+        filter_seen_items: bool,
         index_dim: str = None,
         index_type: str = None,
         log: DataFrame = None,
     ) -> DataFrame:
         return self._infer_nmslib_hnsw_index(
-            vectors, features_col, params, k, index_type, log
+            vectors,
+            features_col,
+            params,
+            k,
+            filter_seen_items,
+            index_type,
+            log,
         )
 
     def _build_ann_index(
@@ -177,9 +156,7 @@ class NmslibHnswMixin(ANNMixin):
             # to execution in one executor
             item_vectors = item_vectors.repartition(1)
 
-            filesystem, hdfs_uri, index_path = get_filesystem(
-                params["index_path"]
-            )
+            target_index_file = get_filesystem(params["index_path"])
 
             if index_type == "sparse":
 
@@ -202,6 +179,9 @@ class NmslibHnswMixin(ANNMixin):
 
                     pdf = pd.concat(pdfs, copy=False)
 
+                    # We collect all iterator values into one dataframe,
+                    # because we cannot guarantee that `pdf` will contain rows with the same `item_idx_two`.
+                    # And therefore we cannot call the `addDataPointBatch` iteratively.
                     data = pdf["similarity"].values
                     row_ind = pdf["item_idx_two"].values
                     col_ind = pdf["item_idx_one"].values
@@ -214,14 +194,11 @@ class NmslibHnswMixin(ANNMixin):
                     index.createIndex(index_params)
 
                     save_index_to_destination_fs(
-                        index,
                         sparse=True,
                         save_index=lambda path: index.saveIndex(
                             path, save_data=True
                         ),
-                        filesystem=filesystem,
-                        destination_path=index_path,
-                        hdfs_uri=hdfs_uri,
+                        target=target_index_file,
                     )
 
                     yield pd.DataFrame(data={"_success": 1}, index=[0])
@@ -249,12 +226,9 @@ class NmslibHnswMixin(ANNMixin):
                     index.createIndex(index_params)
 
                     save_index_to_destination_fs(
-                        index,
                         sparse=False,
                         save_index=lambda path: index.saveIndex(path),
-                        filesystem=filesystem,
-                        destination_path=index_path,
-                        hdfs_uri=hdfs_uri,
+                        target=target_index_file,
                     )
 
                     yield pd.DataFrame(data={"_success": 1}, index=[0])
@@ -370,23 +344,21 @@ class NmslibHnswMixin(ANNMixin):
         features_col: str,
         params: Dict[str, Any],
         k: int,
+        filter_seen_items: bool,
         index_type: str = None,
         log: DataFrame = None,
     ) -> DataFrame:
 
         if params["build_index_on"] == "executor":
-            filesystem, hdfs_uri, index_path = get_filesystem(
-                params["index_path"]
-            )
-            _index_file_manager = NmslibIndexFileManager(
-                params, index_type, index_path, filesystem, hdfs_uri
-            )
+            index_file = get_filesystem(params["index_path"])
         else:
-            _index_file_manager = NmslibIndexFileManager(
-                params,
-                index_type,
-                index_filename=f"{INDEX_FILENAME}_{self._spark_index_file_uid}",
-            )
+            index_file = f"{INDEX_FILENAME}_{self._spark_index_file_uid}"
+
+        _index_file_manager = NmslibIndexFileManager(
+            params,
+            index_type,
+            index_file=index_file,
+        )
 
         index_file_manager_broadcast = State().session.sparkContext.broadcast(
             _index_file_manager
@@ -406,66 +378,142 @@ class NmslibHnswMixin(ANNMixin):
                 shape=(self._user_dim, self._item_dim),
             )
 
-            @pandas_udf(return_type)
-            def infer_index(
-                user_idx: pd.Series, num_items: pd.Series
-            ) -> pd.DataFrame:
-                index_file_manager = index_file_manager_broadcast.value
+            if filter_seen_items:
 
-                index = index_file_manager.index
+                @pandas_udf(return_type)
+                def infer_index(
+                    user_idx: pd.Series,
+                    num_items: pd.Series,
+                    seen_item_idxs: pd.Series,
+                ) -> pd.DataFrame:
+                    index_file_manager = index_file_manager_broadcast.value
 
-                # max number of items to retrieve per batch
-                max_items_to_retrieve = num_items.max()
+                    index = index_file_manager.index
 
-                # take slice
-                m = interactions_matrix[user_idx.values, :]
-                neighbours = index.knnQueryBatch(
-                    m, k=k + max_items_to_retrieve, num_threads=1
-                )
-                pd_res = pd.DataFrame(
-                    neighbours, columns=["item_idx", "distance"]
-                )
+                    # max number of items to retrieve per batch
+                    max_items_to_retrieve = num_items.max()
 
-                # pd_res looks like
-                # item_idx       distances
-                # [1, 2, 3, ...] [-0.5, -0.3, -0.1, ...]
-                # [1, 3, 4, ...] [-0.1, -0.8, -0.2, ...]
+                    # take slice
+                    m = interactions_matrix[user_idx.values, :]
+                    neighbours = index.knnQueryBatch(
+                        m, k=k + max_items_to_retrieve, num_threads=1
+                    )
 
-                return pd_res
+                    neighbours_filtered = []
+                    for i, (item_idxs, distances) in enumerate(neighbours):
+                        non_seen_item_indexes = ~np.isin(
+                            item_idxs, seen_item_idxs[i], assume_unique=True
+                        )
+                        neighbours_filtered.append(
+                            (
+                                (item_idxs[non_seen_item_indexes])[:k],
+                                (distances[non_seen_item_indexes])[:k],
+                            )
+                        )
+
+                    pd_res = pd.DataFrame(
+                        neighbours_filtered, columns=["item_idx", "distance"]
+                    )
+
+                    # pd_res looks like
+                    # item_idx       distances
+                    # [1, 2, 3, ...] [-0.5, -0.3, -0.1, ...]
+                    # [1, 3, 4, ...] [-0.1, -0.8, -0.2, ...]
+
+                    return pd_res
+
+            else:
+
+                @pandas_udf(return_type)
+                def infer_index(user_idx: pd.Series) -> pd.DataFrame:
+                    index_file_manager = index_file_manager_broadcast.value
+                    index = index_file_manager.index
+
+                    # take slice
+                    m = interactions_matrix[user_idx.values, :]
+                    neighbours = index.knnQueryBatch(m, num_threads=1)
+
+                    pd_res = pd.DataFrame(
+                        neighbours, columns=["item_idx", "distance"]
+                    )
+
+                    # pd_res looks like
+                    # item_idx       distances
+                    # [1, 2, 3, ...] [-0.5, -0.3, -0.1, ...]
+                    # [1, 3, 4, ...] [-0.1, -0.8, -0.2, ...]
+
+                    return pd_res
 
         else:
+            if filter_seen_items:
 
-            @pandas_udf(return_type)
-            def infer_index(
-                vectors: pd.Series, num_items: pd.Series
-            ) -> pd.DataFrame:
-                index_file_manager = index_file_manager_broadcast.value
-                index = index_file_manager.index
+                @pandas_udf(return_type)
+                def infer_index(
+                    vectors: pd.Series,
+                    num_items: pd.Series,
+                    seen_item_idxs: pd.Series,
+                ) -> pd.DataFrame:
+                    index_file_manager = index_file_manager_broadcast.value
+                    index = index_file_manager.index
 
-                # max number of items to retrieve per batch
-                max_items_to_retrieve = num_items.max()
+                    # max number of items to retrieve per batch
+                    max_items_to_retrieve = num_items.max()
 
-                neighbours = index.knnQueryBatch(
-                    np.stack(vectors.values),
-                    k=k + max_items_to_retrieve,
-                    num_threads=1,
-                )
-                pd_res = pd.DataFrame(
-                    neighbours, columns=["item_idx", "distance"]
-                )
+                    neighbours = index.knnQueryBatch(
+                        np.stack(vectors.values),
+                        k=k + max_items_to_retrieve,
+                        num_threads=1,
+                    )
 
-                return pd_res
+                    neighbours_filtered = []
+                    for i, (item_idxs, distances) in enumerate(neighbours):
+                        non_seen_item_indexes = ~np.isin(
+                            item_idxs, seen_item_idxs[i], assume_unique=True
+                        )
+                        neighbours_filtered.append(
+                            (
+                                (item_idxs[non_seen_item_indexes])[:k],
+                                (distances[non_seen_item_indexes])[:k],
+                            )
+                        )
 
+                    pd_res = pd.DataFrame(
+                        neighbours_filtered, columns=["item_idx", "distance"]
+                    )
+
+                    return pd_res
+
+            else:
+
+                @pandas_udf(return_type)
+                def infer_index(vectors: pd.Series) -> pd.DataFrame:
+                    index_file_manager = index_file_manager_broadcast.value
+                    index = index_file_manager.index
+
+                    neighbours = index.knnQueryBatch(
+                        np.stack(vectors.values),
+                        k=k,
+                        num_threads=1,
+                    )
+                    pd_res = pd.DataFrame(
+                        neighbours, columns=["item_idx", "distance"]
+                    )
+
+                    return pd_res
+
+        cols = []
         if index_type == "sparse":
-            res = user_vectors.select(
-                "user_idx",
-                infer_index("user_idx", "num_items").alias("neighbours"),
-            )
+            cols.append("user_idx")
         else:
-            res = user_vectors.select(
-                "user_idx",
-                infer_index(features_col, "num_items").alias("neighbours"),
-            )
+            cols.append(features_col)
+        if filter_seen_items:
+            cols = cols + ["num_items", "seen_item_idxs"]
+
+        res = user_vectors.select(
+            "user_idx",
+            infer_index(*cols).alias("neighbours"),
+        )
+
         res = self._unpack_infer_struct(res)
 
         return res
@@ -489,35 +537,37 @@ class NmslibHnswMixin(ANNMixin):
         else:
             raise ValueError("Unknown 'build_index_on' param.")
 
-        from_filesystem, from_hdfs_uri, from_path = get_filesystem(index_path)
-        to_filesystem, to_hdfs_uri, to_path = get_filesystem(path)
+        source = get_filesystem(index_path)
+        target = get_filesystem(path)
         self.logger.debug(f"Index file coping from '{index_path}' to '{path}'")
 
-        from_paths = []
+        source_paths = []
         target_paths = []
         if sparse:
-            from_paths.append(from_path)
-            from_paths.append(from_path + ".dat")
-            index_file_target_path = os.path.join(to_path, INDEX_FILENAME)
+            source_paths.append(source.path)
+            source_paths.append(source.path + ".dat")
+            index_file_target_path = os.path.join(target.path, INDEX_FILENAME)
             target_paths.append(index_file_target_path)
             target_paths.append(index_file_target_path + ".dat")
         else:
-            from_paths.append(from_path)
-            index_file_target_path = os.path.join(to_path, INDEX_FILENAME)
+            source_paths.append(source.path)
+            index_file_target_path = os.path.join(target.path, INDEX_FILENAME)
             target_paths.append(index_file_target_path)
 
-        if from_filesystem == FileSystem.HDFS:
-            source_filesystem = fs.HadoopFileSystem.from_uri(from_hdfs_uri)
+        if source.filesystem == FileSystem.HDFS:
+            source_filesystem = fs.HadoopFileSystem.from_uri(source.hdfs_uri)
         else:
             source_filesystem = fs.LocalFileSystem()
-        if to_filesystem == FileSystem.HDFS:
-            destination_filesystem = fs.HadoopFileSystem.from_uri(to_hdfs_uri)
+        if target.filesystem == FileSystem.HDFS:
+            destination_filesystem = fs.HadoopFileSystem.from_uri(
+                target.hdfs_uri
+            )
         else:
             destination_filesystem = fs.LocalFileSystem()
 
-        for from_path, target_path in zip(from_paths, target_paths):
+        for source_path, target_path in zip(source_paths, target_paths):
             fs.copy_files(
-                from_path,
+                source_path,
                 target_path,
                 source_filesystem=source_filesystem,
                 destination_filesystem=destination_filesystem,
@@ -534,38 +584,36 @@ class NmslibHnswMixin(ANNMixin):
         Args:
             path: directory path, where index file is stored
         """
-        from_filesystem, from_hdfs_uri, from_path = get_filesystem(
-            path + f"/{INDEX_FILENAME}"
+        source = get_filesystem(path + f"/{INDEX_FILENAME}")
+
+        temp_dir = tempfile.mkdtemp()
+        weakref.finalize(self, shutil.rmtree, temp_dir)
+        target_path = os.path.join(
+            temp_dir, f"{INDEX_FILENAME}_{self._spark_index_file_uid}"
         )
 
-        to_path = tempfile.mkdtemp()
-        weakref.finalize(self, shutil.rmtree, to_path)
-        to_path = os.path.join(
-            to_path, f"{INDEX_FILENAME}_{self._spark_index_file_uid}"
-        )
-
-        from_paths = []
+        source_paths = []
         target_paths = []
         if sparse:
-            from_paths.append(from_path)
-            from_paths.append(from_path + ".dat")
-            target_paths.append(to_path)
-            target_paths.append(to_path + ".dat")
+            source_paths.append(source.path)
+            source_paths.append(source.path + ".dat")
+            target_paths.append(target_path)
+            target_paths.append(target_path + ".dat")
         else:
-            from_paths.append(from_path)
-            target_paths.append(to_path)
+            source_paths.append(source.path)
+            target_paths.append(target_path)
 
-        if from_filesystem == FileSystem.HDFS:
-            source_filesystem = fs.HadoopFileSystem.from_uri(from_hdfs_uri)
+        if source.filesystem == FileSystem.HDFS:
+            source_filesystem = fs.HadoopFileSystem.from_uri(source.hdfs_uri)
         else:
             source_filesystem = fs.LocalFileSystem()
 
         destination_filesystem = fs.LocalFileSystem()
 
-        for from_path, to_path in zip(from_paths, target_paths):
+        for source_path, target_path in zip(source_paths, target_paths):
             fs.copy_files(
-                from_path,
-                to_path,
+                source_path,
+                target_path,
                 source_filesystem=source_filesystem,
                 destination_filesystem=destination_filesystem,
             )

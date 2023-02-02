@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime
 from enum import Enum
@@ -16,6 +17,7 @@ from scipy.sparse import csr_matrix
 
 from replay.constants import AnyDataFrame, NumType, REC_SCHEMA
 from replay.session_handler import State
+from pyspark.sql.column import _to_java_column, _to_seq
 
 # pylint: disable=invalid-name
 
@@ -214,9 +216,6 @@ def vector_mult(
     return one * two
 
 
-from pyspark.sql.column import _to_java_column, _to_seq
-
-
 def multiply_scala_udf(scalar, vector):
     sc = SparkSession.getActiveSession().sparkContext
     _f = sc._jvm.org.apache.spark.replay.utils.ScalaPySparkUDFs.multiplyUDF()
@@ -299,39 +298,6 @@ def get_log_info(
             f"total items: {item_cnt}",
         ]
     )
-
-
-def get_log_info2(
-    log: DataFrame, user_col="user_idx", item_col="item_idx"
-) -> Tuple[int, int, int]:
-    """
-    Basic log statistics
-
-    >>> from replay.session_handler import State
-    >>> spark = State().session
-    >>> log = spark.createDataFrame([(1, 2), (3, 4), (5, 2)]).toDF("user_idx", "item_idx")
-    >>> log.show()
-    +--------+--------+
-    |user_idx|item_idx|
-    +--------+--------+
-    |       1|       2|
-    |       3|       4|
-    |       5|       2|
-    +--------+--------+
-    <BLANKLINE>
-    >>> get_log_info2(log)
-    (3, 3, 2)
-
-    :param log: interaction log containing ``user_idx`` and ``item_idx``
-    :param user_col: name of a columns containing users' identificators
-    :param item_col: name of a columns containing items' identificators
-
-    :returns: statistics string
-    """
-    cnt = log.count()
-    user_cnt = log.select(user_col).distinct().count()
-    item_cnt = log.select(item_col).distinct().count()
-    return cnt, user_cnt, item_cnt
 
 
 def get_stats(
@@ -821,7 +787,14 @@ def get_default_fs() -> str:
     return default_fs
 
 
-def get_filesystem(path: str) -> Tuple[FileSystem, Optional[str], str]:
+@dataclass(frozen=True)
+class FileInfo:
+    path: str
+    filesystem: FileSystem
+    hdfs_uri: str = None
+
+
+def get_filesystem(path: str) -> FileInfo:  # Tuple[FileSystem, Optional[str], str]
     """Analyzes path and hadoop config and return tuple of `filesystem`,
     `hdfs uri` (if filesystem is hdfs) and `cleaned path` (without prefix).
 
@@ -829,11 +802,11 @@ def get_filesystem(path: str) -> Tuple[FileSystem, Optional[str], str]:
 
     >>> path = 'hdfs://node21.bdcl:9000/tmp/file'
     >>> get_filesystem(path)
-    FileSystem.HDFS, 'hdfs://node21.bdcl:9000', '/tmp/file'
+    FileInfo(path='/tmp/file', filesystem=<FileSystem.HDFS: 1>, hdfs_uri='hdfs://node21.bdcl:9000')
     or
     >>> path = 'file:///tmp/file'
     >>> get_filesystem(path)
-    FileSystem.LOCAL, None, '/tmp/file'
+    FileInfo(path='/tmp/file', filesystem=<FileSystem.LOCAL: 2>, hdfs_uri=None)
 
     Args:
         path (str): path to file on hdfs or local disk
@@ -847,7 +820,7 @@ def get_filesystem(path: str) -> Tuple[FileSystem, Optional[str], str]:
         if path.startswith("hdfs:///"):
             default_fs = get_default_fs()
             if default_fs.startswith("hdfs://"):
-                return FileSystem.HDFS, default_fs, path[7:]
+                return FileInfo(path[prefix_len:], FileSystem.HDFS, default_fs)
             else:
                 raise Exception(
                     f"Can't get default hdfs uri for path = '{path}'. "
@@ -857,22 +830,27 @@ def get_filesystem(path: str) -> Tuple[FileSystem, Optional[str], str]:
         else:
             hostname = path[prefix_len:].split("/", 1)[0]
             hdfs_uri = "hdfs://" + hostname
-            return FileSystem.HDFS, hdfs_uri, path[len(hdfs_uri):]
+            return FileInfo(path[len(hdfs_uri):], FileSystem.HDFS, hdfs_uri)
     elif path.startswith("file://"):
-        return FileSystem.LOCAL, None, path[prefix_len:]
+        return FileInfo(path[prefix_len:], FileSystem.LOCAL)
     else:
         default_fs = get_default_fs()
         if default_fs.startswith("hdfs://"):
-            return FileSystem.HDFS, default_fs, path
+            return FileInfo(path, FileSystem.HDFS, default_fs)
         else:
-            return FileSystem.LOCAL, None, path
+            return FileInfo(path, FileSystem.LOCAL)
 
 
-def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
+def sample_top_k_recs(pairs: DataFrame, k: int, seed: int = None):
     """
-    Take dataframe with columns 'user_idx, item_idx, relevance' and
-    returns k items for each user with probability proportional to the relevance score.
-    May be used after getting recommendations with `predict_pairs` method.
+    Sample k items for each user with probability proportional to the relevance score.
+
+    Motivation: sometimes we have a pre-defined list of items for each user
+    and could use `predict_pairs` method of RePlay models to score them.
+    After that we could select top K most relevant items for each user
+    with `replay.utils.get_top_k_recs` or sample them with
+    probabilities proportional to their relevance score
+    with `replay.utils.sample_top_k_recs` to get more diverse recommendations.
 
     :param pairs: spark dataframe with columns ``[user_idx, item_idx, relevance]``
     :param k: number of items for each user to return
@@ -886,7 +864,6 @@ def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
     )
 
     def grouped_map(pandas_df: pd.DataFrame) -> pd.DataFrame:
-        # return pandas_df[["user_idx", "item_idx", "relevance"]]
         user_idx = pandas_df["user_idx"][0]
 
         if seed is not None:
