@@ -368,6 +368,21 @@ class NmslibHnswMixin(ANNMixin):
 
         if index_type == "sparse":
 
+            def get_csr_matrix(
+                    user_idx: pd.Series,
+                    vector_items: pd.Series,
+                    vector_relevances: pd.Series,
+            ) -> csr_matrix:
+
+                return csr_matrix(
+                    (
+                        vector_relevances.explode().values.astype(float),
+                        (user_idx.repeat(vector_items.apply(lambda x: len(x))).values,
+                         vector_items.explode().values.astype(int)),
+                    ),
+                    shape=(user_idx.max() + 1, vector_items.apply(lambda x: max(x)).max() + 1),
+                )
+
             if filter_seen_items:
 
                 @pandas_udf(return_type)
@@ -384,16 +399,7 @@ class NmslibHnswMixin(ANNMixin):
                     # max number of items to retrieve per batch
                     max_items_to_retrieve = num_items.max()
 
-                    exploded_vector_items = vector_items.explode()
-                    user_vectors = csr_matrix(
-                                (
-                                    vector_relevances.explode().values.astype(float),
-                                    (pd.DataFrame({'user_idx': user_idx,
-                                                   'items': vector_items}).explode('items')['user_idx'].values.astype(int),
-                                     exploded_vector_items.values.astype(int)),
-                                ),
-                                shape=(user_idx.max()+1, exploded_vector_items.max()+1),
-                            )
+                    user_vectors = get_csr_matrix(user_idx, vector_items, vector_relevances)
 
                     # take slice
                     m = user_vectors[user_idx.values, :]
@@ -435,16 +441,7 @@ class NmslibHnswMixin(ANNMixin):
                     index_file_manager = index_file_manager_broadcast.value
                     index = index_file_manager.index
 
-                    exploded_vector_items = vector_items.explode()
-                    user_vectors = csr_matrix(
-                        (
-                            vector_relevances.explode().values.astype(float),
-                            (pd.DataFrame({'user_idx': user_idx,
-                                           'items': vector_items}).explode('items')['user_idx'].values.astype(int),
-                             exploded_vector_items.values.astype(int)),
-                        ),
-                        shape=(user_idx.max() + 1, exploded_vector_items.max() + 1),
-                    )
+                    user_vectors = get_csr_matrix(user_idx, vector_items, vector_relevances)
                     # take slice
                     m = user_vectors[user_idx.values, :]
                     neighbours = index.knnQueryBatch(m, num_threads=1)
