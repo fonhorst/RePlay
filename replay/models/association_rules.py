@@ -152,6 +152,15 @@ class AssociationRulesItemRec(NeighbourRec, PartialFitMixin):
                 .select(self.session_col, "item_idx", "relevance")
                 .distinct()
             )
+            if previous_log:
+                previous_log = (
+                    previous_log.withColumn(
+                        "relevance",
+                        sf.col("relevance") if self.use_relevance else sf.lit(1),
+                    )
+                    .select(self.session_col, "item_idx", "relevance")
+                    .distinct()
+                )
             self.session_col_unique_vals = unionify(
                 log.select(self.session_col), self.session_col_unique_vals
             ).distinct()
@@ -178,7 +187,7 @@ class AssociationRulesItemRec(NeighbourRec, PartialFitMixin):
                 ).drop("item_count")
             ).cache()
 
-            frequent_items_log = log.join(
+            frequent_items_log = unionify(log, previous_log).join(
                 frequent_items_cached.select("item_idx"), on="item_idx"
             )
 
