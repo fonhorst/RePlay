@@ -74,17 +74,7 @@ class Unexpectedness(RecOnlyMetric):
 
         # TO DO: preprocess base_recs once in __init__
 
-        base_recs = (
-            base_pred.withColumn("_num", sf.row_number().over(
-                Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
-            .drop("_num")
-            .groupby("user_idx")
-            .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("base_pred"))
-            .withColumn('base_pred', sf.reverse(sf.array_sort('base_pred')))
-            .withColumn('base_pred', sf.col('base_pred.item_idx'))
-            .withColumn("base_pred",
-                        sf.col("base_pred").cast(st.ArrayType(ground_truth.schema["item_idx"].dataType, True)))
-        )
+        base_recs = filter_sort(base_pred).withColumnRenamed("pred", "base_pred")
 
         # if there are duplicates in recommendations,
         # we will leave fewer than k recommendations after sort_udf
