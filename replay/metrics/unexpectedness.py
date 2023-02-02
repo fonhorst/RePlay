@@ -1,5 +1,5 @@
 from typing import Optional
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
 
@@ -70,33 +70,33 @@ class Unexpectedness(RecOnlyMetric):
         recommendations = convert2spark(recommendations)
         ground_truth_users = convert2spark(ground_truth_users)
         base_pred = self.pred
-        sort_udf = sf.udf(
-            sorter,
-            returnType=st.ArrayType(base_pred.schema["item_idx"].dataType),
-        )
+
         # TO DO: preprocess base_recs once in __init__
+
         base_recs = (
-            base_pred.groupby("user_idx")
-            .agg(
-                sf.collect_list(sf.struct("relevance", "item_idx")).alias(
-                    "base_pred"
-                )
-            )
-            .select(
-                "user_idx", sort_udf(sf.col("base_pred")).alias("base_pred")
-            )
+            base_pred.withColumn("_num", sf.row_number().over(
+                Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
+            .drop("_num")
+            .groupby("user_idx")
+            .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("base_pred"))
+            .withColumn('base_pred', sf.reverse(sf.array_sort('base_pred')))
+            .withColumn('base_pred', sf.col('base_pred.item_idx'))
+            .withColumn("base_pred",
+                        sf.col("base_pred").cast(st.ArrayType(ground_truth.schema["item_idx"].dataType, True)))
         )
+
         # if there are duplicates in recommendations,
         # we will leave fewer than k recommendations after sort_udf
         recommendations = get_top_k_recs(recommendations, k=max_k)
         recommendations = (
-            recommendations.groupby("user_idx")
-            .agg(
-                sf.collect_list(sf.struct("relevance", "item_idx")).alias(
-                    "pred"
-                )
-            )
-            .select("user_idx", sort_udf(sf.col("pred")).alias("pred"))
+            recommendations.withColumn("_num", sf.row_number().over(
+                Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
+            .drop("_num")  # deduplicating
+            .groupby("user_idx")
+            .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))  #
+            .withColumn('pred', sf.reverse(sf.array_sort('pred')))
+            .withColumn('pred', sf.col('pred.item_idx'))
+            .withColumn("pred", sf.col("pred").cast(st.ArrayType(ground_truth.schema["item_idx"].dataType, True)))
             .join(base_recs, how="right", on=["user_idx"])
         )
 
