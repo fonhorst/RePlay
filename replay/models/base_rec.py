@@ -12,6 +12,8 @@ Base abstract classes:
     with popularity statistics
 """
 import collections
+import pickle
+
 import joblib
 import os
 import logging
@@ -1711,10 +1713,21 @@ class NonPersonalizedRecommender(Recommender, PartialFitMixin, ABC):
         return {"item_popularity": self.item_popularity}
 
     def _save_model(self, path: str):
-        joblib.dump({"fill": self.fill}, join(path, "params.dump"))
+        spark = State().session
+        sc = spark.sparkContext
+        # TODO: simplify it and move it to utils
+        # maybe it can just be saved in json
+        pickled_instance = pickle.dumps({"fill": self.fill})
+        Record = collections.namedtuple("Record", ["params"])
+        rdd = sc.parallelize([Record(pickled_instance)])
+        instance_df = rdd.map(lambda rec: Record(bytearray(rec.params))).toDF()
+        instance_df.write.mode("overwrite").parquet(join(path, "params.dump"))
 
     def _load_model(self, path: str):
-        self.fill = joblib.load(join(path, "params.dump"))["fill"]
+        spark = State().session
+        df = spark.read.parquet(join(path, "params.dump"))
+        pickled_instance = df.rdd.map(lambda row: bytes(row.params)).first()
+        self.fill = pickle.loads(pickled_instance)["fill"]
 
     def _clear_cache(self):
         if hasattr(self, "item_popularity"):
