@@ -12,7 +12,7 @@ from replay.models.base_rec import BaseRecommender
 class ANNMixin(BaseRecommender):
     """
     This class overrides the `_fit_wrap` and `_inner_predict_wrap` methods of the base class,
-    adding an index construction in the `_fit_wrap` step and an index in the `_inner_predict_wrap` step.
+    adding an index construction in the `_fit_wrap` step and an index inference in the `_inner_predict_wrap` step.
     """
 
     @cached_property
