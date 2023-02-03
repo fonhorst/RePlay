@@ -26,7 +26,7 @@ import scala.reflect.ClassTag
 import scala.util.{Sorting, Try}
 import scala.util.hashing.byteswap64
 
-import com.github.fommil.netlib.BLAS.{getInstance => blas}
+import com.google.common.collect.{Ordering => GuavaOrdering}
 import org.apache.hadoop.fs.Path
 import org.json4s.DefaultFormats
 import org.json4s.JsonDSL._
@@ -47,11 +47,9 @@ import org.apache.spark.sql.{DataFrame, Dataset}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.util.{BoundedPriorityQueue, Utils}
+import org.apache.spark.util.Utils
 import org.apache.spark.util.collection.{OpenHashMap, OpenHashSet, SortDataFormat, Sorter}
 import org.apache.spark.util.random.XORShiftRandom
-
-import org.apache.spark.ml.recommendation.TopByKeyAggregator
 
 /**
  * Common params for ReplayALS and ReplayALSModel.
@@ -443,7 +441,8 @@ class ReplayALSModel private[ml] (
    * relatively efficient, the approach implemented here is significantly more efficient.
    *
    * This approach groups factors into blocks and computes the top-k elements per block,
-   * using dot product and an efficient [[BoundedPriorityQueue]] (instead of gemm).
+   * using GEMV (it use less memory compared with GEMM, and is much faster than DOT) and
+   * an efficient selection based on [[GuavaOrdering]] (instead of [[BoundedPriorityQueue]]).
    * It then computes the global top-k by aggregating the per block top-k elements with
    * a [[TopByKeyAggregator]]. This significantly reduces the size of intermediate and shuffle data.
    * This is the DataFrame equivalent to the approach used in
@@ -465,30 +464,39 @@ class ReplayALSModel private[ml] (
       num: Int,
       blockSize: Int): DataFrame = {
     import srcFactors.sparkSession.implicits._
+    import scala.collection.JavaConverters._
 
     val srcFactorsBlocked = blockify(srcFactors.as[(Int, Array[Float])], blockSize)
     val dstFactorsBlocked = blockify(dstFactors.as[(Int, Array[Float])], blockSize)
     val ratings = srcFactorsBlocked.crossJoin(dstFactorsBlocked)
-      .as[(Seq[(Int, Array[Float])], Seq[(Int, Array[Float])])]
-      .flatMap { case (srcIter, dstIter) =>
-        val m = srcIter.size
-        val n = math.min(dstIter.size, num)
-        val output = new Array[(Int, Int, Float)](m * n)
-        var i = 0
-        val pq = new BoundedPriorityQueue[(Int, Float)](num)(Ordering.by(_._2))
-        srcIter.foreach { case (srcId, srcFactor) =>
-          dstIter.foreach { case (dstId, dstFactor) =>
-            // We use F2jBLAS which is faster than a call to native BLAS for vector dot product
-            val score = BLAS.f2jBLAS.sdot(rank, srcFactor, 1, dstFactor, 1)
-            pq += dstId -> score
+      .as[(Array[Int], Array[Float], Array[Int], Array[Float])]
+      .mapPartitions { iter =>
+        var scores: Array[Float] = null
+        var idxOrd: GuavaOrdering[Int] = null
+        iter.flatMap { case (srcIds, srcMat, dstIds, dstMat) =>
+          require(srcMat.length == srcIds.length * rank)
+          require(dstMat.length == dstIds.length * rank)
+          val m = srcIds.length
+          val n = dstIds.length
+          if (scores == null || scores.length < n) {
+            scores = Array.ofDim[Float](n)
+            idxOrd = new GuavaOrdering[Int] {
+              override def compare(left: Int, right: Int): Int = {
+                Ordering[Float].compare(scores(left), scores(right))
+              }
+            }
           }
-          pq.foreach { case (dstId, score) =>
-            output(i) = (srcId, dstId, score)
-            i += 1
+
+          Iterator.range(0, m).flatMap { i =>
+            // scores = i-th vec in srcMat * dstMat
+            BLAS.javaBLAS.sgemv("T", rank, n, 1.0F, dstMat, 0, rank,
+              srcMat, i * rank, 1, 0.0F, scores, 0, 1)
+
+            val srcId = srcIds(i)
+            idxOrd.greatestOf(Iterator.range(0, n).asJava, num).asScala
+              .iterator.map { j => (srcId, dstIds(j), scores(j)) }
           }
-          pq.clear()
         }
-        output.toSeq
       }
     // We'll force the IDs to be Int. Unfortunately this converts IDs to Int in the output.
     val topKAggregator = new TopByKeyAggregator[Int, Int, Float](num, Ordering.by(_._2))
@@ -508,9 +516,12 @@ class ReplayALSModel private[ml] (
    */
   private def blockify(
       factors: Dataset[(Int, Array[Float])],
-      blockSize: Int): Dataset[Seq[(Int, Array[Float])]] = {
+      blockSize: Int): Dataset[(Array[Int], Array[Float])] = {
     import factors.sparkSession.implicits._
-    factors.mapPartitions(_.grouped(blockSize))
+    factors.mapPartitions { iter =>
+      iter.grouped(blockSize)
+        .map(block => (block.map(_._1).toArray, block.flatMap(_._2).toArray))
+    }
   }
 
 }
@@ -563,15 +574,15 @@ object ReplayALSModel extends MLReadable[ReplayALSModel] {
 }
 
 /**
- * Alternating Least Squares (ReplayALS) matrix factorization.
+ * Alternating Least Squares (ALS) matrix factorization.
  *
- * ReplayALS attempts to estimate the ratings matrix `R` as the product of two lower-rank matrices,
+ * ALS attempts to estimate the ratings matrix `R` as the product of two lower-rank matrices,
  * `X` and `Y`, i.e. `X * Yt = R`. Typically these approximations are called 'factor' matrices.
  * The general approach is iterative. During each iteration, one of the factor matrices is held
  * constant, while the other is solved for using least squares. The newly-solved factor matrix is
  * then held constant while solving for the other factor matrix.
  *
- * This is a blocked implementation of the ReplayALS factorization algorithm that groups the two sets
+ * This is a blocked implementation of the ALS factorization algorithm that groups the two sets
  * of factors (referred to as "users" and "products") into blocks and reduces communication by only
  * sending one copy of each user vector to each product block on each iteration, and only for the
  * product blocks that need that user's feature vector. This is achieved by pre-computing some
@@ -591,8 +602,8 @@ object ReplayALSModel extends MLReadable[ReplayALSModel] {
  * values related to strength of indicated user
  * preferences rather than explicit ratings given to items.
  *
- * Note: the input rating dataset to the ReplayALS implementation should be deterministic.
- * Nondeterministic data can cause failure during fitting ReplayALS model.
+ * Note: the input rating dataset to the ALS implementation should be deterministic.
+ * Nondeterministic data can cause failure during fitting ALS model.
  * For example, an order-sensitive operation like sampling after a repartition makes dataset
  * output nondeterministic, like `dataset.repartition(2).sample(false, 0.5, 1618)`.
  * Checkpointing sampled dataset or adding a sort before sampling can help make the dataset
@@ -740,7 +751,7 @@ class ReplayALS(@Since("1.4.0") override val uid: String) extends Estimator[Repl
 
 
 /**
- * An implementation of ReplayALS that supports generic ID types, specialized for Int and Long. This is
+ * An implementation of ALS that supports generic ID types, specialized for Int and Long. This is
  * exposed as a developer API for users who do need other ID types. But it is not recommended
  * because it increases the shuffle size and memory requirement during training. For simplicity,
  * users and items must have the same type. The number of distinct users/items should be smaller
@@ -890,9 +901,9 @@ object ReplayALS extends DefaultParamsReadable[ReplayALS] with Logging {
       require(c >= 0.0)
       require(a.length == k)
       copyToDouble(a)
-      blas.dspr(upper, k, c, da, 1, ata)
+      BLAS.nativeBLAS.dspr(upper, k, c, da, 1, ata)
       if (b != 0.0) {
-        blas.daxpy(k, b, da, 1, atb, 1)
+        BLAS.nativeBLAS.daxpy(k, b, da, 1, atb, 1)
       }
       this
     }
@@ -900,8 +911,8 @@ object ReplayALS extends DefaultParamsReadable[ReplayALS] with Logging {
     /** Merges another normal equation object. */
     def merge(other: NormalEquation): NormalEquation = {
       require(other.k == k)
-      blas.daxpy(ata.length, 1.0, other.ata, 1, ata, 1)
-      blas.daxpy(atb.length, 1.0, other.atb, 1, atb, 1)
+      BLAS.nativeBLAS.daxpy(ata.length, 1.0, other.ata, 1, ata, 1)
+      BLAS.nativeBLAS.daxpy(atb.length, 1.0, other.atb, 1, atb, 1)
       this
     }
 
@@ -913,9 +924,9 @@ object ReplayALS extends DefaultParamsReadable[ReplayALS] with Logging {
   }
 
   /**
-   * Implementation of the ReplayALS algorithm.
+   * Implementation of the ALS algorithm.
    *
-   * This implementation of the ReplayALS factorization algorithm partitions the two sets of factors among
+   * This implementation of the ALS factorization algorithm partitions the two sets of factors among
    * Spark workers so as to reduce network communication by only sending one copy of each factor
    * vector to each Spark worker on each iteration, and only if needed.  This is achieved by
    * precomputing some information about the ratings matrix to determine which users require which
@@ -1274,8 +1285,8 @@ object ReplayALS extends DefaultParamsReadable[ReplayALS] with Logging {
           val random = new XORShiftRandom(byteswap64(seed ^ srcBlockId))
           val factors = Array.fill(inBlock.srcIds.length) {
             val factor = Array.fill(rank)(random.nextGaussian().toFloat)
-            val nrm = blas.snrm2(rank, factor, 1)
-            blas.sscal(rank, 1.0f / nrm, factor, 1)
+            val nrm = BLAS.nativeBLAS.snrm2(rank, factor, 1)
+            BLAS.nativeBLAS.sscal(rank, 1.0f / nrm, factor, 1)
             factor
           }
           (srcBlockId, factors)
@@ -1757,7 +1768,7 @@ object ReplayALS extends DefaultParamsReadable[ReplayALS] with Logging {
             }
             i += 1
           }
-          // Weight lambda by the number of explicit ratings based on the ReplayALS-WR paper.
+          // Weight lambda by the number of explicit ratings based on the ALS-WR paper.
           dstFactors(j) = solver.solve(ls, numExplicits * regParam)
           j += 1
         }
