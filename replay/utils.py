@@ -1,19 +1,23 @@
 import logging
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+import os
+import shutil
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import pyspark.sql.types as st
-
-from contextlib import contextmanager
-from pyarrow import fs
-from pyspark.sql import SparkSession
 from numpy.random import default_rng
+from pyarrow import fs
 from pyspark.ml.linalg import DenseVector, Vectors, VectorUDT
 from pyspark.sql import Column, DataFrame, Window, functions as sf
-from pyspark.sql.functions import pandas_udf
+from pyspark.sql import SparkSession
+# noinspection PyUnresolvedReferences
+from pyspark.sql.column import _to_java_column, _to_seq
 from scipy.sparse import csr_matrix
 
 from replay.constants import AnyDataFrame, NumType, REC_SCHEMA
@@ -136,6 +140,30 @@ def get_top_k_recs(recs: DataFrame, k: int, id_type: str = "idx") -> DataFrame:
     )
 
 
+def delete_folder(path: str):
+    filesystem, uri, prefixless_path = get_filesystem(path)
+
+    if filesystem == FileSystem.HDFS:
+        fs.HadoopFileSystem().delete_dir(path)
+    else:
+        fs.LocalFileSystem().delete_dir(path)
+
+
+def create_folder(path: str, delete_if_exists: bool = False, exists_ok: bool = False):
+    filesystem, uri, prefixless_path = get_filesystem(path)
+
+    is_exists = do_path_exists(path)
+    if is_exists and delete_if_exists:
+        delete_folder(path)
+    elif is_exists and not exists_ok:
+        raise FileExistsError(f"The path already exists: {path}")
+
+    if filesystem == FileSystem.HDFS:
+        fs.HadoopFileSystem().create_dir(uri)
+    else:
+        fs.LocalFileSystem().create_dir(prefixless_path)
+
+
 @sf.udf(returnType=st.DoubleType())
 def vector_dot(one: DenseVector, two: DenseVector) -> float:
     """
@@ -214,9 +242,6 @@ def vector_mult(
     :returns: result
     """
     return one * two
-
-
-from pyspark.sql.column import _to_java_column, _to_seq
 
 
 def multiply_scala_udf(scalar, vector):
@@ -301,39 +326,6 @@ def get_log_info(
             f"total items: {item_cnt}",
         ]
     )
-
-
-def get_log_info2(
-    log: DataFrame, user_col="user_idx", item_col="item_idx"
-) -> Tuple[int, int, int]:
-    """
-    Basic log statistics
-
-    >>> from replay.session_handler import State
-    >>> spark = State().session
-    >>> log = spark.createDataFrame([(1, 2), (3, 4), (5, 2)]).toDF("user_idx", "item_idx")
-    >>> log.show()
-    +--------+--------+
-    |user_idx|item_idx|
-    +--------+--------+
-    |       1|       2|
-    |       3|       4|
-    |       5|       2|
-    +--------+--------+
-    <BLANKLINE>
-    >>> get_log_info2(log)
-    (3, 3, 2)
-
-    :param log: interaction log containing ``user_idx`` and ``item_idx``
-    :param user_col: name of a columns containing users' identificators
-    :param item_col: name of a columns containing items' identificators
-
-    :returns: statistics string
-    """
-    cnt = log.count()
-    user_cnt = log.select(user_col).distinct().count()
-    item_cnt = log.select(item_col).distinct().count()
-    return cnt, user_cnt, item_cnt
 
 
 def get_stats(
@@ -823,7 +815,14 @@ def get_default_fs() -> str:
     return default_fs
 
 
-def get_filesystem(path: str) -> Tuple[FileSystem, Optional[str], str]:
+@dataclass(frozen=True)
+class FileInfo:
+    path: str
+    filesystem: FileSystem
+    hdfs_uri: str = None
+
+
+def get_filesystem(path: str) -> FileInfo:  # Tuple[FileSystem, Optional[str], str]
     """Analyzes path and hadoop config and return tuple of `filesystem`,
     `hdfs uri` (if filesystem is hdfs) and `cleaned path` (without prefix).
 
@@ -831,11 +830,11 @@ def get_filesystem(path: str) -> Tuple[FileSystem, Optional[str], str]:
 
     >>> path = 'hdfs://node21.bdcl:9000/tmp/file'
     >>> get_filesystem(path)
-    FileSystem.HDFS, 'hdfs://node21.bdcl:9000', '/tmp/file'
+    FileInfo(path='/tmp/file', filesystem=<FileSystem.HDFS: 1>, hdfs_uri='hdfs://node21.bdcl:9000')
     or
     >>> path = 'file:///tmp/file'
     >>> get_filesystem(path)
-    FileSystem.LOCAL, None, '/tmp/file'
+    FileInfo(path='/tmp/file', filesystem=<FileSystem.LOCAL: 2>, hdfs_uri=None)
 
     Args:
         path (str): path to file on hdfs or local disk
@@ -849,7 +848,7 @@ def get_filesystem(path: str) -> Tuple[FileSystem, Optional[str], str]:
         if path.startswith("hdfs:///"):
             default_fs = get_default_fs()
             if default_fs.startswith("hdfs://"):
-                return FileSystem.HDFS, default_fs, path[7:]
+                return FileInfo(path[prefix_len:], FileSystem.HDFS, default_fs)
             else:
                 raise Exception(
                     f"Can't get default hdfs uri for path = '{path}'. "
@@ -859,46 +858,27 @@ def get_filesystem(path: str) -> Tuple[FileSystem, Optional[str], str]:
         else:
             hostname = path[prefix_len:].split("/", 1)[0]
             hdfs_uri = "hdfs://" + hostname
-            return FileSystem.HDFS, hdfs_uri, path[len(hdfs_uri):]
+            return FileInfo(path[len(hdfs_uri):], FileSystem.HDFS, hdfs_uri)
     elif path.startswith("file://"):
-        return FileSystem.LOCAL, None, path[prefix_len:]
+        return FileInfo(path[prefix_len:], FileSystem.LOCAL)
     else:
         default_fs = get_default_fs()
         if default_fs.startswith("hdfs://"):
-            return FileSystem.HDFS, default_fs, path
+            return FileInfo(path, FileSystem.HDFS, default_fs)
         else:
-            return FileSystem.LOCAL, None, path
+            return FileInfo(path, FileSystem.LOCAL)
 
 
-def delete_folder(path: str):
-    filesystem, uri, prefixless_path = get_filesystem(path)
-
-    if filesystem == FileSystem.HDFS:
-        fs.HadoopFileSystem().delete_dir(path)
-    else:
-        fs.LocalFileSystem().delete_dir(path)
-
-
-def create_folder(path: str, delete_if_exists: bool = False, exists_ok: bool = False):
-    filesystem, uri, prefixless_path = get_filesystem(path)
-
-    is_exists = do_path_exists(path)
-    if is_exists and delete_if_exists:
-        delete_folder(path)
-    elif is_exists and not exists_ok:
-        raise FileExistsError(f"The path already exists: {path}")
-
-    if filesystem == FileSystem.HDFS:
-        fs.HadoopFileSystem().create_dir(uri)
-    else:
-        fs.LocalFileSystem().create_dir(prefixless_path)
-
-
-def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
+def sample_top_k_recs(pairs: DataFrame, k: int, seed: int = None):
     """
-    Take dataframe with columns 'user_idx, item_idx, relevance' and
-    returns k items for each user with probability proportional to the relevance score.
-    May be used after getting recommendations with `predict_pairs` method.
+    Sample k items for each user with probability proportional to the relevance score.
+
+    Motivation: sometimes we have a pre-defined list of items for each user
+    and could use `predict_pairs` method of RePlay models to score them.
+    After that we could select top K most relevant items for each user
+    with `replay.utils.get_top_k_recs` or sample them with
+    probabilities proportional to their relevance score
+    with `replay.utils.sample_top_k_recs` to get more diverse recommendations.
 
     :param pairs: spark dataframe with columns ``[user_idx, item_idx, relevance]``
     :param k: number of items for each user to return
@@ -912,7 +892,6 @@ def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
     )
 
     def grouped_map(pandas_df: pd.DataFrame) -> pd.DataFrame:
-        # return pandas_df[["user_idx", "item_idx", "relevance"]]
         user_idx = pandas_df["user_idx"][0]
 
         if seed is not None:
@@ -938,6 +917,21 @@ def sample_k_items(pairs: DataFrame, k: int, seed: int = None):
     recs = pairs.groupby("user_idx").applyInPandas(grouped_map, REC_SCHEMA)
 
     return recs
+
+
+def unionify(df: DataFrame, df_2: Optional[DataFrame] = None) -> DataFrame:
+    if df_2 is not None:
+        df = df.unionByName(df_2)
+    return df
+
+
+@contextmanager
+def unpersist_after(dfs: Dict[str, Optional[DataFrame]]):
+    yield
+
+    for df in dfs.values():
+        if df is not None:
+            df.unpersist()
 
 
 class AbleToSaveAndLoad(ABC):
@@ -973,7 +967,7 @@ def prepare_dir(path):
     """
     Create empty `path` dir
     """
-    if exists(path):
+    if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path)
 

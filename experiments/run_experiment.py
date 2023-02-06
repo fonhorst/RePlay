@@ -38,7 +38,6 @@ All params:
         ItemKNN
         ItemKNN_NMSLIB_HNSW
         ClusterRec
-        ClusterRec_HNSWLIB
         RandomRec_uniform
         RandomRec_popular_based
         RandomRec_relevance
@@ -54,10 +53,21 @@ All params:
     It perform NDCG@5, NDCG@10, MAP@5, MAP@10, HitRate@5 and HitRate@10 calculation.
 
     NMSLIB_HNSW_PARAMS: nmslib hnsw index params. Double quotes must be used instead of single quotes
-    Example: {"method":"hnsw","space":"negdotprod_sparse_fast","M":100,"efS":2000,"efC":2000,"post":0,"index_path":"/tmp/nmslib_hnsw_index_{spark_app_id}","build_index_on":"executor"}
+    Example: {"method":"hnsw","space":"negdotprod_sparse_fast","M":100,"efS":2000,"efC":2000,"post":0,
+    "index_path":"/tmp/nmslib_hnsw_index_{spark_app_id}","build_index_on":"executor"}
+    The "space" parameter described on the page https://github.com/nmslib/nmslib/blob/master/manual/spaces.md.
+    Parameters "M", "efS" and "efC" are described at  https://github.com/nmslib/nmslib/blob/master/manual/methods.md#graph-based-search-methods-sw-graph-and-hnsw.
+    The "build_index_on" parameter specifies whether the index will be built on the "driver" or "executor".
+    If "build_index_on"="executor" then "index_path" must be specified.
+    "index_path" determines where the built index should be stored. "index_path" can be a path in hdfs.
+    If "build_index_on"="driver", then the index built on the driver will be passed to the executors via the `SparkContext.addFile` mechanism.
 
     HNSWLIB_PARAMS: hnswlib index params. Double quotes must be used instead of single quotes
-    Example: {"space":"ip","M":100,"efS":2000,"efC":2000,"post":0,"index_path":"/tmp/hnswlib_index_{spark_app_id}","build_index_on":"executor"}
+    Example: {"space":"ip","M":100,"efS":2000,"efC":2000,"post":0,
+    "index_path":"/tmp/hnswlib_index_{spark_app_id}","build_index_on":"executor"}
+    The "space" parameter described on the page https://github.com/nmslib/hnswlib/blob/master/README.md#supported-distances
+    Parameters "M", "efS" and "efC" are described at https://github.com/nmslib/hnswlib/blob/master/ALGO_PARAMS.md
+    Parameters "build_index_on" and "index_path" are the same as for NMSLIB_HNSW_PARAMS
 
     ALS_RANK: rank for ALS model, i.e. length of ALS factor vectors
 
@@ -94,6 +104,7 @@ import os
 import mlflow
 from pyspark.conf import SparkConf
 from pyspark.sql import SparkSession
+from pyspark.sql import functions as sf
 
 from experiment_utils import (
     get_model,
@@ -141,7 +152,7 @@ def main(spark: SparkSession, dataset_name: str):
     check_number_of_allocated_executors(spark)
 
     k = int(os.environ.get("K", 10))
-    k_list_metrics = list(map(int, os.environ["K_LIST_METRICS"].split(",")))
+    k_list_metrics = list(map(int, os.environ.get("K_LIST_METRICS", "5,10,25,100").split(",")))
     seed = int(os.environ.get("SEED", 1234))
     mlflow_tracking_uri = os.environ.get(
         "MLFLOW_TRACKING_URI", "http://node2.bdcl:8822"
@@ -201,6 +212,10 @@ def main(spark: SparkSession, dataset_name: str):
         mlflow.log_metric(
             "train_test_cache_sec", train_test_cache_timer.duration
         )
+
+        if model_name in {"UCB", "Wilson"}:
+            train = train.withColumn("relevance", sf.when(sf.col("relevance") > 0.0, sf.lit(1)).otherwise(sf.lit(0)))
+            test = test.withColumn("relevance", sf.when(sf.col("relevance") > 0.0, sf.lit(1)).otherwise(sf.lit(0)))
 
         mlflow.log_metric("train_num_partitions", train.rdd.getNumPartitions())
         mlflow.log_metric("test_num_partitions", test.rdd.getNumPartitions())
@@ -378,6 +393,6 @@ def main(spark: SparkSession, dataset_name: str):
 
 if __name__ == "__main__":
     spark_sess = get_spark_session()
-    dataset = os.environ.get("DATASET", "ml1m")
+    dataset = os.environ.get("DATASET", "MovieLens_1m")
     main(spark=spark_sess, dataset_name=dataset)
     spark_sess.stop()

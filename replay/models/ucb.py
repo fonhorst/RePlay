@@ -1,17 +1,14 @@
-import os
+import math
+from os.path import join
+from typing import Any, Dict, List, Optional
 
 import joblib
-import math
-
-from os.path import join
-from typing import Any, Dict, List, Optional, Union
-
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 
 from replay.metrics import Metric, NDCG
 from replay.models.base_rec import NonPersonalizedRecommender
-from replay.utils import create_folder
+from replay.utils import unpersist_after, unionify
 
 
 class UCB(NonPersonalizedRecommender):
@@ -40,18 +37,19 @@ class UCB(NonPersonalizedRecommender):
     ... ).toPandas().sort_values(["user_idx","relevance","item_idx"],
     ... ascending=[True,False,True]).reset_index(drop=True)
        user_idx  item_idx  relevance
-    0         1         3   2.442027
-    1         1         2   1.019667
-    2         2         3   2.442027
-    3         2         1   1.519667
-    4         3         3   2.442027
-    5         4         3   2.442027
-    6         4         1   1.519667
+    0         1         3   2.665109
+    1         1         2   1.177410
+    2         2         3   2.665109
+    3         2         1   1.677410
+    4         3         3   2.665109
+    5         4         3   2.665109
+    6         4         1   1.677410
 
     """
 
-    can_predict_cold_items = True
-    fill: float
+    # attributes which are needed for refit method
+    full_count: int
+    items_counts_aggr: DataFrame
 
     def __init__(
         self,
@@ -63,13 +61,18 @@ class UCB(NonPersonalizedRecommender):
         :param exploration_coef: exploration coefficient
         :param sample: flag to choose recommendation strategy.
             If True, items are sampled with a probability proportional
-            to the calculated predicted relevance
+            to the calculated predicted relevance.
+            Could be changed after model training by setting the `sample` attribute.
         :param seed: random seed. Provides reproducibility if fixed
         """
         # pylint: disable=super-init-not-called
         self.coef = exploration_coef
         self.sample = sample
         self.seed = seed
+        self.items_counts_aggr: Optional[DataFrame] = None
+        self.item_popularity: Optional[DataFrame] = None
+        self.full_count = 0
+        super().__init__(add_cold_items=True, cold_weight=1)
 
     @property
     def _init_args(self):
@@ -79,13 +82,23 @@ class UCB(NonPersonalizedRecommender):
             "seed": self.seed,
         }
 
+    @property
+    def _dataframes(self):
+        return {
+            "items_counts_aggr": self.items_counts_aggr,
+            "item_popularity": self.item_popularity
+        }
+
+    def _clear_cache(self):
+        for df in self._dataframes.values():
+            if df is not None:
+                df.unpersist()
+
     def _save_model(self, path: str):
-        create_folder(os.path.dirname(path), exists_ok=True)
-        # TODO: need to fix such saving, won't work with HDFS
-        joblib.dump({"fill": self.fill}, join(path))
+        joblib.dump({"fill": self.fill}, join(path, "params.dump"))
 
     def _load_model(self, path: str):
-        self.fill = joblib.load(join(path))["fill"]
+        self.fill = joblib.load(join(path, "params.dump"))["fill"]
 
     # pylint: disable=too-many-arguments
     def optimize(
@@ -122,79 +135,35 @@ class UCB(NonPersonalizedRecommender):
             "which cannot not be directly optimized"
         )
 
-    def _fit(
-        self,
-        log: DataFrame,
-        user_features: Optional[DataFrame] = None,
-        item_features: Optional[DataFrame] = None,
-    ) -> None:
+    def _fit_partial(self,
+                     log: DataFrame,
+                     user_features: Optional[DataFrame] = None,
+                     item_features: Optional[DataFrame] = None,
+                     previous_log: Optional[DataFrame] = None) -> None:
+        with unpersist_after(self._dataframes):
+            self._check_relevance(log)
+            self._check_relevance(previous_log)
 
-        self._check_relevance(log)
-
-        # we save this dataframe for the refit() method
-        self.items_counts_aggr = log.groupby("item_idx").agg(
-            sf.sum("relevance").alias("pos"),
-            sf.count("relevance").alias("total"),
-        )
-        self.items_counts_aggr = self.items_counts_aggr.cache()
-
-        # we save this variable for the refit() method
-        self.full_count = log.count()
-        items_counts = self.items_counts_aggr.withColumn(
-            "relevance",
-            (
-                sf.col("pos") / sf.col("total")
-                + sf.sqrt(
-                    sf.log(sf.lit(self.coef * self.full_count)) / sf.col("total")
-                )
-            ),
-        )
-
-        self.item_popularity = items_counts.drop("pos", "total")
-        self.item_popularity.cache().count()
-
-        self.fill = 1 + math.sqrt(math.log(self.coef * self.full_count))
-
-    def refit(
-        self,
-        log: DataFrame,
-        previous_log: Optional[Union[str, DataFrame]] = None,
-        merged_log_path: Optional[str] = None,
-    ) -> None:
-        # aggregation new log part
-        items_counts_aggr = log.groupby("item_idx").agg(
-            sf.sum("relevance").alias("pos"),
-            sf.count("relevance").alias("total"),
-        )
-
-        # combine old and new aggregations and aggregate
-        self.items_counts_aggr = (
-            self.items_counts_aggr.union(items_counts_aggr)
-            .groupby("item_idx")
-            .agg(
+            # we save this dataframe for the refit() method
+            self.items_counts_aggr = unionify(
+                log.select("item_idx", sf.col("relevance").alias("pos"), sf.lit(1).alias("total")),
+                self.items_counts_aggr
+            ).groupby("item_idx").agg(
                 sf.sum("pos").alias("pos"),
-                sf.sum("total").alias("total"),
-            )
-        )
-        self.items_counts_aggr = self.items_counts_aggr.cache()
+                sf.sum("total").alias("total")
+                # sf.count("relevance").alias("total"),
+            ).cache()
 
-        # sum old and new log lengths
-        self.full_count += log.count()
-        
-        items_counts = self.items_counts_aggr.withColumn(
-            "relevance",
-            (
-                sf.col("pos") / sf.col("total")
-                + sf.sqrt(
-                    sf.log(sf.lit(self.coef * self.full_count)) / sf.col("total")
-                )
-            ),
-        )
+            # we save this variable for the refit() method
+            self.full_count += log.count()
+            self.item_popularity = self.items_counts_aggr.withColumn(
+                "relevance",
+                sf.col("pos") / sf.col("total") + sf.sqrt(sf.log(sf.lit(self.coef * self.full_count)) / sf.col("total"))
+            ).drop("pos", "total").cache()
 
-        self.item_popularity = items_counts.drop("pos", "total")
-        self.item_popularity.cache().count()
+            self.item_popularity.cache().count()
 
-        self.fill = 1 + math.sqrt(math.log(self.coef * self.full_count))
+            self.fill = 1 + math.sqrt(math.log(self.coef * self.full_count))
 
     # pylint: disable=too-many-arguments
     def _predict(
@@ -214,8 +183,7 @@ class UCB(NonPersonalizedRecommender):
                 k=k,
                 users=users,
                 items=items,
-                filter_seen_items=filter_seen_items,
-                add_cold_items=True,
+                filter_seen_items=filter_seen_items
             )
         else:
             return self._predict_without_sampling(
