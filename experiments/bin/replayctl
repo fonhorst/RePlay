@@ -155,10 +155,12 @@ function main () {
         push_airflow_image
         ;;
 
+    # obsolete
     "build-spark-executor-image")
         build_spark_executor_image
         ;;
 
+    # obsolete
     "build-spark-replay-image")
         build_spark_replay_image
         ;;
