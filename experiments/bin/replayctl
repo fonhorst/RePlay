@@ -120,7 +120,7 @@ function airflow_port_forward() {
     kubectl -n airflow port-forward svc/airflow-webserver 8080:8080
 }
 
-function update_my_replay_wheel() {
+function update_my_replay_wheel_and_jar() {
   if [[ -z "${USERNAME_ON_CLUSTER}" ]]; then
       echo "USERNAME_ON_CLUSTER env var is required!"
       exit 1
@@ -129,8 +129,9 @@ function update_my_replay_wheel() {
   echo "building RePlay wheel"
   poetry build
 
-  echo "copying RePlay wheel to .../spark_submit_files/ mounted in airflow container"
+  echo "copying RePlay wheel and jar files to .../spark_submit_files/ mounted in airflow container"
   scp ../../dist/replay_rec-0.10.0-py3-none-any.whl "$USERNAME_ON_CLUSTER"@node2.bdcl:/mnt/ess_storage/DN_1/storage/SLAMA/kaggle_used_cars_dataset/spark_submit_files/replay_rec-0.10.0-py3-none-any_"$USERNAME_ON_CLUSTER".whl
+  scp ../../scala/target/scala-2.12/replay_2.12-0.1.jar "$USERNAME_ON_CLUSTER"@node2.bdcl:/mnt/ess_storage/DN_1/storage/SLAMA/kaggle_used_cars_dataset/spark_submit_files/replay_2.12-0.1_"$USERNAME_ON_CLUSTER".jar
 }
 
 function sync_my_airflow_dags() {
@@ -196,8 +197,8 @@ function main () {
         airflow_port_forward
         ;;
 
-    "update-my-replay-wheel")
-        update_my_replay_wheel
+    "update-my-replay-wheel-and-jar")
+        update_my_replay_wheel_and_jar
         ;;
 
     "sync-my-airflow-dags")
