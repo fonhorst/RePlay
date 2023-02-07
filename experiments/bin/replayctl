@@ -120,6 +120,29 @@ function airflow_port_forward() {
     kubectl -n airflow port-forward svc/airflow-webserver 8080:8080
 }
 
+function update_my_replay_wheel() {
+  if [[ -z "${USERNAME_ON_CLUSTER}" ]]; then
+      echo "USERNAME_ON_CLUSTER env var is required!"
+      exit 1
+  fi
+
+  echo "building RePlay wheel"
+  poetry build
+
+  echo "copying RePlay wheel to .../spark_submit_files/ mounted in airflow container"
+  scp ../../dist/replay_rec-0.10.0-py3-none-any.whl "$USERNAME_ON_CLUSTER"@node2.bdcl:/mnt/ess_storage/DN_1/storage/SLAMA/kaggle_used_cars_dataset/spark_submit_files/replay_rec-0.10.0-py3-none-any_"$USERNAME_ON_CLUSTER".whl
+}
+
+function sync_my_airflow_dags() {
+  if [[ -z "${USERNAME_ON_CLUSTER}" ]]; then
+      echo "USERNAME_ON_CLUSTER env var is required!"
+      exit 1
+  fi
+
+  echo "copying your dags (with postfix _"$USERNAME_ON_CLUSTER") to airflow dags folder"
+  rsync -v --perms --chmod=u+rwx,g+rwx,o+rwx ../dag_*_"$USERNAME_ON_CLUSTER".py "$USERNAME_ON_CLUSTER"@node2.bdcl:/mnt/ess_storage/DN_1/storage/Airflow/dags
+}
+
 function help() {
   echo "
   List of commands.
@@ -171,6 +194,14 @@ function main () {
 
     "airflow-port-forward")
         airflow_port_forward
+        ;;
+
+    "update-my-replay-wheel")
+        update_my_replay_wheel
+        ;;
+
+    "sync-my-airflow-dags")
+        sync_my_airflow_dags
         ;;
 
     *)
