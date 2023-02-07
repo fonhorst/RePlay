@@ -27,6 +27,7 @@ from pyspark.ml.util import JavaMLWritable, JavaMLReadable
 from pyspark.ml.util import MLReadable
 from pyspark.ml.util import JavaMLReader
 from pyspark.ml.wrapper import JavaParams
+# noinspection PyUnresolvedReferences
 from pyspark.ml.util import _jvm
 
 

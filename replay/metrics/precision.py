@@ -1,6 +1,7 @@
 from replay.metrics.base_metric import Metric
 
 from pyspark.sql import SparkSession, Column
+# noinspection PyUnresolvedReferences
 from pyspark.sql.column import _to_java_column, _to_seq
 
 

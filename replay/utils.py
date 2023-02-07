@@ -1,16 +1,21 @@
+import collections
 import logging
 import os
+import pickle
 import shutil
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import pyspark.sql.types as st
+
+from contextlib import contextmanager
+from pyspark.sql import SparkSession
 from numpy.random import default_rng
 from pyarrow import fs
 from pyspark.ml.linalg import DenseVector, Vectors, VectorUDT
@@ -22,6 +27,8 @@ from scipy.sparse import csr_matrix
 
 from replay.constants import AnyDataFrame, NumType, REC_SCHEMA
 from replay.session_handler import State
+# noinspection PyUnresolvedReferences
+from pyspark.sql.column import _to_java_column, _to_seq
 
 # pylint: disable=invalid-name
 
@@ -1042,3 +1049,35 @@ def load_transformer(path: str):
     clazz = get_class_by_name(metadata_row["classname"])
     instance = clazz.load(os.path.join(path, "transformer"), spark)
     return instance
+
+def save_picklable_to_parquet(obj: Any, path: str) -> None:
+    """
+    Function dumps object to disk or hdfs in parquet format.
+
+    Args:
+        obj: object to be saved
+        path: path to dump
+    """
+    sc = SparkSession.getActiveSession().sparkContext
+    # We can use `RDD.saveAsPickleFile`, but it has no "overwrite" parameter
+    pickled_instance = pickle.dumps(obj)
+    Record = collections.namedtuple("Record", ["data"])
+    rdd = sc.parallelize([Record(pickled_instance)])
+    instance_df = rdd.map(lambda rec: Record(bytearray(rec.data))).toDF()
+    instance_df.write.mode("overwrite").parquet(path)
+
+
+def load_pickled_from_parquet(path: str) -> Any:
+    """
+    Function loads object from disk or hdfs, what was dumped via `save_picklable_to_parquet` function.
+
+    Args:
+        path: source path
+
+    Returns: unpickled object
+
+    """
+    spark = SparkSession.getActiveSession()
+    df = spark.read.parquet(path)
+    pickled_instance = df.rdd.map(lambda row: bytes(row.data)).first()
+    return pickle.loads(pickled_instance)
