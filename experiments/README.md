@@ -153,6 +153,13 @@ The files structure related to running airflow DAGs
    On should remember that it is not possible to alter a workflow directly from Web UI, but only to monitor 
    and affect its execution, including launching a workflow, pausing it, restarting failed tasks.
    
+   In order to deploy test/development dag scripts assigned to a specific user, 
+   you must declare the `USERNAME_ON_CLUSTER` environment variable.
+   The `USERNAME_ON_CLUSTER` user must have ssh access to the dag scripts directory. 
+   The most convenient way is to write `export USERNAME_ON_CLUSTER=username` in the ~/.bashrc file.
+   Next, you need to create the dag_*_username.py files in the `experiments` directory
+   and after that the `./experiments/bin/replayctl sync-dags` command will deploy your dag scripts to the airflow directory.
+   Your dag scripts will be copied with the `_username` suffix and will not conflict with other users' files.
 
 2.  To execute a task Airflow is configured to use Kubernetes executor that runs tasks as separate pods 
     inside Airflow namespace on Kubernetes. 
@@ -283,7 +290,15 @@ The files structure related to running airflow DAGs
     
     Here **extra_big_executor_config** is a patch being applied to [the default pod template](#pod-template), 
     **fit_predict_second_level_model** is a regular python function implemnting business logic, 
-    **second_level_model** is an instance of Airflow Task used to build an Airflow Workflow.  
+    **second_level_model** is an instance of Airflow Task used to build an Airflow Workflow.
+
+3.  To send wheel and jar files to the cluster, use the command:
+
+   ```shell
+      ./experiments/bin/replayctl upd-wheels-and-jars
+    ```
+
+    This command will copy your wheel and jar files to the server so they can be used later in the `SparkSubmitOperator`.
 
 ### <a name="experiments"></a>How to run experiments with Airflow.
 
