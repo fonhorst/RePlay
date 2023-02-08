@@ -16,7 +16,7 @@ RUN pip install --upgrade pip
 RUN pip install "apache-airflow-providers-apache-spark" \
 --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.4.1/constraints-3.7.txt"
 
-RUN python3 -c 'from pyspark.sql import SparkSession; SparkSession.builder.config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5-35-e962330b-SNAPSHOT").config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven").getOrCreate()'
+RUN python3 -c 'from pyspark.sql import SparkSession; SparkSession.builder.config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5").config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven").getOrCreate()'
 
 COPY SparkLightAutoML_DEV-0.3.2-py3-none-any.whl /src/
 
@@ -38,3 +38,5 @@ RUN pip install -r /src/requirements.txt
 RUN pip install mlflow-skinny
 
 RUN pip install sqlalchemy==1.4.41
+
+RUN pip install pyspark==3.1.3
