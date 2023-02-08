@@ -1,4 +1,5 @@
 # pylint: disable=too-many-lines
+import logging
 import os
 import pickle
 from collections.abc import Iterable
@@ -28,6 +29,9 @@ from replay.utils import (
     join_with_col_renaming,
     unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
 )
+
+
+logger = logging.getLogger("replay")
 
 
 # pylint: disable=too-many-locals, too-many-arguments
@@ -531,11 +535,11 @@ class TwoStagesScenario(HybridRecommender):
     def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
         """Write statistics"""
         first_level_train, second_level_train = self.train_splitter.split(log)
-        State().logger.debug("Log info: %s", get_log_info(log))
-        State().logger.debug(
+        logger.debug("Log info: %s", get_log_info(log))
+        logger.debug(
             "first_level_train info: %s", get_log_info(first_level_train)
         )
-        State().logger.debug(
+        logger.debug(
             "second_level_train info: %s", get_log_info(second_level_train)
         )
         return first_level_train, second_level_train
@@ -847,7 +851,7 @@ class TwoStagesScenario(HybridRecommender):
         filter_seen_items: bool = True,
     ) -> DataFrame:
 
-        State().logger.debug(msg="Generating candidates to rerank")
+        logger.debug(msg="Generating candidates to rerank")
 
         first_level_user_features = cache_if_exists(
             self.first_level_user_features_transformer.transform(user_features)

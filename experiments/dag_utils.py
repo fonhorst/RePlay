@@ -543,10 +543,10 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
 
         if artifacts.dataset.name == 'netflix_small':
             data = data.withColumn('timestamp', sf.col('timestamp').cast('long'))
+            preparator.setColumnsMapping({"user_id": "user_idx", "item_id": "item_idx",
+                                 "relevance": "relevance", "timestamp": "timestamp"})
             log = preparator.transform(
-                columns_mapping={"user_id": "user_idx", "item_id": "item_idx",
-                                 "relevance": "relevance", "timestamp": "timestamp"},
-                data=data
+                data
             ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
 
             # train/test split ml
@@ -562,10 +562,10 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
                 .withColumn('item_id', sf.col('item_id').cast('int'))
                 .withColumn('timestamp', sf.col('timestamp').cast('long'))
             )
+            preparator.setColumnsMapping({"user_id": "user_id", "item_id": "item_id",
+                                    "relevance": "rating", "timestamp": "timestamp"})
             log = preparator.transform(
-                columns_mapping={"user_id": "user_id", "item_id": "item_id",
-                                 "relevance": "rating", "timestamp": "timestamp"},
-                data=data
+                data
             ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
 
             # train/test split ml
@@ -575,9 +575,9 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
                 drop_cold_users=True,
             )
         elif artifacts.dataset.name.startswith('msd'):
+            preparator.setColumnsMapping({"user_id": "user_id", "item_id": "item_id", "relevance": "play_count"})
             log = preparator.transform(
-                columns_mapping={"user_id": "user_id", "item_id": "item_id", "relevance": "play_count"},
-                data=data
+                data
             ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id", "item_idx")
 
             indexer = Indexer(user_col="user_idx", item_col="item_idx")

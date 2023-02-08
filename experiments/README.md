@@ -293,10 +293,9 @@ The files structure related to running airflow DAGs
     **second_level_model** is an instance of Airflow Task used to build an Airflow Workflow.
 
 3.  To send wheel and jar files to the cluster, use the command:
-
    ```shell
       ./experiments/bin/replayctl upd-wheels-and-jars
-    ```
+   ```
 
     This command will copy your wheel and jar files to the server so they can be used later in the `SparkSubmitOperator`.
 

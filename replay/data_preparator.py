@@ -29,6 +29,7 @@ from replay.utils import convert2spark, process_timestamp_column, AbleToSaveAndL
     save_transformer, create_folder
 
 LOG_COLUMNS = ["user_id", "item_id", "timestamp", "relevance"]
+logger = logging.getLogger("replay")
 
 
 class Indexer:  # pylint: disable=too-many-instance-attributes
@@ -978,7 +979,7 @@ class ToNumericFeatureTransformer(AbleToSaveAndLoad):
             ]
 
             if self.cols_to_del:
-                State().logger.warning(
+                logger.warning(
                     "%s columns contain more that threshold unique "
                     "values and will be deleted",
                     self.cols_to_del,

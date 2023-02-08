@@ -148,16 +148,16 @@ def get_top_k_recs(recs: DataFrame, k: int, id_type: str = "idx") -> DataFrame:
 
 
 def delete_folder(path: str):
-    filesystem, uri, prefixless_path = get_filesystem(path)
+    file_info = get_filesystem(path)
 
-    if filesystem == FileSystem.HDFS:
-        fs.HadoopFileSystem().delete_dir(path)
+    if file_info.filesystem == FileSystem.HDFS:
+        fs.HadoopFileSystem.from_uri(file_info.hdfs_uri).delete_dir(path)
     else:
-        fs.LocalFileSystem().delete_dir(path)
+        fs.LocalFileSystem().delete_dir(file_info.path)
 
 
 def create_folder(path: str, delete_if_exists: bool = False, exists_ok: bool = False):
-    filesystem, uri, prefixless_path = get_filesystem(path)
+    file_info = get_filesystem(path)
 
     is_exists = do_path_exists(path)
     if is_exists and delete_if_exists:
@@ -165,10 +165,10 @@ def create_folder(path: str, delete_if_exists: bool = False, exists_ok: bool = F
     elif is_exists and not exists_ok:
         raise FileExistsError(f"The path already exists: {path}")
 
-    if filesystem == FileSystem.HDFS:
-        fs.HadoopFileSystem().create_dir(uri)
+    if file_info.filesystem == FileSystem.HDFS:
+        fs.HadoopFileSystem.from_uri(file_info.hdfs_uri).create_dir(file_info.path)
     else:
-        fs.LocalFileSystem().create_dir(prefixless_path)
+        fs.LocalFileSystem().create_dir(file_info.path)
 
 
 @sf.udf(returnType=st.DoubleType())
