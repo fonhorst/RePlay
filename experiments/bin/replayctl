@@ -31,9 +31,7 @@ fi
 function build_airflow_image() {
   mkdir -p /tmp/replay_airflow_image_files
 
-#  cp ../LightAutoML/dist/SparkLightAutoML_DEV-0.3.2-py3-none-any.whl .
-
-#  cp ../LightAutoML/jars/spark-lightautoml_2.12-0.1.1.jar .
+  cp ../LightAutoML/dist/SparkLightAutoML_DEV-0.3.2-py3-none-any.whl /tmp/replay_airflow_image_files/
 
   cp experiments/docker/yarn-site.xml /tmp/replay_airflow_image_files/yarn-site.xml
 
@@ -46,10 +44,6 @@ function build_airflow_image() {
   docker build -t node2.bdcl:5000/airflow-worker:latest -f experiments/docker/airflow-worker.dockerfile /tmp/replay_airflow_image_files
 
   rm -r /tmp/replay_airflow_image_files
-#  rm core-site.xml
-#  rm yarn-site.xml
-#  rm SparkLightAutoML_DEV-0.3.2-py3-none-any.whl
-#  rm spark-lightautoml_2.12-0.1.1.jar
 }
 
 function push_airflow_image() {
@@ -145,6 +139,15 @@ function upd_wheels_and_jars() {
   scp scala/target/scala-2.12/replay_2.12-0.1.jar node2.bdcl:"${SPARK_SUBMIT_FILES_DIR}"replay_2.12-0.1"${SUFFIX}".jar
 }
 
+function upd_replay_package() {
+  if [[ -z "${USERNAME_ON_CLUSTER}" ]]; then
+      echo "USERNAME_ON_CLUSTER environment variable is required!"
+      exit 1
+  fi
+
+  rsync -avr --perms --chmod=u+rwx,g+rwx,o+rwx replay node2.bdcl:/mnt/ess_storage/DN_1/storage/Airflow/dags/"${SPARK_SUBMIT_FILES_DIR}"_packages/
+}
+
 function help() {
   echo "
   List of commands.
@@ -200,6 +203,10 @@ function main () {
 
     "upd-wheels-and-jars")
         upd_wheels_and_jars
+        ;;
+
+    "upd-replay-pkg")
+        upd_replay_package
         ;;
 
     *)
