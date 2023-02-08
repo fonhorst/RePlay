@@ -145,7 +145,7 @@ function upd_replay_package() {
       exit 1
   fi
 
-  rsync -avr --perms --chmod=u+rwx,g+rwx,o+rwx replay node2.bdcl:/mnt/ess_storage/DN_1/storage/Airflow/dags/"${SPARK_SUBMIT_FILES_DIR}"_packages/
+  rsync -avr --perms --chmod=u+rwx,g+rwx,o+rwx replay node2.bdcl:/mnt/ess_storage/DN_1/storage/Airflow/dags/"${USERNAME_ON_CLUSTER}"_packages/
 }
 
 function help() {
