@@ -427,8 +427,8 @@ def _get_model(artifacts: ArtifactPaths, model_class_name: str, model_kwargs: Di
     module = importlib.import_module(module_name)
     clazz = getattr(module, class_name)
 
-    if class_name in ['ALSWrap', 'Word2VecRec'] and 'nmslib_hnsw_params' in model_kwargs:
-        model_kwargs['nmslib_hnsw_params']["index_path"] = artifacts.hnsw_index_path(model_class_name)
+    # if class_name in ['ALSWrap', 'Word2VecRec'] and 'nmslib_hnsw_params' in model_kwargs:
+    #     model_kwargs['nmslib_hnsw_params']["index_path"] = artifacts.hnsw_index_path(model_class_name)
 
     base_model = cast(BaseRecommender, clazz(**model_kwargs))
 
