@@ -599,7 +599,7 @@ class TwoStagesScenario(HybridRecommender):
                 )
 
         # TODO: PERF - k + max_positives_to_filter too much to predict?
-        pred = model._predict(
+        pred = model._inner_predict_wrap(
             log,
             k=k + max_positives_to_filter,
             users=users,
