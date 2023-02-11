@@ -5,6 +5,7 @@ import pickle
 from collections.abc import Iterable
 from typing import Dict, Optional, Tuple, List, Union, Any
 
+import mlflow
 import pyspark.sql.functions as sf
 from pyspark.sql import DataFrame
 
@@ -28,6 +29,7 @@ from replay.utils import (
     join_or_return,
     join_with_col_renaming,
     unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
+    log_exec_timer,
 )
 
 
@@ -454,6 +456,10 @@ class TwoStagesScenario(HybridRecommender):
                     prefix=f"m_{idx}",
                 )
 
+                with JobGroup(f"{type(self).__name__}", "features caching"):
+                    features = features.cache()
+                    features.write.mode("overwrite").format("noop").save()
+
                 # # TODO: DEBUG - remove later
                 # self.logger.info("Trying to calculate get_first_level_model_features")
                 # with JobGroup("fit",
@@ -560,7 +566,7 @@ class TwoStagesScenario(HybridRecommender):
         user_features: DataFrame,
         item_features: DataFrame,
         log_to_filter: DataFrame,
-    ):
+    ) -> DataFrame:
         """
         Filter users and items using can_predict_cold_items and can_predict_cold_users, and predict
         """
@@ -598,16 +604,23 @@ class TwoStagesScenario(HybridRecommender):
                     .collect()[0][0]
                 )
 
-        # TODO: PERF - k + max_positives_to_filter too much to predict?
-        pred = model._inner_predict_wrap(
-            log,
-            k=k + max_positives_to_filter,
-            users=users,
-            items=items,
-            user_features=user_features,
-            item_features=item_features,
-            filter_seen_items=False,
-        )
+        with JobGroup(__file__, f"{type(model).__name__}._predict"),\
+                log_exec_timer(f"{type(model).__name__}._predict") as timer:
+            # TODO: PERF - k + max_positives_to_filter too much to predict?
+            pred = model._inner_predict_wrap(
+                log,
+                k=k + max_positives_to_filter,
+                users=users,
+                items=items,
+                user_features=user_features,
+                item_features=item_features,
+                filter_seen_items=False,
+            )
+            pred = pred.cache()
+            pred.write.mode('overwrite').format('noop').save()
+        mlflow.log_metric(f"{type(model).__name__}._predict_sec", timer.duration)
+        logger.info(f"{type(self).__name__}_predict_with_first_level_model: pred rel columns: {str([x for x in pred.columns if 'rel_' in x])}")
+        logger.info(f"length of output dataframe of {type(model).__name__}._predict: {pred.count()}")
 
         pred = pred.join(
             log_to_filter_cached.select("user_idx", "item_idx"),
@@ -674,9 +687,12 @@ class TwoStagesScenario(HybridRecommender):
         passed_arguments = locals()
         passed_arguments.pop("self")
 
-        with JobGroup("fit", "_predict_with_first_level_model"):
+        with JobGroup("fit", "_predict_with_first_level_model"),\
+                log_exec_timer(f"{type(self).__name__}._predict_with_first_level_model") as timer:
             candidates = self._predict_with_first_level_model(**passed_arguments)
             candidates = candidates.cache()
+            candidates.write.mode("overwrite").format("noop").save()
+        mlflow.log_metric(f"{type(self).__name__}._predict_with_first_level_model_sec", timer.duration)
 
         # TODO: temporary commenting
         # if self.fallback_model is not None:
@@ -759,12 +775,14 @@ class TwoStagesScenario(HybridRecommender):
             self.random_model,
             self.fallback_model,
         ]:
-            with JobGroup("fit", f"first level model fit: {type(base_model).__name__}"):
+            with JobGroup("fit", f"first level model fit: {type(base_model).__name__}"),\
+                    log_exec_timer(f"{type(base_model).__name__}._fit_wrap") as timer:
                 base_model._fit_wrap(
                     log=first_level_train,
                     user_features=first_level_user_features,
                     item_features=first_level_item_features,
                 )
+            mlflow.log_metric(f"{type(base_model).__name__}._fit_wrap_sec", timer.duration)
 
         self.logger.info("Generate negative examples")
         negatives_source = (
@@ -773,7 +791,8 @@ class TwoStagesScenario(HybridRecommender):
             else self.random_model
         )
 
-        with JobGroup("fit", "get first level candidates"):
+        with JobGroup("fit", "get first level candidates"),\
+                log_exec_timer(f"{type(self).__name__}._get_first_level_candidates") as timer:
             first_level_candidates = self._get_first_level_candidates(
                 model=negatives_source,
                 log=first_level_train,
@@ -784,6 +803,10 @@ class TwoStagesScenario(HybridRecommender):
                 item_features=first_level_item_features,
                 log_to_filter=first_level_train,
             ).select("user_idx", "item_idx")
+
+            first_level_candidates = first_level_candidates.cache()
+            first_level_candidates.write.mode('overwrite').format('noop').save()
+        mlflow.log_metric(f"{type(self).__name__}._get_first_level_candidates_sec", timer.duration)
 
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
@@ -803,7 +826,8 @@ class TwoStagesScenario(HybridRecommender):
         self.cached_list.append(second_level_train)
 
         # TODO: PERF - lost 130+ secs here?
-        with JobGroup("fit", "inferring class distribution to log them"):
+        with JobGroup("fit", "inferring class distribution to log them"),\
+                log_exec_timer("calc distribution of classes") as timer:
             self.logger.info(
                 "Distribution of classes in second-level train dataset:/n %s",
                 (
@@ -812,6 +836,7 @@ class TwoStagesScenario(HybridRecommender):
                     .take(2)
                 ),
             )
+        mlflow.log_metric(f"second_level_train_agg_count_sec", timer.duration)
 
         with JobGroup("fit", "feature processor fit"):
             if not self.features_processor.fitted:
