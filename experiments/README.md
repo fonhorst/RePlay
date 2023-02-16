@@ -3,15 +3,17 @@
 
 2. [Important files](#important-files)
 
-3. [Short list of important supplementary commands](#sup-commands)
+3. [Important directories](#important-directories)
 
-4. [How to deploy DAGs to an Airflow instance](#deploy-dags)
+4. [Short list of important supplementary commands](#sup-commands)
 
-5. [How to run experiments with Airflow](#experiments)
+5. [How to deploy DAGs to an Airflow instance](#deploy-dags)
 
-6. [Workflow structure update and backfilling](#backfilling)
+6. [How to run experiments with Airflow](#experiments)
 
-7. [External and supplementary services to support workload executing](#external-services)
+7. [Workflow structure update and backfilling](#backfilling)
+
+8. [External and supplementary services to support workload executing](#external-services)
 
 ### <a name="general-info"></a>General information.
 A typical scenario of how it works is the following:
@@ -77,6 +79,12 @@ The files structure related to running airflow DAGs
 
 
 5. **experiments/docker** - contains docker files to build an image of airflow executor for Kubernetes.
+
+### <a name="important-directories"></a>Important directories
+
+1. **Python environments**: /mnt/ess_storage/DN_1/storage/SLAMA/python_envs
+
+2. **General project directory**: /mnt/ess_storage/DN_1/storage/SLAMA/kaggle_used_cars_dataset
 
 ### <a name="sup-commands"></a>Short list of important supplementary commands
 1. To show airflow config, pod template, etc. 
