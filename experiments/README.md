@@ -83,6 +83,30 @@ The files structure related to running airflow DAGs
 ### <a name="important-directories"></a>Important directories
 
 1. **Python environments**: /mnt/ess_storage/DN_1/storage/SLAMA/python_envs
+   
+    One can find cpython-3.8.16+20221220-x86_64-unknown-linux-gnu-install_only.tar.gz in /mnt/ess_storage/DN_1/storage/SLAMA/python_envs.
+    (There is another one like this, but for python 3.9).
+
+    This is a **standalone** python distribution provided by this project [Python build standalone](#https://python-build-standalone.readthedocs.io/en/latest/running.html).
+    The files were downloaded directly from the release pageb (see Assets section): [Release page](#https://github.com/indygreg/python-build-standalone/releases/tag/20221220).
+
+    If one needs to create a new fresh python environment, do the following:
+    1. Go to **python_envs** directory.
+    ```shell
+      cd /mnt/ess_storage/DN_1/storage/SLAMA/python_envs     
+    ```
+    2. Unpack the source archive in a subdirectory with a name of the new environment. For instance:
+    ```shell
+      mkdir my-fresh-env-py3.8 && tar zxvf cpython-3.8.16+20221220-x86_64-unknown-linux-gnu-install_only.tar.gz -C my-fresh-env-py3.8 --strip-components 1
+    ```
+   
+    3. (Optional) Change the rights to 777, if you want anyone can install packages into this new env:
+    ```shell
+      chmod -R 777 my-fresh-env-py3.8
+    ```
+   
+    4. In your scripts, running on YARN or in docker containers based on airflow-worker image, 
+       address the new env by path **/python_envs/my-fresh-env-py3.8**. 
 
 2. **General project directory**: /mnt/ess_storage/DN_1/storage/SLAMA/kaggle_used_cars_dataset
 
