@@ -226,6 +226,9 @@ class BaseRecommender(ABC):
     def _check_borders(self, param, borders):
         """Raise value error if param borders are not valid"""
         if param not in self._search_space:
+            self.logger.info("search space is")
+            self.logger.info(self._search_space)
+            print(self._search_space)
             raise ValueError(
                 f"Hyper parameter {param} is not defined for {str(self)}"
             )

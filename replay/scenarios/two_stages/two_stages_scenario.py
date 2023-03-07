@@ -286,7 +286,7 @@ class TwoStagesScenario(HybridRecommender):
     def _save_model(self, path: str):
         from replay.model_handler import save
         spark = State().session
-        create_folder(path)
+        create_folder(path, exists_ok=True)
 
         # save features
         if self.first_level_user_features_transformer is not None:
@@ -344,13 +344,13 @@ class TwoStagesScenario(HybridRecommender):
 
         # load transformers for features
         comp_path = os.path.join(path, "first_level_user_features_transformer")
-        first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
+        first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None #TODO: check why this dir exists if user_features=None
 
         comp_path = os.path.join(path, "first_level_item_features_transformer")
-        first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
+        first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None #TODO same
 
         comp_path = os.path.join(path, "features_processor")
-        features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None
+        features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None # TODO same
 
         # load first level models
         first_level_models_path = os.path.join(path, "first_level_models")
@@ -372,7 +372,8 @@ class TwoStagesScenario(HybridRecommender):
 
         # load second stage model
         comp_path = os.path.join(path, "second_stage_model")
-        second_stage_model = load_transformer(comp_path) if do_path_exists(comp_path) else None
+        # second_stage_model = load_transformer(comp_path) if do_path_exists(comp_path) else None # TODO: fix it
+        second_stage_model = None
 
         self.__dict__.update({
             **data,
@@ -541,11 +542,11 @@ class TwoStagesScenario(HybridRecommender):
     def _split_data(self, log: DataFrame) -> Tuple[DataFrame, DataFrame]:
         """Write statistics"""
         first_level_train, second_level_train = self.train_splitter.split(log)
-        logger.debug("Log info: %s", get_log_info(log))
-        logger.debug(
+        logger.info("Log info: %s", get_log_info(log))
+        logger.info(
             "first_level_train info: %s", get_log_info(first_level_train)
         )
-        logger.debug(
+        logger.info(
             "second_level_train info: %s", get_log_info(second_level_train)
         )
         return first_level_train, second_level_train
