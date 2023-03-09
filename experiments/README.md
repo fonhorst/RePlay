@@ -1,4 +1,4 @@
-###Table of content
+~~~~###Table of content
 1. [General info](#general-info)
 
 2. [Important files](#important-files)

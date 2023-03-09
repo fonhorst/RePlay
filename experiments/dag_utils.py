@@ -921,7 +921,9 @@ class DatasetCombiner:
                 .distinct()
             )
 
+        # TODO: probably, we should cache required_pairs here beforehand
         missing_pairs = [
+            # TODO: unneccessary distinct in the end?
             required_pairs.join(df, on=['user_idx', 'item_idx'], how='anti').select('user_idx', 'item_idx').distinct()
             for df in partial_dfs
         ]
@@ -959,17 +961,13 @@ class DatasetCombiner:
             )
             return partial_df.unionByName(current_pred_with_features.select(*partial_df.columns))
 
+        # TODO: am i correct on calculating this features?
         common_cols = functools.reduce(
             lambda acc, cols: acc.intersection(cols),
             [set(df.columns) for df in partial_dfs]
         )
         common_cols.remove('user_idx')
         common_cols.remove('item_idx')
-
-        extended_train_dfs = [
-            make_missing_predictions(model, mpairs, partial_df.drop(*common_cols))
-            for model, mpairs, partial_df in zip(models, missing_pairs, partial_dfs)
-        ]
 
         features_for_required_pairs_df = [
             required_pairs.join(df.select('user_idx', 'item_idx', *common_cols), on=['user_idx', 'item_idx'])
@@ -980,6 +978,12 @@ class DatasetCombiner:
             lambda acc, df: acc.unionByName(df),
             features_for_required_pairs_df
         ).drop_duplicates(['user_idx', 'item_idx'])
+
+        # predict features for missing pairs in each model's predict
+        extended_train_dfs = [
+            make_missing_predictions(model, mpairs, partial_df.drop(*common_cols))
+            for model, mpairs, partial_df in zip(models, missing_pairs, partial_dfs)
+        ]
 
         # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
         new_train_df = functools.reduce(
