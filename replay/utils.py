@@ -1007,6 +1007,12 @@ def list_folder(path: str) -> List[str]:
         :return: names of files from the given directory (not absolute names)
     """
     spark = State().session
+    # if True:
+    # # if path.startswith("file:/"):
+    #
+    #     files = [x for x in os.listdir(path)]
+    #     logging.info("Files", files)
+    #     return files
     fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
     base_path = spark._jvm.org.apache.hadoop.fs.Path(path)
 

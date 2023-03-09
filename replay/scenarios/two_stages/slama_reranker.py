@@ -4,6 +4,8 @@ from pyspark.ml import PipelineModel, Transformer
 from pyspark.ml.functions import vector_to_array
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.pandas.functions import pandas_udf
+from pyspark.sql.functions import expr
+
 from sparklightautoml.automl.presets.tabular_presets import SparkTabularAutoML
 from sparklightautoml.tasks.base import SparkTask
 from sparklightautoml.utils import WrappingSelectingPipelineModel
@@ -84,6 +86,16 @@ class SlamaWrap(ReRanker):
         }
         data = data.drop("user_idx", "item_idx")
 
+        # array_features = [k for k, v in dict(data.dtypes).items() if v == "array<double>"]
+        #
+        # if len(array_features) > 0:
+        #     for array_feature in array_features:
+        #         print(f"processing {array_feature}")
+        #         array_size = len(data.select(array_feature).head()[0])
+        #         data = data.select(
+        #             data.columns + [data[array_feature][x].alias(f"{array_feature}_{x}") for x in range(array_size)]
+        #         )
+        #         data = data.drop(array_feature)
         # TODO: do not forget about persistence manager
         self.model.fit_predict(data, **params)
 
@@ -98,6 +110,17 @@ class SlamaWrap(ReRanker):
             the dataframe columns are ``[user_idx, item_idx, relevance]``
         """
         self.logger.info("Starting re-ranking")
+
+        # array_features = [k for k, v in dict(data.dtypes).items() if v == "array<double>"]
+        #
+        # if len(array_features) > 0:
+        #     for array_feature in array_features:
+        #         print(f"processing {array_feature}")
+        #         array_size = len(data.select(array_feature).head()[0])
+        #         data = data.select(
+        #             data.columns + [data[array_feature][x].alias(f"{array_feature}_{x}") for x in range(array_size)]
+        #         )
+        #         data = data.drop(array_feature)
 
         transformer = self.transformer if self.transformer else self.model.transformer()
 
