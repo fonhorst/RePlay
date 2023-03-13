@@ -270,8 +270,8 @@ def prepare_datasets(dataset_name: str, spark: SparkSession, partition_num: int)
         }
 
     with log_exec_timer("DataPreparator execution") as preparator_timer:
-        preparator = DataPreparator()
-        log = preparator.transform(columns_mapping=mapping, data=data)
+        preparator = DataPreparator(columns_mapping=mapping)
+        log = preparator.transform(data)
         log = log.repartition(partition_num).cache()
         log.write.mode("overwrite").format("noop").save()
     mlflow.log_metric("preparator_sec", preparator_timer.duration)
@@ -282,7 +282,7 @@ def prepare_datasets(dataset_name: str, spark: SparkSession, partition_num: int)
         with log_exec_timer("log filtering") as log_filtering_timer:
             # will consider ratings >= 3 as positive feedback. A positive feedback is treated with relevance = 1
             only_positives_log = log.filter(
-                sf.col("relevance") >= 1
+                sf.col("relevance") >= 3  # 1
             ).withColumn("relevance", sf.lit(1))
             only_positives_log = only_positives_log.cache()
             only_positives_log.write.mode("overwrite").format("noop").save()
