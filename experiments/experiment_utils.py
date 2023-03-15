@@ -1,6 +1,7 @@
+import importlib
 import json
 import os
-from typing import Tuple, Optional
+from typing import Tuple, Optional, cast, Dict, List
 
 import mlflow
 import pandas as pd
@@ -24,6 +25,7 @@ from replay.models import (
     ClusterRec,
     UCB,
 )
+from replay.models.base_rec import BaseRecommender
 from replay.utils import log_exec_timer, get_number_of_allocated_executors
 from replay.data_preparator import DataPreparator, Indexer
 from replay.splitters import DateSplitter, UserSplitter
@@ -202,6 +204,20 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
 
     return model
 
+
+def get_models(models: Dict) -> List[BaseRecommender]:
+
+    list_of_models = []
+    for model_class_name, model_kwargs in models.items():
+        module_name = ".".join(model_class_name.split('.')[:-1])
+        class_name = model_class_name.split('.')[-1]
+        module = importlib.import_module(module_name)
+        clazz = getattr(module, class_name)
+
+        base_model = cast(BaseRecommender, clazz(**model_kwargs))
+        list_of_models.append(base_model)
+
+    return list_of_models
 
 def prepare_datasets(dataset_name: str, spark: SparkSession, partition_num: int):
 

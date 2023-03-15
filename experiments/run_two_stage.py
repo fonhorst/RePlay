@@ -115,7 +115,7 @@ from experiment_utils import (
     check_number_of_allocated_executors,
     get_partition_num,
     get_log_info,
-    prepare_datasets,
+    prepare_datasets, get_models,
 )
 from replay.dataframe_bucketizer import DataframeBucketizer
 from replay.experiment import Experiment
@@ -172,6 +172,8 @@ logging.basicConfig(
 # logging.config.dictConfig(logging_config(level=logging.DEBUG, log_filename='/tmp/slama.log'))
 # logging.basicConfig(level=logging.DEBUG, format=VERBOSE_LOGGING_FORMAT)
 
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 
 def main(spark: SparkSession, dataset_name: str):
     spark_conf: SparkConf = spark.sparkContext.getConf()
@@ -206,78 +208,126 @@ def main(spark: SparkSession, dataset_name: str):
         )
         mlflow.log_params(params)
 
-        prepare_datasets(dataset_name, spark, partition_num)
+        # prepare_datasets(dataset_name, spark, partition_num)
 
-        train, test, user_features = get_datasets(
-            dataset_name, spark, partition_num
+        # train, test, user_features = get_datasets(
+        #     dataset_name, spark, partition_num
+        # )
+        train = spark.read.parquet(
+            "hdfs://node21.bdcl:9000"
+            # "/opt/spark_data/replay/experiments/netflix_first_level_80_20/train.parquet"
+            # "/opt/spark_data/replay/experiments/msd_first_level_80_20/train.parquet"
+            "/opt/spark_data/replay/experiments/ml25m_first_level_80_20/train.parquet"
         )
+        test = spark.read.parquet(
+            "hdfs://node21.bdcl:9000"
+            # "/opt/spark_data/replay/experiments/netflix_first_level_80_20/test.parquet"
+            # "/opt/spark_data/replay/experiments/msd_first_level_80_20/test.parquet"
+            "/opt/spark_data/replay/experiments/ml25m_first_level_80_20/test.parquet"
+        )
+        train = train.repartition(partition_num, "user_idx")
+        test = test.repartition(partition_num, "user_idx")
+
+        first_levels_models_params = {
+            "replay.models.knn.ItemKNN": {"num_neighbours": int(os.environ.get("NUM_NEIGHBOURS", 100))},
+            "replay.models.als.ALSWrap": {
+                "rank": int(os.environ.get("ALS_RANK", 100)),
+                "seed": seed,
+                "num_item_blocks": int(os.environ.get("NUM_BLOCKS", 10)),
+                "num_user_blocks": int(os.environ.get("NUM_BLOCKS", 10)),
+                "hnswlib_params": {
+                    "space": "ip",
+                    "M": 100,
+                    "efS": 2000,
+                    "efC": 2000,
+                    "post": 0,
+                    "index_path": f"/tmp/als_hnswlib_index_{spark.sparkContext.applicationId}",
+                    "build_index_on": "executor",
+                },
+            },
+            "replay.models.word2vec.Word2VecRec": {
+                "rank": int(os.environ.get("WORD2VEC_RANK", 100)),
+                "seed": seed,
+                "hnswlib_params": {
+                    "space": "ip",
+                    "M": 100,
+                    "efS": 2000,
+                    "efC": 2000,
+                    "post": 0,
+                    "index_path": f"/tmp/word2vec_hnswlib_index_{spark.sparkContext.applicationId}",
+                    "build_index_on": "executor",
+                },
+            },
+        }
+        mlflow.log_params(first_levels_models_params)
 
         # Initialization of first level models
-        als_rank = int(os.environ.get("ALS_RANK", 100))
-        num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
-        als_hnswlib_params = {
-            "space": "ip",
-            "M": 100,
-            "efS": 2000,
-            "efC": 2000,
-            "post": 0,
-            "index_path": f"/tmp/als_hnswlib_index_{spark.sparkContext.applicationId}",
-            "build_index_on": "executor",
-        }
-        mlflow.log_params(
-            {
-                "ALS_rank": als_rank,
-                "num_blocks": num_blocks,
-                "als_build_index_on": als_hnswlib_params["build_index_on"],
-                "als_hnswlib_params": als_hnswlib_params,
-            }
-        )
-        als_model = ALSWrap(
-            rank=als_rank,
-            seed=seed,
-            num_item_blocks=num_blocks,
-            num_user_blocks=num_blocks,
-            hnswlib_params=als_hnswlib_params,
-        )
+        # als_rank = int(os.environ.get("ALS_RANK", 100))
+        # num_blocks = int(os.environ.get("NUM_BLOCKS", 10))
+        # als_hnswlib_params = {
+        #     "space": "ip",
+        #     "M": 100,
+        #     "efS": 2000,
+        #     "efC": 2000,
+        #     "post": 0,
+        #     "index_path": f"/tmp/als_hnswlib_index_{spark.sparkContext.applicationId}",
+        #     "build_index_on": "executor",
+        # }
+        # mlflow.log_params(
+        #     {
+        #         "ALS_rank": als_rank,
+        #         "num_blocks": num_blocks,
+        #         "als_build_index_on": als_hnswlib_params["build_index_on"],
+        #         "als_hnswlib_params": als_hnswlib_params,
+        #     }
+        # )
+        # als_model = ALSWrap(
+        #     rank=als_rank,
+        #     seed=seed,
+        #     num_item_blocks=num_blocks,
+        #     num_user_blocks=num_blocks,
+        #     hnswlib_params=als_hnswlib_params,
+        # )
 
-        num_neighbours = int(os.environ.get("NUM_NEIGHBOURS", 100))
-        mlflow.log_param("num_neighbours", num_neighbours)
-        itemknn_model = ItemKNN(num_neighbours=num_neighbours)
+        # num_neighbours = int(os.environ.get("NUM_NEIGHBOURS", 100))
+        # mlflow.log_param("num_neighbours", num_neighbours)
+        # itemknn_model = ItemKNN(num_neighbours=num_neighbours)
 
-        slim_model = SLIM(seed=seed)
+        # slim_model = SLIM(seed=seed)
 
-        word2vec_hnswlib_params = {
-            "space": "ip",
-            "M": 100,
-            "efS": 2000,
-            "efC": 2000,
-            "post": 0,
-            "index_path": f"/tmp/word2vec_hnswlib_index_{spark.sparkContext.applicationId}",
-            "build_index_on": "executor",
-        }
-        word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
-        mlflow.log_params(
-            {
-                "word2vec_build_index_on": word2vec_hnswlib_params[
-                    "build_index_on"
-                ],
-                "word2vec_hnswlib_params": word2vec_hnswlib_params,
-                "word2vec_rank": word2vec_rank,
-            }
-        )
-        word2vec_model = Word2VecRec(
-            rank=word2vec_rank,
-            seed=seed,
-            hnswlib_params=word2vec_hnswlib_params,
-        )
+        # word2vec_hnswlib_params = {
+        #     "space": "ip",
+        #     "M": 100,
+        #     "efS": 2000,
+        #     "efC": 2000,
+        #     "post": 0,
+        #     "index_path": f"/tmp/word2vec_hnswlib_index_{spark.sparkContext.applicationId}",
+        #     "build_index_on": "executor",
+        # }
+        # word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
+        # mlflow.log_params(
+        #     {
+        #         "word2vec_build_index_on": word2vec_hnswlib_params[
+        #             "build_index_on"
+        #         ],
+        #         "word2vec_hnswlib_params": word2vec_hnswlib_params,
+        #         "word2vec_rank": word2vec_rank,
+        #     }
+        # )
+        # word2vec_model = Word2VecRec(
+        #     rank=word2vec_rank,
+        #     seed=seed,
+        #     hnswlib_params=word2vec_hnswlib_params,
+        # )
 
-        first_level_models = [
-            als_model,
-            itemknn_model,
-            slim_model,
-            word2vec_model,
-        ]
-        use_first_level_models_feat = [True, False, False, True]
+        # first_level_models = [
+        #     als_model,
+        #     itemknn_model,
+        #     slim_model,
+        #     word2vec_model,
+        # ]
+        first_level_models = get_models(first_levels_models_params)
+        use_first_level_models_feat = [False, True, False]
         assert len(first_level_models) == len(use_first_level_models_feat)
 
         mlflow.log_param(
@@ -299,16 +349,13 @@ def main(spark: SparkSession, dataset_name: str):
                 "mini_batch_size": 1000,
             },
             "linear_l2_params": {"default_params": {"regParam": [1e-5]}},
-            "reader_params": {"cv": 2, "advanced_roles": False}
-            # "general_params": {"use_algos": [["lgb_tuned"]]},
-            # "reader_params": {"cv": 5, "advanced_roles": False},
-            # "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 80}
+            "reader_params": {"cv": 2, "advanced_roles": False, "samples": 10_000}
         }
         mlflow.log_param("second_model_params", second_model_params)
 
         scenario = TwoStagesScenario(
             train_splitter=UserSplitter(
-                item_test_size=0.5, shuffle=True, seed=42
+                item_test_size=0.2, shuffle=True, seed=42
             ),
             first_level_models=first_level_models,  # [ALSWrap(rank=100), SLIM(seed=42)],
             use_first_level_models_feat=use_first_level_models_feat,  # [True, False],
@@ -317,6 +364,8 @@ def main(spark: SparkSession, dataset_name: str):
             second_model_config_path=os.environ.get(
                 "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"
             ),
+            use_generated_features=True,
+            use_presplited_data=True
         )
 
         # Model fitting

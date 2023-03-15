@@ -12,6 +12,8 @@ from pyspark.sql import functions as sf
 from sparklightautoml.automl.presets.tabular_presets import SparkTabularAutoML
 from sparklightautoml.tasks.base import SparkTask
 from sparklightautoml.utils import WrappingSelectingPipelineModel
+from sparklightautoml.tasks.base import SparkTask
+from pyspark.sql.types import TimestampType, DoubleType, NumericType, DateType, ArrayType, StringType
 
 from replay.scenarios.two_stages.reranker import ReRanker
 from replay.session_handler import State
@@ -70,6 +72,50 @@ class SlamaWrap(ReRanker):
             )
             self.transformer = None
 
+    @staticmethod
+    def handle_columns(df: DataFrame) -> DataFrame:
+        def explode_vec(col_name: str, size: int):
+            return [sf.col(col_name).getItem(i).alias(f'{col_name}_{i}') for i in range(size)]
+
+        supported_types = (NumericType, TimestampType, DateType, StringType)
+
+        wrong_type_fields = [
+            field for field in df.schema.fields
+            if not (isinstance(field.dataType, supported_types)
+                    or (isinstance(field.dataType, ArrayType) and isinstance(field.dataType.elementType,
+                                                                             NumericType)))
+        ]
+        assert len(
+            wrong_type_fields) == 0, f"Fields with wrong types have been found: {wrong_type_fields}. "\
+                                     "Only the following types are supported: {supported_types} "\
+                                     "and ArrayType with Numeric type of elements"
+
+        array_fields = [field.name for field in df.schema.fields if isinstance(field.dataType, ArrayType)]
+
+        arrays_to_explode = {
+            field.name: df.where(sf.col(field.name).isNotNull()).select(sf.size(field.name).alias("size")).first()[
+                "size"]
+            for field in df.schema.fields if isinstance(field.dataType, ArrayType)
+        }
+
+        timestamp_fields = [field.name for field in df.schema.fields if
+                            isinstance(field.dataType, TimestampType)]
+        df = (
+            df
+            .select(
+                *(c for c in df.columns if c not in timestamp_fields + array_fields + ['target']),
+                *(sf.col(c).astype('int').alias(c) for c in timestamp_fields),
+                sf.col('target').astype('int').alias('target'),
+                *(c for f, size in arrays_to_explode.items() for c in explode_vec(f, size))
+            )
+            # .drop(*(f.name for f in array_fields))
+            # `withColumns` method is only available since version 3.3.0
+            # .withColumns({c: sf.col(c).astype('int') for c in timestamp_fields})
+            # .withColumn('target', sf.col('target').astype('int'))
+        )
+
+        return df
+
     def fit(self, data: DataFrame, fit_params: Optional[Dict] = None) -> None:
         """
         Fit the LightAutoML TabularPipeline model with binary classification task.
@@ -85,12 +131,21 @@ class SlamaWrap(ReRanker):
         if self.transformer is not None:
             raise RuntimeError("The ranker is already fitted")
 
+        data = data.drop("user_idx", "item_idx")
+
+        data = self.handle_columns(data)
+
+        roles = {
+            "target": "target",
+            "numeric": [field.name for field in data.schema.fields if
+                        isinstance(field.dataType, NumericType) and field.name != 'target'],
+        }
+
         params = {
-            "roles": {"target": "target"},
+            "roles": roles,
             "verbose": 1,
             **({} if fit_params is None else fit_params)
         }
-        data = data.drop("user_idx", "item_idx")
 
         array_features = [k for k, v in dict(data.dtypes).items() if v == "array<double>"]
 
@@ -123,21 +178,10 @@ class SlamaWrap(ReRanker):
         """
         self.logger.info("Starting re-ranking")
 
-        # array_features = [k for k, v in dict(data.dtypes).items() if v == "array<double>"]
-        #
-        # if len(array_features) > 0:
-        #     for array_feature in array_features:
-        #         print(f"processing {array_feature}")
-        #         array_size = len(data.select(array_feature).head()[0])
-        #         data = data.select(
-        #             data.columns + [data[array_feature][x].alias(f"{array_feature}_{x}") for x in range(array_size)]
-        #         )
-        #         data = data.drop(array_feature)
-
         transformer = self.transformer if self.transformer else self.model.transformer()
         logger.info(f"transformer type: {str(type(transformer))}")
 
-        array_features = [k for k, v in dict(data.dtypes).items() if v == "array<double>"]
+        data = self.handle_columns(data)
 
         # if len(array_features) > 0:
         for array_feature in array_features:

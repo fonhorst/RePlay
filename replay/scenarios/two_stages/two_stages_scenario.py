@@ -622,8 +622,8 @@ class TwoStagesScenario(HybridRecommender):
             pred = pred.cache()
             pred.write.mode('overwrite').format('noop').save()
         mlflow.log_metric(f"{type(model).__name__}._{prediction_label}predict_sec", timer.duration)
-        logger.info(f"{type(self).__name__}_predict_with_first_level_model: pred rel columns: {str([x for x in pred.columns if 'rel_' in x])}")
-        logger.info(f"length of output dataframe of {type(model).__name__}._predict: {pred.count()}")
+        logger.info(f"{type(model).__name__} prediction: {pred}")
+        logger.info(f"Length of {type(model).__name__} prediction: {pred.count()}")
 
         pred = pred.join(
             log_to_filter_cached.select("user_idx", "item_idx"),
@@ -786,8 +786,6 @@ class TwoStagesScenario(HybridRecommender):
 
         def make_missing_predictions(model: BaseRecommender, mpairs: DataFrame, partial_df: DataFrame) -> DataFrame:
 
-            # with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY) as spark:
-
             mpairs = mpairs.cache()
 
             if mpairs.count() == 0:
@@ -800,29 +798,6 @@ class TwoStagesScenario(HybridRecommender):
                 item_features=item_features
             ).withColumnRenamed('relevance', get_rel_col(partial_df))
 
-            # features = get_first_level_model_features(
-            #     model=model,
-            #     pairs=current_pred.select(
-            #         "user_idx", "item_idx"
-            #     ),
-            #     user_features=user_features.cache() if user_features is not None else None,
-            #     item_features=item_features.cache() if item_features is not None else None,
-            #     prefix=f"m_0",
-            # )
-            # current_pred_with_features = join_with_col_renaming(
-            #     left=current_pred,
-            #     right=features,
-            #     on_col_name=["user_idx", "item_idx"],
-            #     how="left",
-            # )
-            # current_pred_with_features.write.mode("overwrite").parquet(os.path.join("hdfs://node21.bdcl:9000",
-            #                                                       artifacts.base_path,
-            #                                                       f"current_pred_with_features_{model}.parquet"))
-            # current_pred_with_features = sprk_ses.read.parquet(os.path.join("hdfs://node21.bdcl:9000",
-            #                                                       artifacts.base_path,
-            #                                                       f"current_pred_with_features_{model}.parquet"))
-
-            # return current_pred_with_features
             return partial_df.unionByName(current_pred.select(*partial_df.columns))
 
         common_cols = functools.reduce(
@@ -853,21 +828,15 @@ class TwoStagesScenario(HybridRecommender):
         ).drop_duplicates(['user_idx', 'item_idx'])
 
         # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
-        new_train_df = functools.reduce(
+        combined_df = functools.reduce(
             lambda acc, x: acc.join(x, on=['user_idx', 'item_idx'], how='left'),
             extended_train_dfs,
             required_pairs_with_features
         )
 
-        # logger.info("count new train df ")
-        # new_train_df.count()
-        # logger.info("count new is ok ")
-        # logger.info("Saving new parquet in ", combined_df_path)
-        # new_train_df.write.parquet(combined_df_path) #mode("overwrite")
-
         logger.info("Combination completed.")
 
-        return new_train_df
+        return combined_df
 
     # pylint: disable=too-many-locals,too-many-statements
     def _fit(
@@ -879,10 +848,8 @@ class TwoStagesScenario(HybridRecommender):
 
         self.cached_list = []
 
-        self.logger.info("Data split")
+        self.logger.info("Data splitting")
         first_level_train, second_level_positive = self._split_data(log)
-        # second_level_positive = second_level_positive
-        # .join(first_level_train.select("user_idx"), on="user_idx", how="left")
 
         self.first_level_item_len = (
             first_level_train.select("item_idx").distinct().count()
@@ -966,30 +933,12 @@ class TwoStagesScenario(HybridRecommender):
             first_level_candidates = first_level_candidates.cache()
             first_level_candidates.write.mode('overwrite').format('noop').save()
         mlflow.log_metric(f"{type(self).__name__}._combine_sec", timer.duration)
-
         logger.info(f"first_level_candidates.columns: {str(first_level_candidates.columns)}")
-
-        # with JobGroup("fit", "get first level candidates"),\
-        #         log_exec_timer(f"{type(self).__name__}._get_first_level_candidates") as timer:
-        #     first_level_candidates = self._get_first_level_candidates(
-        #         model=negatives_source,
-        #         log=first_level_train,
-        #         k=self.num_negatives,
-        #         users=log.select("user_idx").distinct(),
-        #         items=log.select("item_idx").distinct(),
-        #         user_features=first_level_user_features,
-        #         item_features=first_level_item_features,
-        #         log_to_filter=first_level_train,
-        #     ).select("user_idx", "item_idx")
-        #
-        #     first_level_candidates = first_level_candidates.cache()
-        #     first_level_candidates.write.mode('overwrite').format('noop').save()
-        # mlflow.log_metric(f"{type(self).__name__}._get_first_level_candidates_sec", timer.duration)
 
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
 
-        self.logger.info("Crate train dataset for second level")
+        self.logger.info("Creating train dataset for second level")
 
         second_level_train = (
             first_level_candidates.join(
@@ -1001,13 +950,18 @@ class TwoStagesScenario(HybridRecommender):
             ).fillna(0, subset="target")
         ).cache()
 
+        neg = second_level_train.filter(second_level_train.target == 0)
+        pos = second_level_train.filter(second_level_train.target == 1)
+        neg_new = neg.sample(fraction=10 * pos.count() / neg.count())
+        second_level_train = pos.union(neg_new)
+
         self.cached_list.append(second_level_train)
 
         # TODO: PERF - lost 130+ secs here?
         with JobGroup("fit", "inferring class distribution to log them"),\
                 log_exec_timer("calc distribution of classes") as timer:
             self.logger.info(
-                "Distribution of classes in second-level train dataset:/n %s",
+                "Distribution of classes in second-level train dataset:\n %s",
                 (
                     second_level_train.groupBy("target")
                     .agg(sf.count(sf.col("target")).alias("count_for_class"))
@@ -1038,7 +992,7 @@ class TwoStagesScenario(HybridRecommender):
 
         self.cached_list.append(second_level_train_to_convert)
 
-        logger.info(f"second_level_train_to_convert.columns: {second_level_train_to_convert.columns}")
+        logger.info(f"Fitting {type(self.second_stage_model).__name__} on {second_level_train_to_convert}")
         # second_level_train_to_convert.write.parquet("hdfs://node21.bdcl:9000/tmp/second_level_train_to_convert.parquet")
         model_name = type(self.second_stage_model).__name__
         with log_exec_timer(
@@ -1090,19 +1044,7 @@ class TwoStagesScenario(HybridRecommender):
             candidates = candidates.cache()
             candidates.write.mode('overwrite').format('noop').save()
         mlflow.log_metric(f"{type(self).__name__}._2combine_sec", timer.duration)
-
-        # with JobGroup("2stage scenario predict", "_get_first_level_candidates"):
-        #     candidates = self._get_first_level_candidates(
-        #         model=self.first_level_models[0],
-        #         log=log,
-        #         k=self.num_negatives,
-        #         users=users,
-        #         items=items,
-        #         user_features=first_level_user_features,
-        #         item_features=first_level_item_features,
-        #         log_to_filter=log,
-        #     ).select("user_idx", "item_idx")
-        self.logger.info(f"rel* columns in output of _get_first_level_candidates: {str([x for x in candidates.columns if 'rel' in x])}")
+        logger.info(f"2candidates.columns: {candidates.columns}")
 
         candidates_cached = candidates.cache()
         unpersist_if_exists(first_level_user_features)
