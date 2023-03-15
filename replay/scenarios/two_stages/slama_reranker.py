@@ -73,7 +73,7 @@ class SlamaWrap(ReRanker):
             self.transformer = None
 
     @staticmethod
-    def handle_columns(df: DataFrame) -> DataFrame:
+    def handle_columns(df: DataFrame, convert_target: bool = False) -> DataFrame:
         def explode_vec(col_name: str, size: int):
             return [sf.col(col_name).getItem(i).alias(f'{col_name}_{i}') for i in range(size)]
 
@@ -105,7 +105,7 @@ class SlamaWrap(ReRanker):
             .select(
                 *(c for c in df.columns if c not in timestamp_fields + array_fields + ['target']),
                 *(sf.col(c).astype('int').alias(c) for c in timestamp_fields),
-                sf.col('target').astype('int').alias('target'),
+                *(c for c in [sf.col('target').astype('int').alias('target') if convert_target else None] if c),
                 *(c for f, size in arrays_to_explode.items() for c in explode_vec(f, size))
             )
             # .drop(*(f.name for f in array_fields))
@@ -133,7 +133,7 @@ class SlamaWrap(ReRanker):
 
         data = data.drop("user_idx", "item_idx")
 
-        data = self.handle_columns(data)
+        data = self.handle_columns(data, convert_target=True)
 
         roles = {
             "target": "target",
