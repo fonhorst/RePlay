@@ -100,16 +100,23 @@ class SlamaWrap(ReRanker):
 
         timestamp_fields = [field.name for field in df.schema.fields if
                             isinstance(field.dataType, TimestampType)]
+
+        if convert_target:
+            additional_columns = [sf.col('target').astype('int').alias('target')]
+        else:
+            additional_columns = []
+
         df = (
             df
             .select(
                 *(c for c in df.columns if c not in timestamp_fields + array_fields + ['target']),
                 *(sf.col(c).astype('int').alias(c) for c in timestamp_fields),
-                *(c for c in [sf.col('target').astype('int').alias('target') if convert_target else None] if c),
+                *additional_columns,
+                # *(c for c in [sf.col('target').astype('int').alias('target') if convert_target else None] if c),
                 *(c for f, size in arrays_to_explode.items() for c in explode_vec(f, size))
             )
             # .drop(*(f.name for f in array_fields))
-            # `withColumns` method is only available since version 3.3.0
+            # # `withColumns` method is only available since version 3.3.0
             # .withColumns({c: sf.col(c).astype('int') for c in timestamp_fields})
             # .withColumn('target', sf.col('target').astype('int'))
         )
