@@ -1,4 +1,5 @@
 # pylint: disable=too-many-lines
+import functools
 import logging
 import os
 import pickle
@@ -416,21 +417,21 @@ class TwoStagesScenario(HybridRecommender):
             self.first_level_user_features_transformer.transform(user_features)
         )
 
-        pairs = log_to_add_features.select("user_idx", "item_idx")
+        # pairs = log_to_add_features.select("user_idx", "item_idx")
         for idx, model in enumerate(self.first_level_models):
-            current_pred = self._predict_pairs_with_first_level_model(
-                model=model,
-                log=log_for_first_level_models,
-                pairs=pairs,
-                user_features=first_level_user_features_cached,
-                item_features=first_level_item_features_cached,
-            ).withColumnRenamed("relevance", f"rel_{idx}_{model}")
-            full_second_level_train = full_second_level_train.join(
-                # sf.broadcast(current_pred),
-                current_pred,
-                on=["user_idx", "item_idx"],
-                how="left",
-            )
+            # current_pred = self._predict_pairs_with_first_level_model(
+            #     model=model,
+            #     log=log_for_first_level_models,
+            #     pairs=pairs,
+            #     user_features=first_level_user_features_cached,
+            #     item_features=first_level_item_features_cached,
+            # ).withColumnRenamed("relevance", f"rel_{idx}_{model}")
+            # full_second_level_train = full_second_level_train.join(
+            #     # sf.broadcast(current_pred),
+            #     current_pred,
+            #     on=["user_idx", "item_idx"],
+            #     how="left",
+            # )
 
             # # TODO: DEBUG - remove later
             # self.logger.info("Trying to calculate the current pred size")
@@ -567,6 +568,7 @@ class TwoStagesScenario(HybridRecommender):
         user_features: DataFrame,
         item_features: DataFrame,
         log_to_filter: DataFrame,
+        prediction_label: str = ''
     ) -> DataFrame:
         """
         Filter users and items using can_predict_cold_items and can_predict_cold_users, and predict
@@ -619,9 +621,9 @@ class TwoStagesScenario(HybridRecommender):
             )
             pred = pred.cache()
             pred.write.mode('overwrite').format('noop').save()
-        mlflow.log_metric(f"{type(model).__name__}._predict_sec", timer.duration)
-        logger.info(f"{type(self).__name__}_predict_with_first_level_model: pred rel columns: {str([x for x in pred.columns if 'rel_' in x])}")
-        logger.info(f"length of output dataframe of {type(model).__name__}._predict: {pred.count()}")
+        mlflow.log_metric(f"{type(model).__name__}._{prediction_label}predict_sec", timer.duration)
+        logger.info(f"{type(model).__name__} prediction: {pred}")
+        logger.info(f"Length of {type(model).__name__} prediction: {pred.count()}")
 
         pred = pred.join(
             log_to_filter_cached.select("user_idx", "item_idx"),
@@ -713,6 +715,129 @@ class TwoStagesScenario(HybridRecommender):
         #         )
         return candidates
 
+    def _combine(
+            self,
+            log: DataFrame,
+            k: int,
+            users: DataFrame,
+            items: DataFrame,
+            user_features: DataFrame,
+            item_features: DataFrame,
+            log_to_filter: DataFrame,
+            mode: str,
+            model_names: List[str] = None,
+            prediction_label: str = ''
+    ) -> DataFrame:
+
+        partial_dfs = []
+
+        for idx, model in enumerate(self.first_level_models):
+            with JobGroup(f"{type(self).__name__}._predict_with_first_level_model",
+                          f"{type(model).__name__}._predict_with_first_level_model"),\
+                    log_exec_timer(f"{type(self).__name__}._predict_with_first_level_model") as timer:
+                candidates = self._predict_with_first_level_model(
+                    model=model,
+                    log=log,
+                    k=k,
+                    users=users,
+                    items=items,
+                    user_features=user_features,
+                    item_features=item_features,
+                    log_to_filter=log_to_filter,
+                    prediction_label=prediction_label
+                ).withColumnRenamed("relevance", f"rel_{idx}_{model}")
+                candidates = candidates.cache()
+                candidates.write.mode("overwrite").format("noop").save()
+                partial_dfs.append(candidates)
+            mlflow.log_metric(
+                f"{type(model).__name__}._{prediction_label}predict_with_first_level_model_sec",
+                timer.duration
+            )
+
+        logger.info("Selecting required pairs")
+
+        if mode == 'union':
+            required_pairs = (
+                functools.reduce(
+                    lambda acc, x: acc.unionByName(x),
+                    (df.select('user_idx', 'item_idx') for df in partial_dfs)
+                ).distinct()
+            )
+        else:
+            # "leading_<model_name>"
+            leading_model_name = mode.split('_')[-1]
+            required_pairs = (
+                partial_dfs[model_names.index(leading_model_name)]
+                .select('user_idx', 'item_idx')
+                .distinct()
+            )
+
+        logger.info("Selecting missing pairs")
+
+        missing_pairs = [
+            required_pairs.join(df, on=['user_idx', 'item_idx'], how='anti').select('user_idx', 'item_idx').distinct()
+            for df in partial_dfs
+        ]
+
+        def get_rel_col(df: DataFrame) -> str:
+            logger.info(f"columns: {str(df.columns)}")
+            rel_col = [c for c in df.columns if c.startswith('rel_')][0]
+            return rel_col
+
+        def make_missing_predictions(model: BaseRecommender, mpairs: DataFrame, partial_df: DataFrame) -> DataFrame:
+
+            mpairs = mpairs.cache()
+
+            if mpairs.count() == 0:
+                return partial_df
+
+            current_pred = model._predict_pairs(
+                mpairs,
+                log=log,
+                user_features=user_features,
+                item_features=item_features
+            ).withColumnRenamed('relevance', get_rel_col(partial_df))
+
+            return partial_df.unionByName(current_pred.select(*partial_df.columns))
+
+        common_cols = functools.reduce(
+            lambda acc, cols: acc.intersection(cols),
+            [set(df.columns) for df in partial_dfs]
+        )
+        common_cols.remove('user_idx')
+        common_cols.remove('item_idx')
+
+        logger.info(f"Common cols: {str(common_cols)}")
+        logger.info("Making missing predictions")
+        logger.info(f"Partial df cols before drop: {str(partial_dfs[0].columns)}")
+        logger.info(f"Partial df cols after drop: {str(partial_dfs[0].drop(*common_cols))}")
+        extended_train_dfs = [
+            make_missing_predictions(model, mpairs, partial_df.drop(*common_cols))
+            for model, mpairs, partial_df in zip(self.first_level_models, missing_pairs, partial_dfs)
+        ]
+
+        features_for_required_pairs_df = [
+            required_pairs.join(df.select('user_idx', 'item_idx', *common_cols), on=['user_idx', 'item_idx'])
+            for df in partial_dfs
+        ]
+        logger.info("Collecting required pairs with features")
+
+        required_pairs_with_features = functools.reduce(
+            lambda acc, df: acc.unionByName(df),  # !!
+            features_for_required_pairs_df
+        ).drop_duplicates(['user_idx', 'item_idx'])
+
+        # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
+        combined_df = functools.reduce(
+            lambda acc, x: acc.join(x, on=['user_idx', 'item_idx'], how='left'),
+            extended_train_dfs,
+            required_pairs_with_features
+        )
+
+        logger.info("Combination completed.")
+
+        return combined_df
+
     # pylint: disable=too-many-locals,too-many-statements
     def _fit(
         self,
@@ -723,10 +848,8 @@ class TwoStagesScenario(HybridRecommender):
 
         self.cached_list = []
 
-        self.logger.info("Data split")
+        self.logger.info("Data splitting")
         first_level_train, second_level_positive = self._split_data(log)
-        # second_level_positive = second_level_positive
-        # .join(first_level_train.select("user_idx"), on="user_idx", how="left")
 
         self.first_level_item_len = (
             first_level_train.select("item_idx").distinct().count()
@@ -771,6 +894,8 @@ class TwoStagesScenario(HybridRecommender):
         first_level_item_features = first_level_item_features.filter(sf.col("item_idx") < self.first_level_item_len) \
             if first_level_item_features is not None else None
 
+        logger.info(f"first_level_train: {str(first_level_train.columns)}")
+
         for base_model in [
             *self.first_level_models,
             self.random_model,
@@ -793,36 +918,42 @@ class TwoStagesScenario(HybridRecommender):
         )
 
         with JobGroup("fit", "get first level candidates"),\
-                log_exec_timer(f"{type(self).__name__}._get_first_level_candidates") as timer:
-            first_level_candidates = self._get_first_level_candidates(
-                model=negatives_source,
-                log=first_level_train,
-                k=self.num_negatives,
-                users=log.select("user_idx").distinct(),
-                items=log.select("item_idx").distinct(),
-                user_features=first_level_user_features,
-                item_features=first_level_item_features,
-                log_to_filter=first_level_train,
-            ).select("user_idx", "item_idx")
-
+                log_exec_timer(f"{type(self).__name__}._combine") as timer:
+            first_level_candidates = self._combine(
+                    log=first_level_train,
+                    k=self.num_negatives,
+                    users=log.select("user_idx").distinct(),
+                    items=log.select("item_idx").distinct(),
+                    user_features=first_level_user_features,
+                    item_features=first_level_item_features,
+                    log_to_filter=first_level_train,
+                    mode="union",
+                    prediction_label='1'
+            )  # .select("user_idx", "item_idx")
             first_level_candidates = first_level_candidates.cache()
             first_level_candidates.write.mode('overwrite').format('noop').save()
-        mlflow.log_metric(f"{type(self).__name__}._get_first_level_candidates_sec", timer.duration)
+        mlflow.log_metric(f"{type(self).__name__}._combine_sec", timer.duration)
+        logger.info(f"first_level_candidates.columns: {str(first_level_candidates.columns)}")
 
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
 
-        self.logger.info("Crate train dataset for second level")
+        self.logger.info("Creating train dataset for second level")
 
         second_level_train = (
             first_level_candidates.join(
                 second_level_positive.select(
                     "user_idx", "item_idx"
-                ).withColumn("target", sf.lit(1.0)),
+                ).withColumn("target", sf.lit(1)),
                 on=["user_idx", "item_idx"],
                 how="left",
-            ).fillna(0.0, subset="target")
+            ).fillna(0, subset="target")
         ).cache()
+
+        neg = second_level_train.filter(second_level_train.target == 0)
+        pos = second_level_train.filter(second_level_train.target == 1)
+        neg_new = neg.sample(fraction=10 * pos.count() / neg.count())
+        second_level_train = pos.union(neg_new)
 
         self.cached_list.append(second_level_train)
 
@@ -830,7 +961,7 @@ class TwoStagesScenario(HybridRecommender):
         with JobGroup("fit", "inferring class distribution to log them"),\
                 log_exec_timer("calc distribution of classes") as timer:
             self.logger.info(
-                "Distribution of classes in second-level train dataset:/n %s",
+                "Distribution of classes in second-level train dataset:\n %s",
                 (
                     second_level_train.groupBy("target")
                     .agg(sf.count(sf.col("target")).alias("count_for_class"))
@@ -857,10 +988,21 @@ class TwoStagesScenario(HybridRecommender):
                 item_features=item_features,
             ).cache()
 
+        # second_level_train_to_convert = second_level_train.cache()
+
         self.cached_list.append(second_level_train_to_convert)
 
-        with JobGroup("fit", "second_stage_model fit"):
+        logger.info(f"Fitting {type(self.second_stage_model).__name__} on {second_level_train_to_convert}")
+        # second_level_train_to_convert.write.parquet("hdfs://node21.bdcl:9000/tmp/second_level_train_to_convert.parquet")
+        model_name = type(self.second_stage_model).__name__
+        with log_exec_timer(
+            f"{model_name} fitting"
+        ) as timer, JobGroup(
+            f"{model_name} fitting",
+            f"{model_name}.fit()"
+        ):
             self.second_stage_model.fit(second_level_train_to_convert)
+        mlflow.log_metric(f"{model_name}.fit_sec", timer.duration)
 
         for dataframe in self.cached_list:
             unpersist_if_exists(dataframe)
@@ -886,17 +1028,23 @@ class TwoStagesScenario(HybridRecommender):
             self.first_level_item_features_transformer.transform(item_features)
         )
 
-        with JobGroup("2stage scenario predict", "_get_first_level_candidates"):
-            candidates = self._get_first_level_candidates(
-                model=self.first_level_models[0],
-                log=log,
-                k=self.num_negatives,
-                users=users,
-                items=items,
-                user_features=first_level_user_features,
-                item_features=first_level_item_features,
-                log_to_filter=log,
-            ).select("user_idx", "item_idx")
+        with JobGroup("2stage scenario predict", "_combine"),\
+                log_exec_timer(f"{type(self).__name__}._combine") as timer:
+            candidates = self._combine(
+                    log=log,
+                    k=self.num_negatives,
+                    users=users,
+                    items=items,
+                    user_features=first_level_user_features,
+                    item_features=first_level_item_features,
+                    log_to_filter=log,
+                    mode="union",
+                    prediction_label='2'
+            )  # .select("user_idx", "item_idx")
+            candidates = candidates.cache()
+            candidates.write.mode('overwrite').format('noop').save()
+        mlflow.log_metric(f"{type(self).__name__}._2combine_sec", timer.duration)
+        logger.info(f"2candidates.columns: {candidates.columns}")
 
         candidates_cached = candidates.cache()
         unpersist_if_exists(first_level_user_features)
@@ -910,6 +1058,8 @@ class TwoStagesScenario(HybridRecommender):
                 user_features=user_features,
                 item_features=item_features,
             )
+        # candidates_features = candidates_cached
+        logger.info(f"rel_ columns in candidates_features: {[x for x in candidates_features.columns if 'rel_' in x]}")
         candidates_features.cache()
         # TODO: PERF - partially lost cache and repeated computations
         # candidates_cached.unpersist()
@@ -921,8 +1071,21 @@ class TwoStagesScenario(HybridRecommender):
                 candidates_features.select("user_idx").distinct().count(),
             )
 
-        with JobGroup("2stage scenario predict", "second_stage_model predict"):
+        model_name = type(self.second_stage_model).__name__
+        with log_exec_timer(
+                f"{model_name} inference"
+        ) as timer, JobGroup(
+            f"{model_name} inference",
+            f"{model_name}.predict()",
+        ):
             predictions = self.second_stage_model.predict(data=candidates_features, k=k)
+        mlflow.log_metric(f"{model_name}.predict_sec", timer.duration)
+
+        logger.info(f"predictions.columns: {predictions.columns}")
+
+        # rel_cols = [c for c in predictions.columns if c.startswith('rel_')]
+        # assert len(rel_cols) == 1
+        # predictions = predictions.withColumnRenamed('rel_0_ALSWrap', 'relevance') # rel_cols[0]
 
         return predictions
 
@@ -1078,3 +1241,7 @@ class TwoStagesScenario(HybridRecommender):
         unpersist_if_exists(first_level_item_features)
         unpersist_if_exists(first_level_user_features)
         return params_found, fallback_params
+
+    def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
+                           candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:
+        raise NotImplementedError("Unsupported method")
