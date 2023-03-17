@@ -754,6 +754,10 @@ class TwoStagesScenario(HybridRecommender):
                 timer.duration
             )
 
+        logger.debug("Prediction schemas:")
+        for df in partial_dfs:
+            df.printSchema()
+
         logger.info("Selecting required pairs")
 
         if mode == 'union':
@@ -800,38 +804,20 @@ class TwoStagesScenario(HybridRecommender):
 
             return partial_df.unionByName(current_pred.select(*partial_df.columns))
 
-        common_cols = functools.reduce(
-            lambda acc, cols: acc.intersection(cols),
-            [set(df.columns) for df in partial_dfs]
-        )
-        common_cols.remove('user_idx')
-        common_cols.remove('item_idx')
-
-        logger.info(f"Common cols: {str(common_cols)}")
         logger.info("Making missing predictions")
-        logger.info(f"Partial df cols before drop: {str(partial_dfs[0].columns)}")
-        logger.info(f"Partial df cols after drop: {str(partial_dfs[0].drop(*common_cols))}")
         extended_train_dfs = [
-            make_missing_predictions(model, mpairs, partial_df.drop(*common_cols))
+            make_missing_predictions(model, mpairs, partial_df)
             for model, mpairs, partial_df in zip(self.first_level_models, missing_pairs, partial_dfs)
         ]
 
-        features_for_required_pairs_df = [
-            required_pairs.join(df.select('user_idx', 'item_idx', *common_cols), on=['user_idx', 'item_idx'])
-            for df in partial_dfs
-        ]
-        logger.info("Collecting required pairs with features")
-
-        required_pairs_with_features = functools.reduce(
-            lambda acc, df: acc.unionByName(df),  # !!
-            features_for_required_pairs_df
-        ).drop_duplicates(['user_idx', 'item_idx'])
+        logger.debug("Missing prediction schemas:")
+        for df in extended_train_dfs:
+            df.printSchema()
 
         # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
         combined_df = functools.reduce(
             lambda acc, x: acc.join(x, on=['user_idx', 'item_idx'], how='left'),
-            extended_train_dfs,
-            required_pairs_with_features
+            extended_train_dfs
         )
 
         logger.info("Combination completed.")
@@ -929,7 +915,7 @@ class TwoStagesScenario(HybridRecommender):
                     log_to_filter=first_level_train,
                     mode="union",
                     prediction_label='1'
-            )  # .select("user_idx", "item_idx")
+            )
             first_level_candidates = first_level_candidates.cache()
             first_level_candidates.write.mode('overwrite').format('noop').save()
         mlflow.log_metric(f"{type(self).__name__}._combine_sec", timer.duration)
