@@ -154,12 +154,12 @@ class SlamaWrap(ReRanker):
             **({} if fit_params is None else fit_params)
         }
 
-        data.write.mode("overwrite").parquet(f"hdfs://node21.bdcl:9000/tmp/{type(self.model).__name__}_fit.parquet")
-        data = SparkSession.getActiveSession().read.parquet(f"hdfs://node21.bdcl:9000/tmp/{type(self.model).__name__}_fit.parquet")
-        data.cache()
+        # this part is required to cut the plan of the dataframe because it may be huge
+        temp_checkpoint = f"/tmp/{type(self.model).__name__}_transform.parquet"
+        data.write.mode("overwrite").parquet(temp_checkpoint)
+        data = SparkSession.getActiveSession().read.parquet(temp_checkpoint).cache()
         data.write.mode('overwrite').format('noop').save()
 
-        # TODO: do not forget about persistence manager
         self.model.fit_predict(data, **params)
 
         data.unpersist()
@@ -181,9 +181,8 @@ class SlamaWrap(ReRanker):
 
         data = self.handle_columns(data)
 
-        data.write.mode("overwrite").parquet(f"hdfs://node21.bdcl:9000/tmp/{type(self.model).__name__}_transform.parquet")
-        data = SparkSession.getActiveSession().read.parquet(f"hdfs://node21.bdcl:9000/tmp/{type(self.model).__name__}_transform.parquet")
-        data.cache()
+        data.write.mode("overwrite").parquet(f"/tmp/{type(self.model).__name__}_transform.parquet")
+        data = SparkSession.getActiveSession().read.parquet(f"/tmp/{type(self.model).__name__}_transform.parquet").cache()
         data.write.mode('overwrite').format('noop').save()
 
         model_name = type(self.model).__name__
