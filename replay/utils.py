@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime
 from enum import Enum
 
+import mlflow
 import numpy as np
 import pandas as pd
 import pyspark.sql.types as st
@@ -801,6 +802,14 @@ def cache_and_materialize_if_in_debug(df: DataFrame, description: str = "no-desc
         with log_exec_timer(description):
             df = df.cache()
             df.write.mode('overwrite').format('noop').save()
+
+
+@contextmanager
+def JobGroupWithMetrics(group_id: str, description: str):
+    metric_name = f"{group_id}__{description}"
+    with JobGroup(group_id, description), log_exec_timer(metric_name) as timer:
+        yield
+    mlflow.log_metric(timer.name, timer.duration)
 
 
 def get_number_of_allocated_executors(spark: SparkSession):

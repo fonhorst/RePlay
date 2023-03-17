@@ -30,7 +30,7 @@ from replay.utils import (
     join_or_return,
     join_with_col_renaming,
     unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
-    log_exec_timer, cache_and_materialize_if_in_debug,
+    log_exec_timer, cache_and_materialize_if_in_debug, JobGroupWithMetrics,
 )
 
 
@@ -755,6 +755,7 @@ class TwoStagesScenario(HybridRecommender):
         item_features: Optional[DataFrame] = None,
     ) -> None:
 
+        job_group_id = "2stage_fit"
         self.cached_list = []
 
         # 1. Split train data between first and second levels
@@ -784,11 +785,11 @@ class TwoStagesScenario(HybridRecommender):
             item_features.cache()
             self.cached_list.append(item_features)
 
-        with JobGroup("fit", "item_features_transformer fit"):
+        with JobGroupWithMetrics(job_group_id, "item_features_transformer"):
             if not self.first_level_item_features_transformer.fitted:
                 self.first_level_item_features_transformer.fit(item_features)
 
-        with JobGroup("fit", "user_features_transformer fit"):
+        with JobGroupWithMetrics(job_group_id, "user_features_transformer"):
             if not self.first_level_user_features_transformer.fitted:
                 self.first_level_user_features_transformer.fit(user_features)
 
@@ -808,19 +809,13 @@ class TwoStagesScenario(HybridRecommender):
         # 3. Fit first level models
         logger.info(f"first_level_train: {str(first_level_train.columns)}")
 
-        for base_model in [
-            *self.first_level_models,
-            self.random_model,
-            self.fallback_model,
-        ]:
-            with JobGroup("fit", f"first level model fit: {type(base_model).__name__}"),\
-                    log_exec_timer(f"{type(base_model).__name__}._fit_wrap") as timer:
+        for base_model in [*self.first_level_models, self.random_model, self.fallback_model]:
+            with JobGroupWithMetrics(job_group_id, f"{type(base_model).__name__}._fit_wrap"):
                 base_model._fit_wrap(
                     log=first_level_train,
                     user_features=first_level_user_features,
                     item_features=first_level_item_features,
                 )
-            mlflow.log_metric(f"{type(base_model).__name__}._fit_wrap_sec", timer.duration)
 
         # 4. Generate negative examples
         # by making predictions with first level models and combining them into final recommendation lists
@@ -831,8 +826,7 @@ class TwoStagesScenario(HybridRecommender):
             else self.random_model
         )
 
-        with JobGroup("fit", "get first level candidates"),\
-                log_exec_timer(f"{type(self).__name__}._combine") as timer:
+        with JobGroupWithMetrics(job_group_id, f"{type(self).__name__}._combine"):
             first_level_candidates = self._combine(
                     log=first_level_train,
                     k=self.num_negatives,
@@ -847,7 +841,7 @@ class TwoStagesScenario(HybridRecommender):
             # TODO: debug or constant materialization?
             first_level_candidates = first_level_candidates.cache()
             first_level_candidates.write.mode('overwrite').format('noop').save()
-        mlflow.log_metric(f"{type(self).__name__}._combine_sec", timer.duration)
+
         logger.info(f"first_level_candidates.columns: {str(first_level_candidates.columns)}")
 
         unpersist_if_exists(first_level_user_features)
@@ -874,8 +868,7 @@ class TwoStagesScenario(HybridRecommender):
 
         self.cached_list.append(second_level_train)
 
-        with JobGroup("fit", "inferring class distribution to log them"),\
-                log_exec_timer("calc distribution of classes") as timer:
+        with JobGroupWithMetrics(job_group_id, "inferring_class_distribution")
             self.logger.info(
                 "Distribution of classes in second-level train dataset:\n %s",
                 (
@@ -884,10 +877,9 @@ class TwoStagesScenario(HybridRecommender):
                     .take(2)
                 ),
             )
-        mlflow.log_metric(f"second_level_train_agg_count_sec", timer.duration)
 
         # 6. Fill the second level train dataset with user/item features and features of the first level models
-        with JobGroup("fit", "feature processor fit"):
+        with JobGroupWithMetrics(job_group_id, "feature_processor_fit"):
             if not self.features_processor.fitted:
                 self.features_processor.fit(
                     log=first_level_train,
@@ -897,7 +889,7 @@ class TwoStagesScenario(HybridRecommender):
 
         self.logger.info("Adding features to second-level train dataset")
 
-        with JobGroup("fit", "_add_features_for_second_level"):
+        with JobGroupWithMetrics(job_group_id, "_add_features_for_second_level"):
             second_level_train_to_convert = self._add_features_for_second_level(
                 log_to_add_features=second_level_train,
                 log_for_first_level_models=first_level_train,
@@ -910,15 +902,8 @@ class TwoStagesScenario(HybridRecommender):
         # 7. Fit the second level model
         logger.info(f"Fitting {type(self.second_stage_model).__name__} on {second_level_train_to_convert}")
         # second_level_train_to_convert.write.parquet("hdfs://node21.bdcl:9000/tmp/second_level_train_to_convert.parquet")
-        model_name = type(self.second_stage_model).__name__
-        with log_exec_timer(
-            f"{model_name} fitting"
-        ) as timer, JobGroup(
-            f"{model_name} fitting",
-            f"{model_name}.fit()"
-        ):
+        with JobGroupWithMetrics(job_group_id, f"{type(self.second_stage_model).__name__}_fitting"):
             self.second_stage_model.fit(second_level_train_to_convert)
-        mlflow.log_metric(f"{model_name}.fit_sec", timer.duration)
 
         for dataframe in self.cached_list:
             unpersist_if_exists(dataframe)
@@ -934,6 +919,7 @@ class TwoStagesScenario(HybridRecommender):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
+        job_group_id = "2stage_predict"
 
         # 1. Transform user and item features if applicable
         logger.debug(msg="Generating candidates to rerank")
@@ -947,8 +933,7 @@ class TwoStagesScenario(HybridRecommender):
 
         # 2. Create user/ item pairs for the train dataset of the second level (no features except relevance)
         # by making predictions with first level models and combining them into final recommendation lists
-        with JobGroup("2stage scenario predict", "_combine"),\
-                log_exec_timer(f"{type(self).__name__}._combine") as timer:
+        with JobGroupWithMetrics(job_group_id, f"{type(self).__name__}._combine"):
             candidates = self._combine(
                     log=log,
                     k=self.num_negatives,
@@ -963,7 +948,7 @@ class TwoStagesScenario(HybridRecommender):
             # TODO: debug or constant materialization?
             candidates = candidates.cache()
             candidates.write.mode('overwrite').format('noop').save()
-        mlflow.log_metric(f"{type(self).__name__}._2combine_sec", timer.duration)
+
         logger.info(f"2candidates.columns: {candidates.columns}")
 
         candidates_cached = candidates.cache()
@@ -973,7 +958,7 @@ class TwoStagesScenario(HybridRecommender):
 
         # 3. Fill the second level recommendations dataset with user/item features
         # and features of the first level models
-        with JobGroup("2stage scenario predict", "_add_features_for_second_level"):
+        with JobGroupWithMetrics(job_group_id, "_add_features_for_second_level"):
             candidates_features = self._add_features_for_second_level(
                 log_to_add_features=candidates_cached,
                 log_for_first_level_models=log,
@@ -987,7 +972,7 @@ class TwoStagesScenario(HybridRecommender):
         # PERF - preventing potential losing time on repeated expensive computations
         self.cached_list.extend([candidates_features, candidates_cached])
 
-        with JobGroup("2stage scenario predict", "candidates_features info logging"):
+        with JobGroupWithMetrics(job_group_id, "candidates_features info logging"):
             self.logger.info(
                 "Generated %s candidates for %s users",
                 candidates_features.count(),
@@ -995,21 +980,10 @@ class TwoStagesScenario(HybridRecommender):
             )
 
         # 4. Rerank recommendations with the second level model and produce final version of recommendations
-        model_name = type(self.second_stage_model).__name__
-        with log_exec_timer(
-                f"{model_name} inference"
-        ) as timer, JobGroup(
-            f"{model_name} inference",
-            f"{model_name}.predict()",
-        ):
+        with JobGroupWithMetrics(job_group_id, f"{type(self.second_stage_model).__name__}_predict"):
             predictions = self.second_stage_model.predict(data=candidates_features, k=k)
-        mlflow.log_metric(f"{model_name}.predict_sec", timer.duration)
 
         logger.info(f"predictions.columns: {predictions.columns}")
-
-        # rel_cols = [c for c in predictions.columns if c.startswith('rel_')]
-        # assert len(rel_cols) == 1
-        # predictions = predictions.withColumnRenamed('rel_0_ALSWrap', 'relevance') # rel_cols[0]
 
         return predictions
 
