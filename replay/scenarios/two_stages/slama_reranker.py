@@ -154,24 +154,15 @@ class SlamaWrap(ReRanker):
             **({} if fit_params is None else fit_params)
         }
 
-        array_features = [k for k, v in dict(data.dtypes).items() if v == "array<double>"]
-
-        # if len(array_features) > 0:
-        for array_feature in array_features:
-            logger.info(f"processing {array_feature}")
-            # skipping fully empty column
-            row = data.where(~sf.isnull(array_feature)).select(array_feature).head()
-            if row:
-                array_size = len(row[0])
-                data = data.select(
-                    data.columns + [data[array_feature][x].alias(f"{array_feature}_{x}") for x in range(array_size)]
-                )
-            else:
-                logger.warning(f"Column '{array_feature}' is empty. Skipping '{array_feature}' processing.")
-            data = data.drop(array_feature)
+        data.write.mode("overwrite").parquet(f"hdfs://node21.bdcl:9000/tmp/{type(self.model).__name__}_fit.parquet")
+        data = SparkSession.getActiveSession().read.parquet(f"hdfs://node21.bdcl:9000/tmp/{type(self.model).__name__}_fit.parquet")
+        data.cache()
+        data.write.mode('overwrite').format('noop').save()
 
         # TODO: do not forget about persistence manager
         self.model.fit_predict(data, **params)
+
+        data.unpersist()
 
     def predict(self, data: DataFrame, k: int) -> DataFrame:
         """
@@ -190,19 +181,10 @@ class SlamaWrap(ReRanker):
 
         data = self.handle_columns(data)
 
-        # if len(array_features) > 0:
-        for array_feature in array_features:
-            logger.info(f"processing {array_feature}")
-            # skipping fully empty column
-            row = data.where(~sf.isnull(array_feature)).select(array_feature).head()
-            if row:
-                array_size = len(row[0])
-                data = data.select(
-                    data.columns + [data[array_feature][x].alias(f"{array_feature}_{x}") for x in range(array_size)]
-                )
-            else:
-                logger.warning(f"Column '{array_feature}' is empty. Skipping '{array_feature}' processing.")
-            data = data.drop(array_feature)
+        data.write.mode("overwrite").parquet(f"hdfs://node21.bdcl:9000/tmp/{type(self.model).__name__}_transform.parquet")
+        data = SparkSession.getActiveSession().read.parquet(f"hdfs://node21.bdcl:9000/tmp/{type(self.model).__name__}_transform.parquet")
+        data.cache()
+        data.write.mode('overwrite').format('noop').save()
 
         model_name = type(self.model).__name__
         with log_exec_timer(
@@ -213,6 +195,7 @@ class SlamaWrap(ReRanker):
         ):
             sdf = transformer.transform(data)
             logger.info(f"sdf.columns: {sdf.columns}")
+            data.unpersist()
 
             candidates_pred_sdf = sdf.select(
                 'user_idx',
