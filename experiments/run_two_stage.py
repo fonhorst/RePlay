@@ -188,7 +188,7 @@ def main(spark: SparkSession, dataset_name: str):
     mlflow_tracking_uri = os.environ.get(
         "MLFLOW_TRACKING_URI", "http://node2.bdcl:8822"
     )
-    model_name = os.environ["MODEL"]
+    model_name = os.environ.get("MODEL", "some_mode")
 
     partition_num = get_partition_num(spark_conf)
 
@@ -214,16 +214,18 @@ def main(spark: SparkSession, dataset_name: str):
         #     dataset_name, spark, partition_num
         # )
         train = spark.read.parquet(
-            "hdfs://node21.bdcl:9000"
+            # "hdfs://node21.bdcl:9000"
             # "/opt/spark_data/replay/experiments/netflix_first_level_80_20/train.parquet"
             # "/opt/spark_data/replay/experiments/msd_first_level_80_20/train.parquet"
-            "/opt/spark_data/replay/experiments/ml25m_first_level_80_20/train.parquet"
+            # "/opt/spark_data/replay/experiments/ml25m_first_level_80_20/train.parquet"
+            "/opt/spark_data/replay_datasets/ml1m_train.parquet"
         )
         test = spark.read.parquet(
-            "hdfs://node21.bdcl:9000"
+            # "hdfs://node21.bdcl:9000"
             # "/opt/spark_data/replay/experiments/netflix_first_level_80_20/test.parquet"
             # "/opt/spark_data/replay/experiments/msd_first_level_80_20/test.parquet"
-            "/opt/spark_data/replay/experiments/ml25m_first_level_80_20/test.parquet"
+            # "/opt/spark_data/replay/experiments/ml25m_first_level_80_20/test.parquet"
+            "/opt/spark_data/replay_datasets/ml1m_test.parquet"
         )
         train = train.repartition(partition_num, "user_idx")
         test = test.repartition(partition_num, "user_idx")
@@ -361,11 +363,10 @@ def main(spark: SparkSession, dataset_name: str):
             use_first_level_models_feat=use_first_level_models_feat,  # [True, False],
             second_model_type="slama",
             second_model_params=second_model_params,
-            second_model_config_path=os.environ.get(
-                "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"
-            ),
-            use_generated_features=True,
-            use_presplited_data=True
+            # second_model_config_path=os.environ.get(
+            #     "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"
+            # ),
+            use_generated_features=True
         )
 
         # Model fitting
