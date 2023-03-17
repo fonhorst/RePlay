@@ -17,7 +17,7 @@ from pyspark.sql.types import TimestampType, DoubleType, NumericType, DateType, 
 
 from replay.scenarios.two_stages.reranker import ReRanker
 from replay.session_handler import State
-from replay.utils import get_top_k_recs, log_exec_timer, JobGroup
+from replay.utils import get_top_k_recs, log_exec_timer, JobGroup, JobGroupWithMetrics
 
 import pandas as pd
 import numpy as np
@@ -187,12 +187,8 @@ class SlamaWrap(ReRanker):
         data.write.mode('overwrite').format('noop').save()
 
         model_name = type(self.model).__name__
-        with log_exec_timer(
-                f"{model_name} inference"
-        ) as timer, JobGroup(
-            f"{model_name} inference",
-            f"{model_name}.transform()",
-        ):
+
+        with JobGroupWithMetrics("slama_predict", f"{model_name}.infer_sec"):
             sdf = transformer.transform(data)
             logger.info(f"sdf.columns: {sdf.columns}")
             data.unpersist()
@@ -203,35 +199,20 @@ class SlamaWrap(ReRanker):
                 vector_to_array('prediction').getItem(1).alias('relevance')
             )
 
-            # size, users_count = candidates_pred_sdf.count(), candidates_pred_sdf.select('user_idx').distinct().count()
-
             self.logger.info("Re-ranking is finished")
 
             # TODO: strange, but the further process would hang without maetrialization
-            # TODO: probably, it may be related to optimization and lightgbm models
-            # TODO: need to dig deeper later
+            # probably, it may be related to optimization and lightgbm models
+            # need to dig deeper later
             candidates_pred_sdf = candidates_pred_sdf.cache()
             candidates_pred_sdf.write.mode('overwrite').format('noop').save()
-        mlflow.log_metric(f"{model_name}.infer_sec", timer.duration)
 
-        with log_exec_timer(
-                f"get_top_k_recs after {model_name} inference"
-        ) as timer, JobGroup(
-            f"get_top_k_recs()",
-            f"get_top_k_recs()",
-        ):
+        with JobGroupWithMetrics("slama_predict", "top_k_recs_sec"):
             self.logger.info("top-k")
             top_k_recs = get_top_k_recs(
                 recs=candidates_pred_sdf, k=k, id_type="idx"
             )
             top_k_recs = top_k_recs.cache()
             top_k_recs.write.mode('overwrite').format('noop').save()
-        mlflow.log_metric(f"top_k_recs_sec", timer.duration)
-
-        # top_k_recs = candidates_pred_sdf.cache()
-        # top_k_recs.write.mode('overwrite').format('noop').save()
-
-        # candidates_pred_sdf.write.mode('overwrite').format('noop').save()
-        # raise Exception("------")
 
         return top_k_recs
