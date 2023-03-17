@@ -823,6 +823,7 @@ class TwoStagesScenario(HybridRecommender):
             mlflow.log_metric(f"{type(base_model).__name__}._fit_wrap_sec", timer.duration)
 
         # 4. Generate negative examples
+        # by making predictions with first level models and combining them into final recommendation lists
         self.logger.info("Generate negative examples")
         negatives_source = (
             self.first_level_models[0]
@@ -906,7 +907,7 @@ class TwoStagesScenario(HybridRecommender):
 
         self.cached_list.append(second_level_train_to_convert)
 
-        # 6. Fit the second level model
+        # 7. Fit the second level model
         logger.info(f"Fitting {type(self.second_stage_model).__name__} on {second_level_train_to_convert}")
         # second_level_train_to_convert.write.parquet("hdfs://node21.bdcl:9000/tmp/second_level_train_to_convert.parquet")
         model_name = type(self.second_stage_model).__name__
@@ -934,6 +935,7 @@ class TwoStagesScenario(HybridRecommender):
         filter_seen_items: bool = True,
     ) -> DataFrame:
 
+        # 1. Transform user and item features if applicable
         logger.debug(msg="Generating candidates to rerank")
 
         first_level_user_features = cache_if_exists(
@@ -943,6 +945,8 @@ class TwoStagesScenario(HybridRecommender):
             self.first_level_item_features_transformer.transform(item_features)
         )
 
+        # 2. Create user/ item pairs for the train dataset of the second level (no features except relevance)
+        # by making predictions with first level models and combining them into final recommendation lists
         with JobGroup("2stage scenario predict", "_combine"),\
                 log_exec_timer(f"{type(self).__name__}._combine") as timer:
             candidates = self._combine(
@@ -967,6 +971,8 @@ class TwoStagesScenario(HybridRecommender):
         unpersist_if_exists(first_level_item_features)
         self.logger.info("Adding features")
 
+        # 3. Fill the second level recommendations dataset with user/item features
+        # and features of the first level models
         with JobGroup("2stage scenario predict", "_add_features_for_second_level"):
             candidates_features = self._add_features_for_second_level(
                 log_to_add_features=candidates_cached,
@@ -988,6 +994,7 @@ class TwoStagesScenario(HybridRecommender):
                 candidates_features.select("user_idx").distinct().count(),
             )
 
+        # 4. Rerank recommendations with the second level model and produce final version of recommendations
         model_name = type(self.second_stage_model).__name__
         with log_exec_timer(
                 f"{model_name} inference"
