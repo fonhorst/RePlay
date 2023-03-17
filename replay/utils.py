@@ -792,8 +792,15 @@ class log_exec_timer:
 def JobGroup(group_id: str, description: str):
     sc = SparkSession.getActiveSession().sparkContext
     sc.setJobGroup(group_id, description)
-    yield
+    yield f"{group_id} - {description}"
     sc._jsc.clearJobGroup()
+
+
+def cache_and_materialize_if_in_debug(df: DataFrame, description: str = "no-desc"):
+    if os.environ.get("REPLAY_DEBUG_MODE", None):
+        with log_exec_timer(description):
+            df = df.cache()
+            df.write.mode('overwrite').format('noop').save()
 
 
 def get_number_of_allocated_executors(spark: SparkSession):
