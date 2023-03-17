@@ -17,7 +17,8 @@ from pyspark.sql.types import TimestampType, DoubleType, NumericType, DateType, 
 
 from replay.scenarios.two_stages.reranker import ReRanker
 from replay.session_handler import State
-from replay.utils import get_top_k_recs, log_exec_timer, JobGroup, JobGroupWithMetrics
+from replay.utils import get_top_k_recs, log_exec_timer, JobGroup, JobGroupWithMetrics, \
+    cache_and_materialize_if_in_debug
 
 import pandas as pd
 import numpy as np
@@ -211,7 +212,6 @@ class SlamaWrap(ReRanker):
             top_k_recs = get_top_k_recs(
                 recs=candidates_pred_sdf, k=k, id_type="idx"
             )
-            top_k_recs = top_k_recs.cache()
-            top_k_recs.write.mode('overwrite').format('noop').save()
+            cache_and_materialize_if_in_debug(top_k_recs, "slama_predict_top_k_recs_sec")
 
         return top_k_recs

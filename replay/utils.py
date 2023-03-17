@@ -6,17 +6,13 @@ import shutil
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-import mlflow
 import numpy as np
 import pandas as pd
 import pyspark.sql.types as st
-
-from contextlib import contextmanager
-from pyspark.sql import SparkSession
 from numpy.random import default_rng
 from pyarrow import fs
 from pyspark.ml.linalg import DenseVector, Vectors, VectorUDT
@@ -24,12 +20,12 @@ from pyspark.sql import Column, DataFrame, Window, functions as sf
 from pyspark.sql import SparkSession
 # noinspection PyUnresolvedReferences
 from pyspark.sql.column import _to_java_column, _to_seq
+# noinspection PyUnresolvedReferences
+from pyspark.sql.column import _to_java_column, _to_seq
 from scipy.sparse import csr_matrix
 
 from replay.constants import AnyDataFrame, NumType, REC_SCHEMA
 from replay.session_handler import State
-# noinspection PyUnresolvedReferences
-from pyspark.sql.column import _to_java_column, _to_seq
 
 # pylint: disable=invalid-name
 
@@ -809,7 +805,10 @@ def JobGroupWithMetrics(group_id: str, description: str):
     metric_name = f"{group_id}__{description}"
     with JobGroup(group_id, description), log_exec_timer(metric_name) as timer:
         yield
-    mlflow.log_metric(timer.name, timer.duration)
+
+    if os.environ.get("REPLAY_DEBUG_MODE", None):
+        import mlflow
+        mlflow.log_metric(timer.name, timer.duration)
 
 
 def get_number_of_allocated_executors(spark: SparkSession):
