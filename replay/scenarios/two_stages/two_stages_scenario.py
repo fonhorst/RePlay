@@ -6,7 +6,6 @@ import pickle
 from collections.abc import Iterable
 from typing import Dict, Optional, Tuple, List, Union, Any
 
-import mlflow
 import pyspark.sql.functions as sf
 from pyspark.sql import DataFrame
 
@@ -23,16 +22,13 @@ from replay.splitters import Splitter, UserSplitter
 from replay.utils import (
     array_mult,
     cache_if_exists,
-    fallback,
     get_log_info,
     get_top_k_recs,
-    horizontal_explode,
     join_or_return,
     join_with_col_renaming,
     unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
-    log_exec_timer, cache_and_materialize_if_in_debug, JobGroupWithMetrics,
+    cache_and_materialize_if_in_debug, JobGroupWithMetrics,
 )
-
 
 logger = logging.getLogger("replay")
 
