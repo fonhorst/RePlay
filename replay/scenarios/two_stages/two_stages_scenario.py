@@ -757,6 +757,7 @@ class TwoStagesScenario(HybridRecommender):
 
         self.cached_list = []
 
+        # 1. Split train data between first and second levels
         self.logger.info("Data splitting")
         first_level_train, second_level_positive = self._split_data(log)
 
@@ -774,6 +775,7 @@ class TwoStagesScenario(HybridRecommender):
             [log, first_level_train, second_level_positive]
         )
 
+        # 2. Transform user and item features if applicable
         if user_features is not None:
             user_features.cache()
             self.cached_list.append(user_features)
@@ -803,6 +805,7 @@ class TwoStagesScenario(HybridRecommender):
         first_level_item_features = first_level_item_features.filter(sf.col("item_idx") < self.first_level_item_len) \
             if first_level_item_features is not None else None
 
+        # 3. Fit first level models
         logger.info(f"first_level_train: {str(first_level_train.columns)}")
 
         for base_model in [
@@ -819,6 +822,7 @@ class TwoStagesScenario(HybridRecommender):
                 )
             mlflow.log_metric(f"{type(base_model).__name__}._fit_wrap_sec", timer.duration)
 
+        # 4. Generate negative examples
         self.logger.info("Generate negative examples")
         negatives_source = (
             self.first_level_models[0]
@@ -848,6 +852,7 @@ class TwoStagesScenario(HybridRecommender):
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
 
+        # 5. Create user/ item pairs for the train dataset of the second level (no features except relevance)
         self.logger.info("Creating train dataset for second level")
 
         second_level_train = (
@@ -860,6 +865,7 @@ class TwoStagesScenario(HybridRecommender):
             ).fillna(0, subset="target")
         ).cache()
 
+        # Apply negative sampling to balance postive / negative combination in the resulting train dataset
         neg = second_level_train.filter(second_level_train.target == 0)
         pos = second_level_train.filter(second_level_train.target == 1)
         neg_new = neg.sample(fraction=10 * pos.count() / neg.count())
@@ -879,6 +885,7 @@ class TwoStagesScenario(HybridRecommender):
             )
         mlflow.log_metric(f"second_level_train_agg_count_sec", timer.duration)
 
+        # 6. Fill the second level train dataset with user/item features and features of the first level models
         with JobGroup("fit", "feature processor fit"):
             if not self.features_processor.fitted:
                 self.features_processor.fit(
@@ -897,10 +904,9 @@ class TwoStagesScenario(HybridRecommender):
                 item_features=item_features,
             ).cache()
 
-        # second_level_train_to_convert = second_level_train.cache()
-
         self.cached_list.append(second_level_train_to_convert)
 
+        # 6. Fit the second level model
         logger.info(f"Fitting {type(self.second_stage_model).__name__} on {second_level_train_to_convert}")
         # second_level_train_to_convert.write.parquet("hdfs://node21.bdcl:9000/tmp/second_level_train_to_convert.parquet")
         model_name = type(self.second_stage_model).__name__
