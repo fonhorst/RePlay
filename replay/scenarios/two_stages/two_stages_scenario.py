@@ -438,16 +438,19 @@ class TwoStagesScenario(HybridRecommender):
             how="left",
         )
 
-        full_second_level_train = full_second_level_train.cache()
-
         if self.use_generated_features:
             with JobGroupWithMetrics(self._job_group_id, "fitting_the_feature_processor"):
                 if not self.features_processor.fitted:
+                    # PERF - preventing potential losing time on repeated expensive computations
+                    full_second_level_train = full_second_level_train.cache()
+                    self.cached_list.append(full_second_level_train)
+
                     self.features_processor.fit(
                         log=log_for_first_level_models,
                         user_features=user_features,
                         item_features=item_features,
                     )
+
                 self.logger.info("Adding generated features")
                 full_second_level_train = self.features_processor.transform(
                     log=full_second_level_train
@@ -457,9 +460,6 @@ class TwoStagesScenario(HybridRecommender):
             "Columns at second level: %s",
             " ".join(full_second_level_train.columns),
         )
-
-        # PERF - preventing potential losing time on repeated expensive computations
-        self.cached_list.append(full_second_level_train)
 
         return full_second_level_train
 
@@ -602,6 +602,7 @@ class TwoStagesScenario(HybridRecommender):
         user_features: DataFrame,
         item_features: DataFrame,
         log_to_filter: DataFrame,
+        prediction_label: str = ''
     ) -> DataFrame:
         """
         Combining the base model predictions with the fallback model
@@ -613,9 +614,9 @@ class TwoStagesScenario(HybridRecommender):
         with JobGroupWithMetrics(self._job_group_id, f"{type(self).__name__}._predict_with_first_level_model"):
             candidates = self._predict_with_first_level_model(**passed_arguments)
 
-            # TODO: debug or constant materialization?
             candidates = candidates.cache()
             candidates.write.mode("overwrite").format("noop").save()
+            self.cached_list.append(candidates)
 
         # TODO: temporary commenting
         # if self.fallback_model is not None:
@@ -665,9 +666,11 @@ class TwoStagesScenario(HybridRecommender):
                     prediction_label=prediction_label
                 ).withColumnRenamed("relevance", f"rel_{idx}_{model}")
 
-                # TODO: debug or constant materialization?
+                # we need this caching if mpairs will be counted later in this method
                 candidates = candidates.cache()
                 candidates.write.mode("overwrite").format("noop").save()
+                self.cached_list.append(candidates)
+
                 partial_dfs.append(candidates)
 
         if mode == 'union':
@@ -703,6 +706,7 @@ class TwoStagesScenario(HybridRecommender):
             mpairs = mpairs.cache()
 
             if mpairs.count() == 0:
+                mpairs.unpersist()
                 return partial_df
 
             current_pred = model._predict_pairs(
@@ -712,6 +716,7 @@ class TwoStagesScenario(HybridRecommender):
                 item_features=item_features
             ).withColumnRenamed('relevance', get_rel_col(partial_df))
 
+            mpairs.unpersist()
             return partial_df.unionByName(current_pred.select(*partial_df.columns))
 
         logger.info("Making missing predictions")
@@ -821,9 +826,11 @@ class TwoStagesScenario(HybridRecommender):
                     mode="union",
                     prediction_label='1'
             )
-            # TODO: debug or constant materialization?
+
+            # may be skipped due to join caching in the end
             first_level_candidates = first_level_candidates.cache()
             first_level_candidates.write.mode('overwrite').format('noop').save()
+            self.cached_list.append(first_level_candidates)
 
         logger.info(f"first_level_candidates.columns: {str(first_level_candidates.columns)}")
 
@@ -843,13 +850,13 @@ class TwoStagesScenario(HybridRecommender):
             ).fillna(0, subset="target")
         ).cache()
 
+        self.cached_list.append(second_level_train)
+
         # Apply negative sampling to balance postive / negative combination in the resulting train dataset
         neg = second_level_train.filter(second_level_train.target == 0)
         pos = second_level_train.filter(second_level_train.target == 1)
         neg_new = neg.sample(fraction=10 * pos.count() / neg.count())
         second_level_train = pos.union(neg_new)
-
-        self.cached_list.append(second_level_train)
 
         with JobGroupWithMetrics(self._job_group_id, "inferring_class_distribution"):
             self.logger.info(
@@ -903,6 +910,7 @@ class TwoStagesScenario(HybridRecommender):
         filter_seen_items: bool = True,
     ) -> DataFrame:
         self._job_group_id = "2stage_predict"
+        self.cached_list = []
 
         # 1. Transform user and item features if applicable
         logger.debug(msg="Generating candidates to rerank")
@@ -927,20 +935,23 @@ class TwoStagesScenario(HybridRecommender):
                     log_to_filter=log,
                     mode="union",
                     prediction_label='2'
-            )  # .select("user_idx", "item_idx")
-            # TODO: debug or constant materialization?
-            candidates = candidates.cache()
-            candidates.write.mode('overwrite').format('noop').save()
+            )
+
+            # PERF - preventing potential losing time on repeated expensive computations
+            # may be removed after testing
+            candidates_cached = candidates.cache()
+            candidates_cached.write.mode('overwrite').format('noop').save()
+            self.cached_list.append(candidates_cached)
 
         logger.info(f"2candidates.columns: {candidates.columns}")
 
-        candidates_cached = candidates.cache()
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
-        self.logger.info("Adding features")
 
         # 3. Fill the second level recommendations dataset with user/item features
         # and features of the first level models
+
+        self.logger.info("Adding features")
         with JobGroupWithMetrics(self._job_group_id, "_add_features_for_second_level"):
             candidates_features = self._add_features_for_second_level(
                 log_to_add_features=candidates_cached,
@@ -950,9 +961,9 @@ class TwoStagesScenario(HybridRecommender):
             )
 
         logger.info(f"rel_ columns in candidates_features: {[x for x in candidates_features.columns if 'rel_' in x]}")
-        candidates_features = candidates_features.cache()
 
         # PERF - preventing potential losing time on repeated expensive computations
+        candidates_features = candidates_features.cache()
         self.cached_list.extend([candidates_features, candidates_cached])
 
         with JobGroupWithMetrics(self._job_group_id, "candidates_features info logging"):
