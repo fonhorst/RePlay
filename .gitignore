@@ -164,9 +164,9 @@ requirements.txt
 airflow.yaml
 
 # temporary
-experiments/tests
+../LightAutoML_Spark_DevTools/two_stage_replay/tests
 
-experiments/tests/mlruns
+../LightAutoML_Spark_DevTools/two_stage_replay/tests/mlruns
 requirements.txt
 airflow.yaml
 
