@@ -12,10 +12,12 @@ import pendulum
 from airflow import DAG
 from airflow.decorators import task
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.models.baseoperator import chain
 
 from dag_entities_dalexandrov import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, DatasetInfo, big_executor_config, \
     _get_models_params, DATASETS, SECOND_LEVELS_MODELS_CONFIGS, TASK_CONFIG_FILENAME_ENV_VAR
-from dag_entities_dalexandrov import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS, FIRST_LEVELS_MODELS_PARAMS, MODELNAME2FULLNAME
+from dag_entities_dalexandrov import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEVELS_MODELS_PARAMS, \
+    FIRST_LEVELS_MODELS_PARAMS, MODELNAME2FULLNAME
 from dag_entities_dalexandrov import extra_big_executor_config
 from dag_entities_dalexandrov import YARN_SUBMIT_CONF
 
@@ -25,10 +27,12 @@ def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
     from dag_utils_dalexandrov import do_dataset_splitting
     do_dataset_splitting(artifacts, partitions_num)
 
+
 @task
 def collect_params(artifacts: ArtifactPaths, *model_class_names: str):
     from dag_utils_dalexandrov import do_collect_best_params
     do_collect_best_params(artifacts, *model_class_names)
+
 
 @task
 def fit_feature_transformers(artifacts: 'ArtifactPaths', cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
@@ -50,7 +54,9 @@ def fit_predict_first_level_model_spark_submit(
         # model_kwargs: Dict,
         k: int,
         get_optimized_params: bool = False,
-        do_optimization: bool = False,):
+        do_optimization: bool = False,
+        mlflow_experiments_id: str = "default",
+        ):
     config_filename = f"task_config_{task_name}_{uuid.uuid4()}.pickle"
     with open(config_filename, "wb") as f:
         pickle.dump({
@@ -60,6 +66,7 @@ def fit_predict_first_level_model_spark_submit(
             "k": k,
             "get_optimized_params": get_optimized_params,
             "do_optimization": do_optimization,
+            "mlflow_experiments_id": mlflow_experiments_id
         }, f)
 
     submit_job = SparkSubmitOperator(
@@ -110,7 +117,6 @@ def build_fit_predict_first_level_models_dag(
             dataset=dataset
         )
 
-
         # if get_optimized_params:
         #     PARAMS =None
         #
@@ -143,10 +149,181 @@ def build_fit_predict_first_level_models_dag(
             for model_name in models
         ]
 
-
         dataset_splitting(artifacts, partitions_num=100) \
         >> presplit_data(artifacts, item_test_size=item_test_size) \
         >> first_level_models
+    #  >> fit_feature_transformers(artifacts) \
+
+    return dag
+
+
+def build_autorecsys_dag(
+        dag_id: str,
+        models: list[str],
+        dataset: DatasetInfo,
+        mlflow_exp_id: str = "autorecsys",
+        # path_suffix: str = 'default',
+        # item_test_size: float = 0.5,
+        # get_optimized_params: bool = False,
+        # do_optimization: bool = False,
+        k: int = 100,
+        model_name: str = "slama_fast"
+):
+    with DAG(
+            dag_id=dag_id,
+            schedule=timedelta(days=10086),
+            start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
+            catchup=False,
+            tags=['two_stage', 'replay', 'autorecsys']
+    ) as dag:
+        def first_level_all_models(path_suffix):
+            artifacts = ArtifactPaths(
+                base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
+                dataset=dataset
+            )
+
+            # for default hyper parameters
+            get_optimized_params, do_optimization = False, False
+            first_level_models_default = [
+                fit_predict_first_level_model_spark_submit(
+                    task_name=f"fit_predict_first_level_model_{MODELNAME2FULLNAME[model_name].split('.')[-1]}"
+                              f"_default_{path_suffix}",
+                    artifacts=artifacts,
+                    model_class_name=MODELNAME2FULLNAME[model_name],
+                    k=k,
+                    get_optimized_params=get_optimized_params,
+                    do_optimization=do_optimization,
+                    mlflow_experiments_id=mlflow_exp_id
+                )
+                for model_name in models
+            ]
+
+            # make optimization for 1st level models
+            get_optimized_params, do_optimization = False, True
+            first_level_models_optimization = [
+                fit_predict_first_level_model_spark_submit(
+                    task_name=f"fit_predict_first_level_model_{MODELNAME2FULLNAME[model_name].split('.')[-1]}"
+                              f"_optimization_{path_suffix}",
+                    artifacts=artifacts,
+                    model_class_name=MODELNAME2FULLNAME[model_name],
+                    k=k,
+                    get_optimized_params=get_optimized_params,
+                    do_optimization=do_optimization,
+                    mlflow_experiments_id=mlflow_exp_id
+                )
+                for model_name in models
+            ]
+
+            # train optimized models
+            get_optimized_params, do_optimization = True, False
+            first_level_models_optimized = [
+                fit_predict_first_level_model_spark_submit(
+                    task_name=f"fit_predict_first_level_model_{MODELNAME2FULLNAME[model_name].split('.')[-1]}_"
+                              f"optimized_{path_suffix}",
+                    artifacts=artifacts,
+                    model_class_name=MODELNAME2FULLNAME[model_name],
+                    k=k,
+                    get_optimized_params=get_optimized_params,
+                    do_optimization=do_optimization,
+                    mlflow_experiments_id=mlflow_exp_id
+                )
+                for model_name in models
+            ]
+
+            return artifacts, first_level_models_default, first_level_models_optimization, first_level_models_optimized
+
+        def do_combiner_task(artifacts: ArtifactPaths, combiner_suffix: str, model_type: str):
+            combined_train_path = artifacts.make_path(f"combined_train_{combiner_suffix}.parquet")
+            combined_predicts_path = artifacts.make_path(f"combined_predicts_{combiner_suffix}.parquet")
+
+            combiner = combine_1lvl_datasets_spark_submit(
+                task_name=f"combiner_{combiner_suffix}",
+                artifacts=artifacts,
+                combined_train_path=combined_train_path,
+                combined_predicts_path=combined_predicts_path,
+                desired_models=["alswrap", "itemknn", "slim", "word2vecrec"],
+                mode='union',
+                model_type=model_type
+            )
+            return combiner
+
+        def second_level_model_task_pure(artifacts, model_name, combiner_suffix):
+
+            combined_train_path = artifacts.make_path(f"combined_train_{combiner_suffix}.parquet")
+            combined_predicts_path = artifacts.make_path(f"combined_predicts_{combiner_suffix}.parquet")
+
+            second_level_model = fit_predict_second_level_model_pure_lgbm_spark_submit(
+                task_name=f"pure_2lvl_{model_name.split('.')[-1]}_{combiner_suffix}",
+                artifacts=artifacts,
+                model_name=f"{model_name}_{combiner_suffix}",
+                k=k,
+                train_path=combined_train_path,
+                first_level_predicts_path=combined_predicts_path,
+                second_model_type=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_type"],
+                second_model_params=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_params"],
+                second_model_config_path=SECOND_LEVELS_MODELS_CONFIGS.get(model_name, None),
+                cpu=EXTRA_BIG_CPU,
+                memory=EXTRA_BIG_MEMORY,
+                n=0,
+                sampling=0,
+                mlflow_experiments_id=mlflow_exp_id)
+
+            return second_level_model
+
+        # # for debug
+        # artifacts_100 = first_level_all_models(path_suffix="fair")
+        # artifacts_80 = first_level_all_models(path_suffix="80_20")
+        # artifacts_80 = ArtifactPaths(
+        #     base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_80_20",
+        #     dataset=dataset
+        # )
+        #-------------------------------
+        # for 100 - 0 splitting
+        artifacts_100, first_level_models_100_default, first_level_models_100_optimization, \
+            first_level_models_100_optimized = first_level_all_models(path_suffix="fair")
+
+        # for 80-20 splitting
+        artifacts_80, first_level_models_80_default, first_level_models_80_optimization, \
+            first_level_models_80_optimized = first_level_all_models(path_suffix="80_20")
+
+        combiner_default = do_combiner_task(artifacts_80, combiner_suffix="4models_default", model_type="default")
+        combiner_optimized = do_combiner_task(artifacts_80, combiner_suffix="4models_optimized", model_type="optimized")
+
+        second_level_model_task_pure_default = second_level_model_task_pure(artifacts_80,
+                                                                            model_name,
+                                                                            combiner_suffix="4models_default")
+
+        second_level_model_task_pure_optimized = second_level_model_task_pure(artifacts_80,
+                                                                              model_name,
+                                                                              combiner_suffix="4models_optimized")
+
+        chain(*first_level_models_100_default)
+        chain(*first_level_models_100_optimization)
+        chain(*first_level_models_100_optimized)
+
+        chain(*first_level_models_80_default)
+        chain(*first_level_models_80_optimization)
+        chain(*first_level_models_80_optimized)
+
+        dataset_splitting(artifacts_100, partitions_num=100) \
+            >> dataset_splitting(artifacts_80, partitions_num=100) \
+            >> presplit_data(artifacts_100, item_test_size=0.0) \
+            >> presplit_data(artifacts_80, item_test_size=0.2) \
+            >> first_level_models_100_default[0]
+
+        first_level_models_100_default[-1] >> first_level_models_100_optimization[0]
+        first_level_models_100_optimization[-1] >> first_level_models_100_optimized[0]
+
+        first_level_models_100_optimized[-1] >> first_level_models_80_default[0]
+        first_level_models_80_default[-1] >> first_level_models_80_optimization[0]
+        first_level_models_80_optimization[-1] >> first_level_models_80_optimized[0]
+        first_level_models_80_optimized[-1] >> combiner_default \
+            >> second_level_model_task_pure_default \
+            >> combiner_optimized \
+            >> second_level_model_task_pure_optimized
+
+
+
     #  >> fit_feature_transformers(artifacts) \
 
     return dag
@@ -158,7 +335,8 @@ def combine_1lvl_datasets_spark_submit(
         combined_train_path: str,
         combined_predicts_path: str,
         desired_models: Optional[List[str]] = None,
-        mode: str = 'union'
+        mode: str = 'union',
+        model_type = ""
 ):
     config_filename = f"task_config_{task_name}_{uuid.uuid4()}.pickle"
     with open(config_filename, "wb") as f:
@@ -168,6 +346,7 @@ def combine_1lvl_datasets_spark_submit(
             "combined_predicts_path": combined_predicts_path,
             "desired_models": desired_models,
             "mode": mode,
+            "model_type": model_type
         }, f)
 
     submit_job = SparkSubmitOperator(
@@ -200,6 +379,7 @@ def fit_predict_second_level_model_spark_submit(
         second_model_config_path: Optional[str] = None,
         cpu: int = DEFAULT_CPU,
         memory: int = DEFAULT_MEMORY):
+
     config_filename = f"task_config_{task_name}_{uuid.uuid4()}.pickle"
     with open(config_filename, "wb") as f:
         pickle.dump({
@@ -245,7 +425,12 @@ def fit_predict_second_level_model_pure_lgbm_spark_submit(
         second_model_params: Optional[Union[Dict, str]] = None,
         second_model_config_path: Optional[str] = None,
         cpu: int = DEFAULT_CPU,
-        memory: int = DEFAULT_MEMORY):
+        memory: int = DEFAULT_MEMORY,
+        n: int = 0,
+        sampling: int = 0,
+        mlflow_experiments_id = "pure"
+):
+    task_name = f"{task_name}_{n}"
     config_filename = f"task_config_{task_name}_{uuid.uuid4()}.pickle"
     with open(config_filename, "wb") as f:
         pickle.dump({
@@ -258,7 +443,9 @@ def fit_predict_second_level_model_pure_lgbm_spark_submit(
             "second_model_params": second_model_params,
             "second_model_config_path": second_model_config_path,
             "cpu": cpu,
-            "memory": memory
+            "memory": memory,
+            "sampling": sampling,
+            "mlflow_experiments_id": mlflow_experiments_id
         }, f)
 
     submit_job = SparkSubmitOperator(
@@ -279,12 +466,16 @@ def fit_predict_second_level_model_pure_lgbm_spark_submit(
 
     return submit_job
 
-def _make_combined_2lvl_pure_lgbm(artifacts: ArtifactPaths,
-                        model_name: str,
-                        combiner_suffix: str,
-                        k: int,
-                        mode: str = 'union',
-                        desired_1lvl_models: Optional[List[str]] = None):
+
+def _make_combined_2lvl_pure_lgbm(
+        artifacts: ArtifactPaths,
+        model_name: str,
+        combiner_suffix: str,
+        k: int,
+        mode: str = 'union',
+        desired_1lvl_models: Optional[List[str]] = None,
+        sampling: int = 0
+):
     combined_train_path = artifacts.make_path(f"combined_train_{combiner_suffix}.parquet")
     combined_predicts_path = artifacts.make_path(f"combined_predicts_{combiner_suffix}.parquet")
 
@@ -297,7 +488,21 @@ def _make_combined_2lvl_pure_lgbm(artifacts: ArtifactPaths,
         mode=mode
     )
 
-    second_level_model = fit_predict_second_level_model_pure_lgbm_spark_submit(
+    # second_level_model = fit_predict_second_level_model_pure_lgbm_spark_submit(
+    #     task_name=f"pure_2lvl_{model_name.split('.')[-1]}_{combiner_suffix}",
+    #     artifacts=artifacts,
+    #     model_name=f"{model_name}_{combiner_suffix}",
+    #     k=k,
+    #     train_path=combined_train_path,
+    #     first_level_predicts_path=combined_predicts_path,
+    #     second_model_type=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_type"],
+    #     second_model_params=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_params"],
+    #     second_model_config_path=SECOND_LEVELS_MODELS_CONFIGS.get(model_name, None),
+    #     cpu=EXTRA_BIG_CPU,
+    #     memory=EXTRA_BIG_MEMORY,
+    # )
+
+    second_level_models = [fit_predict_second_level_model_pure_lgbm_spark_submit(
         task_name=f"pure_2lvl_{model_name.split('.')[-1]}_{combiner_suffix}",
         artifacts=artifacts,
         model_name=f"{model_name}_{combiner_suffix}",
@@ -309,9 +514,12 @@ def _make_combined_2lvl_pure_lgbm(artifacts: ArtifactPaths,
         second_model_config_path=SECOND_LEVELS_MODELS_CONFIGS.get(model_name, None),
         cpu=EXTRA_BIG_CPU,
         memory=EXTRA_BIG_MEMORY,
-    )
+        n=n,
+        sampling=sampling
+    ) for n in range(3)]
 
-    return combiner >> second_level_model
+    return combiner >> second_level_models[0] >> second_level_models[1] >> second_level_models[2]
+
 
 def _make_combined_2lvl(artifacts: ArtifactPaths,
                         model_name: str,
@@ -348,12 +556,16 @@ def _make_combined_2lvl(artifacts: ArtifactPaths,
     return combiner >> second_level_model
 
 
-def build_combiner_second_level_pure(dag_id: str, mlflow_exp_id: str, dataset: DatasetInfo, path_suffix: str = "default",
-                                model_name: str = 'slama_fast'):
+def build_combiner_second_level_pure(
+        dag_id: str,
+        mlflow_exp_id: str,
+        dataset: DatasetInfo,
+        path_suffix: str = "default",
+        model_name: str = 'slama_fast',
+        sampling: int = 0):
     os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8811"
     os.environ["MLFLOW_EXPERIMENT_ID"] = mlflow_exp_id
 
-    # path_suffix = 'default'
     artifacts = ArtifactPaths(
         base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
         dataset=dataset
@@ -371,13 +583,15 @@ def build_combiner_second_level_pure(dag_id: str, mlflow_exp_id: str, dataset: D
         _make_combined_2lvl_pure_lgbm(
             artifacts=artifacts,
             model_name=model_name,
-            combiner_suffix="4models",  # an important part
+            combiner_suffix="4models",
             k=k,
             mode='union',
-            desired_1lvl_models=["alswrap", "itemknn", "slim", "word2vecrec"]  # ['alswrap', 'slim']
+            desired_1lvl_models=["alswrap", "itemknn", "slim", "word2vecrec"],
+            sampling=sampling
         )
 
     return dag
+
 
 def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: DatasetInfo, path_suffix: str = "default",
                                 model_name: str = 'slama_fast'):
@@ -469,6 +683,17 @@ msd_first_level_dag_submit_80_fair = build_fit_predict_first_level_models_dag(
     do_optimization=False
 )
 
+ml1m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
+    dag_id="ml1m_first_level_dag_submit_80_20",
+    mlflow_exp_id="222",
+    models=["als", "slim", "word2vec", "itemknn"],
+    dataset=DATASETS["ml1m"],
+    item_test_size=0.2,
+    path_suffix="80_20",
+    get_optimized_params=False,  # TODO: get default parameter if optimized not found
+    do_optimization=False
+)
+
 # ml25m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
 #     dag_id="ml25m_first_level_dag_submit_80",
 #     mlflow_exp_id="222",
@@ -501,6 +726,7 @@ msd_first_level_dag_submit_80_fair = build_fit_predict_first_level_models_dag(
 #     optimize=True
 # )
 
+
 ml25m_first_level_dag_submit_80_opt = build_fit_predict_first_level_models_dag(
     dag_id="ml25m_first_level_dag_submit_80_opt",
     mlflow_exp_id="222",
@@ -522,8 +748,6 @@ ml25m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
     get_optimized_params=False,
     do_optimization=False
 )
-
-
 
 # ml1m_first_level_dag_submit_80_train_opt = build_fit_predict_first_level_models_dag(
 #     dag_id="ml1m_first_level_dag_submit_80_20_train_opt",
@@ -569,7 +793,6 @@ ml1m_combined_second_level_dag_80 = build_combiner_second_level(
     model_name="slama_fast"
 )
 
-
 ml25m_combined_second_level_dag_80 = build_combiner_second_level(
     dag_id="ml25m_combined_second_level_dag_4models_80_20",
     mlflow_exp_id="two_stage_cluster",
@@ -587,15 +810,6 @@ msd_combined_second_level_dag_80 = build_combiner_second_level(
     model_name="longer_slama_default"
 )
 
-msd_combined_second_level_dag_80_wo_tuning = build_combiner_second_level(
-    dag_id="msd_combined_second_level_dag_4models_80_20_wo_tuning",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["msd"],
-    path_suffix="80_20",
-    model_name="longer_slama_wo_tuning"
-)
-
-
 netflix_combined_second_level_dag_80 = build_combiner_second_level(
     dag_id="netflix_combined_second_level_dag_4models_80_20_fi",
     mlflow_exp_id="two_stage_cluster",
@@ -611,6 +825,75 @@ msd_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
     path_suffix="80_20",
     model_name="slama_fast"
 )
+
+ml1m_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
+    dag_id="ml1m_combined_second_level_dag_4models_80_20_pure",
+    mlflow_exp_id="two_stage_cluster",
+    dataset=DATASETS["ml1m"],
+    path_suffix="80_20",
+    model_name="slama_fast",
+    sampling=1
+)
+
+ml25m_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
+    dag_id="ml25m_combined_second_level_dag_4models_80_20_pure",
+    mlflow_exp_id="two_stage_cluster",
+    dataset=DATASETS["ml25m"],
+    path_suffix="80_20",
+    model_name="slama_fast",
+    sampling=0
+)
+
+netflix_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
+    dag_id="netflix_combined_second_level_dag_4models_80_20_pure",
+    mlflow_exp_id="two_stage_cluster",
+    dataset=DATASETS["netflix"],
+    path_suffix="80_20",
+    model_name="slama_fast"
+)
+
+ml1m_autorecsys = build_autorecsys_dag(
+    dag_id="ml1m_autorecsys_dag_4models",
+    mlflow_exp_id="autorecsys",
+    dataset=DATASETS["ml1m"],
+    model_name="slama_fast",
+    models=["als", "slim", "word2vec", "itemknn"]
+)
+
+
+ml25m_autorecsys = build_autorecsys_dag(
+    dag_id="ml25m_autorecsys_dag_4models",
+    mlflow_exp_id="autorecsys",
+    dataset=DATASETS["ml25m"],
+    model_name="longer_slama_default",
+    models=["als", "slim", "word2vec", "itemknn"]
+)
+
+netflix_autorecsys = build_autorecsys_dag(
+    dag_id="netflix_autorecsys_dag_4models",
+    mlflow_exp_id="autorecsys",
+    dataset=DATASETS["netflix"],
+    model_name="longer_slama_default",
+    models=["als", "slim", "word2vec", "itemknn"]
+)
+
+# ml1m_combined_second_level_dag_80_cv1 = build_combiner_second_level(
+#     dag_id="ml1m_combined_second_level_dag_4models_80_20_cv1",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["ml1m"],
+#     path_suffix="80_20",
+#     model_name="fast_slama_wo_tuning_cv1"
+# )
+
+# msd_combined_second_level_dag_80_cv1 = build_combiner_second_level(
+#     dag_id="msd_combined_second_level_dag_4models_80_20_cv1",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["msd"],
+#     path_suffix="80_20",
+#     model_name="fast_slama_wo_tuning_cv1"
+# )
+
+
 #
 # netflix_combined_second_level_dag_80 = build_combiner_second_level(
 #     dag_id="netflix_combined_second_level_dag_4models_80_20",
@@ -618,9 +901,6 @@ msd_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
 #     dataset=DATASETS["netflix"],
 #     path_suffix="80_20"
 # )
-
-
-
 
 
 # ===================================================================================

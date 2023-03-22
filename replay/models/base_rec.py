@@ -1512,7 +1512,8 @@ class NeighbourRec(Recommender, NmslibHnswMixin, ABC):
 
     def _clear_cache(self):
         if hasattr(self, "similarity"):
-            self.similarity.unpersist()
+            pass
+            # self.similarity.unpersist()
 
     # pylint: disable=missing-function-docstring
     @property

@@ -117,6 +117,7 @@ function airflow_sync_dags() {
   fi
 
   rsync -v --perms --chmod=u+rwx,g+rwx,o+rwx experiments/dag_*"${SUFFIX}".py node2.bdcl:/mnt/ess_storage/DN_1/storage/Airflow/dags
+  rsync -v --perms --chmod=u+rwx,g+rwx,o+rwx experiments/dag_*"${SUFFIX}".py node2.bdcl:/mnt/ess_storage/DN_1/storage/SLAMA/kaggle_used_cars_dataset/spark_submit_files/
 }
 
 function airflow_port_forward() {
@@ -136,7 +137,9 @@ function upd_wheels_and_jars() {
   SPARK_SUBMIT_FILES_DIR="/mnt/ess_storage/DN_1/storage/SLAMA/kaggle_used_cars_dataset/spark_submit_files/"
   # copying RePlay wheel and jar files to .../spark_submit_files/ mounted in airflow container
   scp dist/replay_rec-0.10.0-py3-none-any.whl node2.bdcl:"${SPARK_SUBMIT_FILES_DIR}"replay_rec-0.10.0-py3-none-any"${SUFFIX}".whl
-  scp scala/target/scala-2.12/replay_2.12-0.1.jar node2.bdcl:"${SPARK_SUBMIT_FILES_DIR}"replay_2.12-0.1"${SUFFIX}".jar
+#  scp scala/target/scala-2.12/replay_2.12-0.1.jar node2.bdcl:"${SPARK_SUBMIT_FILES_DIR}"replay_2.12-0.1"${SUFFIX}".jar
+  scp /home/dmitriy/Projects/LightAutoML_Spark/dist/sparklightautoml_dev-0.3.2-py3-none-any.whl node2.bdcl:"${SPARK_SUBMIT_FILES_DIR}"sparklightautoml_dev-0.3.2-py3-none-any"${SUFFIX}".whl
+  scp /home/dmitriy/Projects/LightAutoML_Spark/jars/spark-lightautoml_2.12-0.1.1.jar node2.bdcl:"${SPARK_SUBMIT_FILES_DIR}"spark-lightautoml_2.12-0.1.1.jar
 }
 
 function upd_replay_package() {
@@ -146,6 +149,8 @@ function upd_replay_package() {
   fi
 
   rsync -avr --perms --chmod=u+rwx,g+rwx,o+rwx replay node2.bdcl:/mnt/ess_storage/DN_1/storage/Airflow/dags/"${USERNAME_ON_CLUSTER}"_packages/
+  rsync -avr --perms --chmod=u+rwx,g+rwx,o+rwx /home/dmitriy/Projects/LightAutoML_Spark/sparklightautoml node2.bdcl:/mnt/ess_storage/DN_1/storage/Airflow/dags/"${USERNAME_ON_CLUSTER}"_packages/
+
 }
 
 function generate_suffixed_files() {

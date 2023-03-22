@@ -80,7 +80,8 @@ FIRST_LEVELS_MODELS_PARAMS = {
     },
     "replay.models.knn.ItemKNN": {"num_neighbours": 100}, #!!!was 1000
     "replay.models.cluster.ClusterRec": {"num_clusters": 100},
-    "replay.models.slim.SLIM": {"seed": 42},
+    "replay.models.slim.SLIM": {"seed": 42,},
+                                # "hnswlib_params": nmslib_hnsw_params},
     "replay.models.word2vec.Word2VecRec": {
         "rank": 100,
         "seed": 42,
@@ -92,10 +93,10 @@ FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
     "replay.models.als.ALSWrap": {
         "rank": [10, 300]
     },
-    "replay.models.knn.ItemKNN": None,#{"num_neighbours": [10, 200], #!!!was 1000
+    "replay.models.knn.ItemKNN": {"num_neighbours": [50, 200], #!!!was 1000
                                   # "weighting": [None, 'tf_idf', 'bm25'],
                                   # "shrink": [0, 0.1]},
-                                  # },
+                                  },
     "replay.models.slim.SLIM": {"beta": [0.01, 0.1],
                                 "lambda_": [0.01, 0.1]},
     "replay.models.word2vec.Word2VecRec": {
@@ -168,27 +169,12 @@ SECOND_LEVELS_MODELS_PARAMS = {
         "second_model_params": {
             "cpu_limit": EXTRA_BIG_CPU,
             "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
-            "timeout": 3600*14,
+            "timeout": 3600*4,
             "general_params": {"use_algos": [["lgb_tuned"]]},
             "reader_params": {"cv": 5, "advanced_roles": False},
-            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 100, 'max_tuning_time': 3600*12}
+            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 100, 'max_tuning_time': 3600*3}
         }
     },
-
-
-    "longer_slama_wo_tuning": {
-        "second_model_type": "slama",
-        "second_model_params": {
-            "cpu_limit": EXTRA_BIG_CPU,
-            "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
-            "timeout": 3600 * 12,
-            "general_params": {"use_algos": [["lgb"]]},
-            "reader_params": {"cv": 5, "advanced_roles": False},
-            # "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 10, 'max_tuning_time': 3600 * 10}
-        }
-    },
-
-
 
     "slama_fast": {
         "second_model_type": "slama",
@@ -197,7 +183,7 @@ SECOND_LEVELS_MODELS_PARAMS = {
             "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
             "timeout": 400,
             "general_params": {"use_algos": [["lgb_tuned"]]},
-            "reader_params": {"cv": 5, "advanced_roles": False},
+            "reader_params": {"cv": 5, "advanced_roles": False, "samples": 10_000},
             "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 80} #add lgb params
         }
     }
@@ -565,9 +551,9 @@ class ArtifactPaths:
     def history_based_transformer_path(self):
         return self._fs_prefix(os.path.join(self.base_path, "history_based_transformer"))
 
-    def partial_two_stage_scenario_path(self, model_cls_name: str) -> str:
+    def partial_two_stage_scenario_path(self, model_cls_name: str, postfix: str = "default") -> str:
         return self._fs_prefix(
-            os.path.join(self.base_path, f"two_stage_scenario_{model_cls_name.split('.')[-1]}_{self.uid}")
+            os.path.join(self.base_path, f"two_stage_scenario_{model_cls_name.split('.')[-1]}_{self.uid}_{postfix}")
         )
 
     def model_path(self, model_cls_name: str) -> str:
@@ -580,19 +566,19 @@ class ArtifactPaths:
             os.path.join(self.base_path, f"hnsw_model_index_{model_cls_name.replace('.', '__')}_{self.uid}")
         )
 
-    def partial_train_path(self, model_cls_name: str) -> str:
+    def partial_train_path(self, model_cls_name: str, postfix: str = "default") -> str:
         return self._fs_prefix(
             os.path.join(
                 self.base_path,
-                f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet"
+                f"{self.partial_train_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}_{postfix}.parquet"
             )
         )
 
-    def partial_predicts_path(self, model_cls_name: str):
+    def partial_predicts_path(self, model_cls_name: str, postfix: str = "default"):
         return self._fs_prefix(
             os.path.join(
                 self.base_path,
-                f"{self.partial_predict_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}.parquet"
+                f"{self.partial_predict_prefix}_{model_cls_name.replace('.', '__')}_{self.uid}_{postfix}.parquet"
             )
         )
 

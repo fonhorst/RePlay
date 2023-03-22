@@ -383,25 +383,25 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
 # DAG SUBMIT series
 
 ml1m_first_level_dag_submit = build_fit_predict_first_level_models_dag(
-    dag_id="ml1m_first_level_dag_submit",
-    mlflow_exp_id="111",
+    dag_id="ml1m_first_level_dag_submit_mytest",
+    mlflow_exp_id="222",
     model_params_map=_get_models_params("als"),
     dataset=DATASETS["ml1m"]
 )
 
-ml25m_first_level_dag_submit = build_fit_predict_first_level_models_dag(
-    dag_id="ml25m_first_level_dag_submit",
-    mlflow_exp_id="111",
-    model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "word2vec"), #, "itemknn", "ucb", "slim"),
-    dataset=DATASETS["ml25m"]
-)
-
-msd_first_level_dag_submit = build_fit_predict_first_level_models_dag(
-    dag_id="msd_first_level_dag_submit",
-    mlflow_exp_id="111",
-    model_params_map=_get_models_params("als"), #, "itemknn", "ucb", "slim"),
-    dataset=DATASETS["msd"]
-)
+# ml25m_first_level_dag_submit = build_fit_predict_first_level_models_dag(
+#     dag_id="ml25m_first_level_dag_submit",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("als", "itemknn", "ucb", "slim", "word2vec"), #, "itemknn", "ucb", "slim"),
+#     dataset=DATASETS["ml25m"]
+# )
+#
+# msd_first_level_dag_submit = build_fit_predict_first_level_models_dag(
+#     dag_id="msd_first_level_dag_submit",
+#     mlflow_exp_id="111",
+#     model_params_map=_get_models_params("als"), #, "itemknn", "ucb", "slim"),
+#     dataset=DATASETS["msd"]
+# )
 
 
 # netflix_first_level_dag = build_fit_predict_first_level_models_dag(
