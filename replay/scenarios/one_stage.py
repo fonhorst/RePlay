@@ -1,0 +1,646 @@
+# pylint: disable=too-many-lines
+import logging
+import os
+from collections.abc import Iterable
+from typing import Dict, Optional, Tuple, List, Union, Any
+
+import pyspark.sql.functions as sf
+from pyspark.sql import DataFrame
+
+from replay.constants import AnyDataFrame
+from replay.data_preparator import ToNumericFeatureTransformer
+from replay.history_based_fp import HistoryBasedFeaturesProcessor
+from replay.metrics import Metric, Precision
+from replay.models import ALSWrap
+from replay.models.base_rec import BaseRecommender, HybridRecommender
+from replay.session_handler import State
+from replay.utils import (
+    array_mult,
+    cache_if_exists,
+    get_top_k_recs,
+    join_or_return,
+    join_with_col_renaming,
+    unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
+    cache_and_materialize_if_in_debug, JobGroupWithMetrics,
+)
+
+logger = logging.getLogger("replay")
+
+
+# pylint: disable=too-many-locals, too-many-arguments
+def get_first_level_model_features(
+    model: BaseRecommender,
+    pairs: DataFrame,
+    user_features: Optional[DataFrame] = None,
+    item_features: Optional[DataFrame] = None,
+    add_factors_mult: bool = True,
+    prefix: str = "",
+) -> DataFrame:
+    """
+    Get user and item embeddings from replay model.
+    Can also compute elementwise multiplication between them with ``add_factors_mult`` parameter.
+    Zero vectors are returned if a model does not have embeddings for specific users/items.
+
+    :param model: trained model
+    :param pairs: user-item pairs to get vectors for `[user_id/user_idx, item_id/item_id]`
+    :param user_features: user features `[user_id/user_idx, feature_1, ....]`
+    :param item_features: item features `[item_id/item_idx, feature_1, ....]`
+    :param add_factors_mult: flag to add elementwise multiplication
+    :param prefix: name to add to the columns
+    :return: DataFrame
+    """
+    users = pairs.select("user_idx").distinct()
+    items = pairs.select("item_idx").distinct()
+    user_factors, user_vector_len = model._get_features_wrap(
+        users, user_features
+    )
+    item_factors, item_vector_len = model._get_features_wrap(
+        items, item_features
+    )
+
+    pairs_with_features = join_or_return(
+        pairs, user_factors, how="left", on="user_idx"
+    )
+    pairs_with_features = join_or_return(
+        pairs_with_features,
+        item_factors,
+        how="left",
+        on="item_idx",
+    )
+
+    if user_factors is not None:
+        pairs_with_features = pairs_with_features.withColumn(
+            "user_factors",
+            sf.coalesce(
+                sf.col("user_factors"),
+                sf.array([sf.lit(0.0)] * user_vector_len),
+            ),
+        )
+
+    if item_factors is not None:
+        pairs_with_features = pairs_with_features.withColumn(
+            "item_factors",
+            sf.coalesce(
+                sf.col("item_factors"),
+                sf.array([sf.lit(0.0)] * item_vector_len),
+            ),
+        )
+
+    if model.__str__() == "LightFMWrap":
+        pairs_with_features = (
+            pairs_with_features.fillna({"user_bias": 0, "item_bias": 0})
+            .withColumnRenamed("user_bias", f"{prefix}_user_bias")
+            .withColumnRenamed("item_bias", f"{prefix}_item_bias")
+        )
+
+    if (
+        add_factors_mult
+        and user_factors is not None
+        and item_factors is not None
+    ):
+        pairs_with_features = pairs_with_features.withColumn(
+            "factors_mult",
+            array_mult(sf.col("item_factors"), sf.col("user_factors")),
+        )
+
+    return pairs_with_features
+
+
+# pylint: disable=too-many-instance-attributes
+class OneStageScenario(HybridRecommender):
+    """
+    *train*:
+
+    1) train ``first_stage_models`` on train dataset
+    2) return the best model according to metrics on holdout dataset
+
+
+    *inference*:
+
+    1) inference of best trained model
+
+    """
+
+    can_predict_cold_users: bool = True
+    can_predict_cold_items: bool = True
+
+    # pylint: disable=too-many-arguments
+    def __init__(
+        self,
+        first_level_models: Union[
+            List[BaseRecommender], BaseRecommender
+        ] = ALSWrap(rank=128),
+        # fallback_model: Optional[BaseRecommender] = PopRec(),
+        # use_first_level_models_feat: Union[List[bool], bool] = False,
+        # second_model_type: str = "lama",
+        # second_model_params: Optional[Union[Dict, str]] = None,
+        # second_model_config_path: Optional[str] = None,
+        # num_negatives: int = 100,
+        # negatives_type: str = "first_level",
+        # use_generated_features: bool = False,
+        user_cat_features_list: Optional[List] = None,
+        item_cat_features_list: Optional[List] = None,
+        custom_features_processor: HistoryBasedFeaturesProcessor = None,
+        seed: int = 123,
+    ) -> None:
+        """
+
+        :param first_level_models: model or a list of models
+        :param user_cat_features_list: list of user categorical features
+        :param item_cat_features_list: list of item categorical features
+        :param custom_features_processor: you can pass custom feature processor
+        :param seed: random seed
+
+        """
+        self.cached_list = []
+
+        self.first_level_models = (
+            first_level_models
+            if isinstance(first_level_models, Iterable)
+            else [first_level_models]
+        )
+
+        self.first_level_item_len = 0
+        self.first_level_user_len = 0
+
+        # self.random_model = RandomRec(seed=seed)
+        # self.fallback_model = fallback_model
+        self.first_level_user_features_transformer = (
+            ToNumericFeatureTransformer()
+        )
+        self.first_level_item_features_transformer = (
+            ToNumericFeatureTransformer()
+        )
+
+        self.features_processor = (
+            custom_features_processor
+            if custom_features_processor
+            else HistoryBasedFeaturesProcessor(
+                user_cat_features_list=user_cat_features_list,
+                item_cat_features_list=item_cat_features_list,
+            )
+        )
+        self.seed = seed
+
+        self._job_group_id = ""
+
+
+    # TO DO: add save/load for scenarios
+    @property
+    def _init_args(self):
+        return {}
+
+    def _save_model(self, path: str):
+        from replay.model_handler import save
+        spark = State().session
+        create_folder(path, exists_ok=True)
+
+        # save features
+        if self.first_level_user_features_transformer is not None:
+            save_transformer(
+                self.first_level_user_features_transformer,
+                os.path.join(path, "first_level_user_features_transformer")
+            )
+
+        if self.first_level_item_features_transformer is not None:
+            save_transformer(
+                self.first_level_item_features_transformer,
+                os.path.join(path, "first_level_item_features_transformer")
+            )
+
+        if self.features_processor is not None:
+            save_transformer(self.features_processor, os.path.join(path, "features_processor"))
+
+        # Save first level models
+        first_level_models_path = os.path.join(path, "first_level_models")
+        create_folder(first_level_models_path)
+        for i, model in enumerate(self.first_level_models):
+            save(model, os.path.join(first_level_models_path, f"model_{i}"))
+
+        # save general data and settings
+        data = {
+            "first_level_item_len": self.first_level_item_len,
+            "first_level_user_len": self.first_level_user_len,
+            "seed": self.seed
+        }
+
+        spark.createDataFrame([data]).write.parquet(os.path.join(path, "data.parquet"))
+
+    def _load_model(self, path: str):
+        from replay.model_handler import load
+        spark = State().session
+
+        # load general data and settings
+        data = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
+
+        # load transformers for features
+        comp_path = os.path.join(path, "first_level_user_features_transformer")
+        first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None #TODO: check why this dir exists if user_features=None
+
+        comp_path = os.path.join(path, "first_level_item_features_transformer")
+        first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None #TODO same
+
+        comp_path = os.path.join(path, "features_processor")
+        features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None # TODO same
+
+        # load first level models
+        first_level_models_path = os.path.join(path, "first_level_models")
+        if do_path_exists(first_level_models_path):
+            model_paths = [
+                os.path.join(first_level_models_path, model_path)
+                for model_path in list_folder(first_level_models_path)
+            ]
+            first_level_models = [load(model_path) for model_path in model_paths]
+        else:
+            first_level_models = None
+
+        self.__dict__.update({
+            **data,
+            "first_level_user_features_transformer": first_level_user_features_transformer,
+            "first_level_item_features_transformer": first_level_item_features_transformer,
+            "features_processor": features_processor,
+            "first_level_models": first_level_models,
+        })
+
+    @staticmethod
+    def _filter_or_return(dataframe, condition):
+        if dataframe is None:
+            return dataframe
+        return dataframe.filter(condition)
+
+    def _predict_with_first_level_model(
+        self,
+        model: BaseRecommender,
+        log: DataFrame,
+        k: int,
+        users: DataFrame,
+        items: DataFrame,
+        user_features: DataFrame,
+        item_features: DataFrame,
+        log_to_filter: DataFrame,
+        prediction_label: str = ''
+    ) -> DataFrame:
+        """
+        Filter users and items using can_predict_cold_items and can_predict_cold_users, and predict
+        """
+        if not model.can_predict_cold_items:
+            log, items, item_features = [
+                self._filter_or_return(
+                    dataframe=df,
+                    condition=sf.col("item_idx") < self.first_level_item_len,
+                )
+                for df in [log, items, item_features]
+            ]
+        if not model.can_predict_cold_users:
+            log, users, user_features = [
+                self._filter_or_return(
+                    dataframe=df,
+                    condition=sf.col("user_idx") < self.first_level_user_len,
+                )
+                for df in [log, users, user_features]
+            ]
+
+        log_to_filter_cached = join_with_col_renaming(
+            left=log_to_filter,
+            right=users,
+            on_col_name="user_idx",
+        ).cache()
+        max_positives_to_filter = 0
+
+        with JobGroupWithMetrics(self._job_group_id, "calculating_max_positives_to_filter"):
+            if log_to_filter_cached.count() > 0:
+                max_positives_to_filter = (
+                    log_to_filter_cached.groupBy("user_idx")
+                    .agg(sf.count("item_idx").alias("num_positives"))
+                    .select(sf.max("num_positives"))
+                    .collect()[0][0]
+                )
+
+        with JobGroupWithMetrics(__file__, f"{type(model).__name__}._{prediction_label}_predict") as job_desc:
+            pred = model._inner_predict_wrap(
+                log,
+                k=k + max_positives_to_filter,
+                users=users,
+                items=items,
+                user_features=user_features,
+                item_features=item_features,
+                filter_seen_items=False,
+            )
+            cache_and_materialize_if_in_debug(pred, job_desc)
+
+        logger.info(f"{type(model).__name__} prediction: {pred}")
+        logger.info(f"Length of {type(model).__name__} prediction: {pred.count()}")
+
+        pred = pred.join(
+            log_to_filter_cached.select("user_idx", "item_idx"),
+            on=["user_idx", "item_idx"],
+            how="anti",
+        ).drop("user", "item")
+
+        # PERF - preventing potential losing time on repeated expensive computations
+        pred = pred.cache()
+        self.cached_list.extend([pred, log_to_filter_cached])
+
+        return get_top_k_recs(pred, k)
+
+    def _predict_pairs_with_first_level_model(
+        self,
+        model: BaseRecommender,
+        log: DataFrame,
+        pairs: DataFrame,
+        user_features: DataFrame,
+        item_features: DataFrame,
+    ):
+        """
+        Get relevance for selected user-item pairs.
+        """
+        if not model.can_predict_cold_items:
+            log, pairs, item_features = [
+                self._filter_or_return(
+                    dataframe=df,
+                    condition=sf.col("item_idx") < self.first_level_item_len,
+                )
+                for df in [log, pairs, item_features]
+            ]
+        if not model.can_predict_cold_users:
+            log, pairs, user_features = [
+                self._filter_or_return(
+                    dataframe=df,
+                    condition=sf.col("user_idx") < self.first_level_user_len,
+                )
+                for df in [log, pairs, user_features]
+            ]
+
+        return model._predict_pairs(
+            pairs=pairs,
+            log=log,
+            user_features=user_features,
+            item_features=item_features,
+        )
+
+    # pylint: disable=too-many-locals,too-many-statements
+    def _fit(
+        self,
+        log: DataFrame,
+        user_features: Optional[DataFrame] = None,
+        item_features: Optional[DataFrame] = None,
+    ) -> None:
+        self._job_group_id = "1stage_fit"
+
+        self.cached_list = []
+
+        # 1. Making some preprocessing
+        self.logger.info("Data splitting")
+        first_level_train = log
+
+        self.first_level_item_len = (
+            first_level_train.select("item_idx").distinct().count()
+        )
+        self.first_level_user_len = (
+            first_level_train.select("user_idx").distinct().count()
+        )
+
+        first_level_train.cache()
+        self.cached_list.extend(
+            [log]
+        )
+
+        # 2. Transform user and item features if applicable
+        if user_features is not None:
+            user_features.cache()
+            self.cached_list.append(user_features)
+
+        if item_features is not None:
+            item_features.cache()
+            self.cached_list.append(item_features)
+
+        with JobGroupWithMetrics(self._job_group_id, "item_features_transformer"):
+            if not self.first_level_item_features_transformer.fitted:
+                self.first_level_item_features_transformer.fit(item_features)
+
+        with JobGroupWithMetrics(self._job_group_id, "user_features_transformer"):
+            if not self.first_level_user_features_transformer.fitted:
+                self.first_level_user_features_transformer.fit(user_features)
+
+        first_level_item_features = cache_if_exists(
+            self.first_level_item_features_transformer.transform(item_features)
+        )
+        first_level_user_features = cache_if_exists(
+            self.first_level_user_features_transformer.transform(user_features)
+        )
+
+        first_level_user_features = first_level_user_features.filter(sf.col("user_idx") < self.first_level_user_len) \
+            if first_level_user_features is not None else None
+
+        first_level_item_features = first_level_item_features.filter(sf.col("item_idx") < self.first_level_item_len) \
+            if first_level_item_features is not None else None
+
+        # 3. Fit first level models
+        logger.info(f"first_level_train: {str(first_level_train.columns)}")
+
+        for base_model in [*self.first_level_models]:
+            with JobGroupWithMetrics(self._job_group_id, f"{type(base_model).__name__}._fit_wrap"):
+                base_model._fit_wrap(
+                    log=first_level_train,
+                    user_features=first_level_user_features,
+                    item_features=first_level_item_features,
+                )
+
+                # TODO: save model and calculate metrics
+        self.best_model = base_model  # the last one # TODO: choose the best model based on metrics
+
+        unpersist_if_exists(first_level_user_features)
+        unpersist_if_exists(first_level_item_features)
+
+    # pylint: disable=too-many-arguments
+    def _predict(
+        self,
+        log: DataFrame,
+        k: int,
+        users: DataFrame,
+        items: DataFrame,
+        user_features: Optional[DataFrame] = None,
+        item_features: Optional[DataFrame] = None,
+        filter_seen_items: bool = True,
+    ) -> DataFrame:
+        self._job_group_id = "1stage_predict"
+        self.cached_list = []
+
+        # 1. Transform user and item features if applicable
+        logger.debug(msg="Generating candidates to rerank")
+
+        first_level_user_features = cache_if_exists(
+            self.first_level_user_features_transformer.transform(user_features)
+        )
+        first_level_item_features = cache_if_exists(
+            self.first_level_item_features_transformer.transform(item_features)
+        )
+
+        unpersist_if_exists(first_level_user_features)
+        unpersist_if_exists(first_level_item_features)
+
+        with JobGroupWithMetrics(self._job_group_id, f"{type(self.best_model).__name__}_predict"):
+            predictions = self.best_model._predict(log=log, k=k, users=users, items=items,
+                                                  user_features=first_level_user_features,
+                                                  item_features=first_level_item_features)
+
+        logger.info(f"predictions.columns: {predictions.columns}")
+
+        return predictions
+
+    def fit_predict(
+        self,
+        log: AnyDataFrame,
+        k: int,
+        users: Optional[Union[AnyDataFrame, Iterable]] = None,
+        items: Optional[Union[AnyDataFrame, Iterable]] = None,
+        user_features: Optional[AnyDataFrame] = None,
+        item_features: Optional[AnyDataFrame] = None,
+        filter_seen_items: bool = True,
+    ) -> DataFrame:
+        """
+        :param log: input DataFrame ``[user_id, item_id, timestamp, relevance]``
+        :param k: length of a recommendation list, must be smaller than the number of ``items``
+        :param users: users to get recommendations for
+        :param items: items to get recommendations for
+        :param user_features: user features``[user_id]`` + feature columns
+        :param item_features: item features``[item_id]`` + feature columns
+        :param filter_seen_items: flag to removed seen items from recommendations
+        :return: DataFrame ``[user_id, item_id, relevance]``
+        """
+        self.fit(log, user_features, item_features)
+        return self.predict(
+            log,
+            k,
+            users,
+            items,
+            user_features,
+            item_features,
+            filter_seen_items,
+        )
+
+    @staticmethod
+    def _optimize_one_model(
+        model: BaseRecommender,
+        train: AnyDataFrame,
+        test: AnyDataFrame,
+        user_features: Optional[AnyDataFrame] = None,
+        item_features: Optional[AnyDataFrame] = None,
+        param_borders: Optional[Dict[str, List[Any]]] = None,
+        criterion: Metric = Precision(),
+        k: int = 10,
+        budget: int = 10,
+        new_study: bool = True,
+    ):
+        params = model.optimize(
+            train,
+            test,
+            user_features,
+            item_features,
+            param_borders,
+            criterion,
+            k,
+            budget,
+            new_study,
+        )
+        return params
+
+    # pylint: disable=too-many-arguments, too-many-locals
+    def optimize(
+        self,
+        train: AnyDataFrame,
+        test: AnyDataFrame,
+        user_features: Optional[AnyDataFrame] = None,
+        item_features: Optional[AnyDataFrame] = None,
+        param_borders: Optional[List[Dict[str, List[Any]]]] = None,
+        criterion: Metric = Precision(),
+        k: int = 10,
+        budget: int = 10,
+        new_study: bool = True,
+    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """
+        Optimize first level models with optuna.
+
+        :param train: train DataFrame ``[user_id, item_id, timestamp, relevance]``
+        :param test: test DataFrame ``[user_id, item_id, timestamp, relevance]``
+        :param user_features: user features ``[user_id , timestamp]`` + feature columns
+        :param item_features: item features``[item_id]`` + feature columns
+        :param param_borders: list with param grids for first level models and a fallback model.
+            Empty dict skips optimization for that model.
+            Param grid is a dict ``{param: [low, high]}``.
+        :param criterion: metric to optimize
+        :param k: length of a recommendation list
+        :param budget: number of points to train each model
+        :param new_study: keep searching with previous study or start a new study
+        :return: list of dicts of parameters
+        """
+        number_of_models = len(self.first_level_models)
+        if self.fallback_model is not None:
+            number_of_models += 1
+        if number_of_models != len(param_borders):
+            raise ValueError(
+                "Provide search grid or None for every first level model"
+            )
+
+        first_level_user_features_tr = ToNumericFeatureTransformer()
+        first_level_user_features = first_level_user_features_tr.fit_transform(
+            user_features
+        )
+        first_level_item_features_tr = ToNumericFeatureTransformer()
+        first_level_item_features = first_level_item_features_tr.fit_transform(
+            item_features
+        )
+
+        first_level_user_features = cache_if_exists(first_level_user_features)
+        first_level_item_features = cache_if_exists(first_level_item_features)
+
+        params_found = []
+        for i, model in enumerate(self.first_level_models):
+            if param_borders[i] is None or (
+                isinstance(param_borders[i], dict) and param_borders[i]
+            ):
+                self.logger.info(
+                    "Optimizing first level model number %s, %s",
+                    i,
+                    model.__str__(),
+                )
+                params_found.append(
+                    self._optimize_one_model(
+                        model=model,
+                        train=train,
+                        test=test,
+                        user_features=first_level_user_features,
+                        item_features=first_level_item_features,
+                        param_borders=param_borders[i],
+                        criterion=criterion,
+                        k=k,
+                        budget=budget,
+                        new_study=new_study,
+                    )
+                )
+            else:
+                params_found.append(None)
+
+        if self.fallback_model is None or (
+            isinstance(param_borders[-1], dict) and not param_borders[-1]
+        ):
+            return params_found, None
+
+        self.logger.info("Optimizing fallback-model")
+        fallback_params = self._optimize_one_model(
+            model=self.fallback_model,
+            train=train,
+            test=test,
+            user_features=first_level_user_features,
+            item_features=first_level_item_features,
+            param_borders=param_borders[-1],
+            criterion=criterion,
+            new_study=new_study,
+        )
+        unpersist_if_exists(first_level_item_features)
+        unpersist_if_exists(first_level_user_features)
+        return params_found, fallback_params
+
+    def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
+                           candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:
+        raise NotImplementedError("Unsupported method")
