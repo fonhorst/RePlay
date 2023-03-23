@@ -1,4 +1,8 @@
+from typing import Union
+
 from replay.metrics.base_metric import Metric
+
+from pyspark.sql import Column
 
 
 # pylint: disable=too-few-public-methods
@@ -22,3 +26,11 @@ class Recall(Metric):
         if len(ground_truth) == 0:
             return 0.0
         return len(set(pred[:k]) & set(ground_truth)) / len(ground_truth)
+
+    @staticmethod
+    def _get_metric_value_by_user_scala_udf(
+            k: Union[str, Column],
+            pred: Union[str, Column],
+            ground_truth: Union[str, Column]
+    ) -> Column:
+        return Metric.get_scala_udf('getRecallMetricValue', [k, pred, ground_truth])

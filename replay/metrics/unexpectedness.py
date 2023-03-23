@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
@@ -10,6 +10,8 @@ from replay.metrics.base_metric import (
     sorter,
     fill_na_with_empty_array,
 )
+
+from pyspark.sql import Column
 
 
 # pylint: disable=too-few-public-methods
@@ -30,11 +32,13 @@ class Unexpectedness(RecOnlyMetric):
     """
 
     def __init__(
-        self, pred: AnyDataFrame
+        self, pred: AnyDataFrame,
+        use_scala_udf: bool = False
     ):  # pylint: disable=super-init-not-called
         """
         :param pred: model predictions
         """
+        self._use_scala_udf = use_scala_udf
         self.pred = convert2spark(pred)
 
     @staticmethod
@@ -44,6 +48,14 @@ class Unexpectedness(RecOnlyMetric):
         if len(pred) == 0:
             return 0
         return 1.0 - len(set(pred[:k]) & set(base_pred[:k])) / k
+
+    @staticmethod
+    def _get_metric_value_by_user_scala_udf(
+            k: Union[str, Column],
+            pred: Union[str, Column],
+            base_pred: Union[str, Column]
+    ) -> Column:
+        return RecOnlyMetric.get_scala_udf('getUnexpectednessMetricValue', [k, pred, base_pred])
 
     def _get_enriched_recommendations(
         self,

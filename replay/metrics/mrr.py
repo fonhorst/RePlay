@@ -1,4 +1,8 @@
+from typing import Union
+
 from replay.metrics.base_metric import Metric
+
+from pyspark.sql import SparkSession, Column
 
 
 # pylint: disable=too-few-public-methods
@@ -25,3 +29,11 @@ class MRR(Metric):
             if pred[i] in ground_truth:
                 return 1 / (1 + i)
         return 0
+
+    @staticmethod
+    def _get_metric_value_by_user_scala_udf(
+            k: Union[str, Column],
+            pred: Union[str, Column],
+            ground_truth: Union[str, Column]
+    ) -> Column:
+        return Metric.get_scala_udf('getMRRMetricValue', [k, pred, ground_truth])

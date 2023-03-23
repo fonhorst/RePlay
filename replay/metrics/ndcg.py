@@ -1,6 +1,9 @@
 import math
+from typing import Union
 
 from replay.metrics.base_metric import Metric
+
+from pyspark.sql import Column
 
 
 # pylint: disable=too-few-public-methods
@@ -57,3 +60,11 @@ class NDCG(Metric):
         idcg = sum(denom[:ground_truth_len])
 
         return dcg / idcg
+
+    @staticmethod
+    def _get_metric_value_by_user_scala_udf(
+            k: Union[str, Column],
+            pred: Union[str, Column],
+            ground_truth: Union[str, Column]
+    ) -> Column:
+        return Metric.get_scala_udf('getNDCGMetricValue', [k, pred, ground_truth])
