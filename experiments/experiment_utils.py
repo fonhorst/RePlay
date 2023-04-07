@@ -14,7 +14,6 @@ from rs_datasets import MovieLens, MillionSongDataset
 from replay.models import (
     ALSWrap,
     SLIM,
-    LightFMWrap,
     ItemKNN,
     Word2VecRec,
     PopRec,
@@ -24,7 +23,8 @@ from replay.models import (
     Wilson,
     ClusterRec,
     UCB,
-)
+) #    # LightFMWrap,
+
 from replay.models.base_rec import BaseRecommender
 from replay.utils import log_exec_timer, get_number_of_allocated_executors
 from replay.data_preparator import DataPreparator, Indexer
@@ -142,8 +142,8 @@ def get_model(model_name: str, seed: int, spark_app_id: str):
             }
         )
         model = ItemKNN(num_neighbours=num_neighbours, nmslib_hnsw_params=nmslib_hnsw_params)
-    elif model_name == "LightFM":
-        model = LightFMWrap(random_state=seed)
+    # elif model_name == "LightFM":
+    #     model = LightFMWrap(random_state=seed)
     elif model_name == "Word2VecRec":
         word2vec_rank = int(os.environ.get("WORD2VEC_RANK", 100))
         mlflow.log_param("word2vec_rank", word2vec_rank)

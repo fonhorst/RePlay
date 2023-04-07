@@ -32,7 +32,7 @@ packages = [
 python = ">=3.8, <3.10"
 pytorch-ignite = "*"
 lightautoml = "0.3.7.1"
-numpy = ">=1.20.0"
+numpy = "1.23.5"
 optuna = "*"
 pandas = "*"
 psutil = "*"
@@ -47,6 +47,8 @@ pyarrow = "*"
 implicit = ">=0.5"
 nmslib = "*"
 hnswlib = "*"
+rs-datasets = "^0.5.1"
+sparklightautoml-dev = {path = "/home/dmitriy/Projects/LightAutoML_Spark/dist/sparklightautoml_dev-0.3.2.tar.gz"}
 
 [tool.poetry.dev-dependencies]
 # dev only
