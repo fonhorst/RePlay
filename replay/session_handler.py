@@ -39,7 +39,8 @@ def get_spark_session(
     spark = (
         SparkSession.builder.config("spark.driver.memory", driver_memory)
         .config("spark.jars", 'scala/target/scala-2.12/replay_2.12-0.1.jar,jars/spark-lightautoml_2.12-0.1.1.jar')
-        .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5")
+        .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5-35-e962330b-SNAPSHOT")
+        .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven")
         .config(
             "spark.driver.extraJavaOptions",
             "-Dio.netty.tryReflectionSetAccessible=true",

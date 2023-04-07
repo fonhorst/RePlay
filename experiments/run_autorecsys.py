@@ -54,16 +54,8 @@ logging.basicConfig(
     level=logging.ERROR,
     handlers=[StreamHandler])
 
-# logging.getLogger("py4j").setLevel(logging.ERROR)
-# logging.getLogger("urllib3").setLevel(logging.ERROR)
 logging.getLogger("replay").setLevel(logging.DEBUG)
-# logging.getLogger("lightautoml").setLevel(logging.ERROR)
-# logging.getLogger("sparklightautoml").setLevel(logging.ERROR)
 
-
-# log4jLogger = sc._jvm.org.apache.log4j
-# LOGGER = log4jLogger.LogManager.getLogger(__name__)
-# LOGGER.info("pyspark script logger initialized")
 logger = logging.getLogger("replay")
 
 print(logger)
@@ -114,7 +106,6 @@ print(logger.handlers)
 
 def main(spark: SparkSession, dataset_name: str):
 
-    spark.sparkContext.setLogLevel("ERROR")
     spark_conf: SparkConf = spark.sparkContext.getConf()
 
     check_number_of_allocated_executors(spark)

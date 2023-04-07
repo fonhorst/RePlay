@@ -100,6 +100,7 @@ All params:
 
 import logging
 import os
+import sys
 from importlib.metadata import version
 
 import mlflow
@@ -143,36 +144,23 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-spark_logger = logging.getLogger("py4j")
-spark_logger.setLevel(logging.WARN)
-
+StreamHandler = logging.StreamHandler(sys.stdout)
 formatter = logging.Formatter(
     "%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%d/%m/%y %H:%M:%S",
+    datefmt="%H:%M:%S",
 )
-streamHandler = logging.StreamHandler()
-streamHandler.setFormatter(formatter)
-# logger.addHandler(streamHandler)
-
-# fileHandler = logging.FileHandler("/tmp/replay.log")
-# fileHandler.setFormatter(formatter)
-# logger.addHandler(fileHandler)
-
-# logger.setLevel(logging.DEBUG)
+StreamHandler.setFormatter(formatter)
 
 logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    handlers=[
-        # fileHandler,
-        streamHandler
-    ],
-)
+    level=logging.ERROR,
+    handlers=[StreamHandler])
 
-# logging.config.dictConfig(logging_config(level=logging.DEBUG, log_filename='/tmp/slama.log'))
-# logging.basicConfig(level=logging.DEBUG, format=VERBOSE_LOGGING_FORMAT)
+logging.getLogger("replay").setLevel(logging.DEBUG)
 
-logging.getLogger("urllib3").setLevel(logging.WARNING)
+logger = logging.getLogger("replay")
+
+print(logger)
+print(logger.handlers)
 
 
 def main(spark: SparkSession, dataset_name: str):
@@ -227,6 +215,10 @@ def main(spark: SparkSession, dataset_name: str):
             # "/opt/spark_data/replay/experiments/ml25m_first_level_80_20/test.parquet"
             "/opt/spark_data/replay_datasets/ml1m_test.parquet"
         )
+
+        train = train.limit(25_000)
+        test = test.limit(25_000)
+
         train = train.repartition(partition_num, "user_idx")
         test = test.repartition(partition_num, "user_idx")
 
@@ -243,7 +235,7 @@ def main(spark: SparkSession, dataset_name: str):
                     "efS": 2000,
                     "efC": 2000,
                     "post": 0,
-                    "index_path": f"/tmp/als_hnswlib_index_{spark.sparkContext.applicationId}",
+                    "index_path": f"file:///tmp/als_hnswlib_index_{spark.sparkContext.applicationId}",
                     "build_index_on": "executor",
                 },
             },
@@ -256,7 +248,7 @@ def main(spark: SparkSession, dataset_name: str):
                     "efS": 2000,
                     "efC": 2000,
                     "post": 0,
-                    "index_path": f"/tmp/word2vec_hnswlib_index_{spark.sparkContext.applicationId}",
+                    "index_path": f"file:///tmp/word2vec_hnswlib_index_{spark.sparkContext.applicationId}",
                     "build_index_on": "executor",
                 },
             },
@@ -329,7 +321,8 @@ def main(spark: SparkSession, dataset_name: str):
         #     word2vec_model,
         # ]
         first_level_models = get_models(first_levels_models_params)
-        use_first_level_models_feat = [False, True, False]
+        use_first_level_models_feat = [False, False, False]
+
         assert len(first_level_models) == len(use_first_level_models_feat)
 
         mlflow.log_param(
@@ -366,6 +359,7 @@ def main(spark: SparkSession, dataset_name: str):
             # second_model_config_path=os.environ.get(
             #     "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"
             # ),
+            num_negatives=10,
             use_generated_features=True
         )
 
@@ -425,6 +419,7 @@ def main(spark: SparkSession, dataset_name: str):
 
 if __name__ == "__main__":
     spark_sess = get_spark_session()
+    spark_sess.sparkContext.setLogLevel('ERROR')
     dataset = os.environ.get("DATASET", "MovieLens_1m")
     main(spark=spark_sess, dataset_name=dataset)
     spark_sess.stop()

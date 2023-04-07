@@ -5202,7 +5202,7 @@ category = "main"
 optional = false
 python-versions = ">=3.8,<3.10"
 files = [
-    {file = "sparklightautoml_dev-0.3.2.tar.gz", hash = "sha256:1c5a080de83ccba655a93aecf9833063b265c9cf41e0e8cd547de578f4eebf2e"},
+    {file = "sparklightautoml_dev-0.3.2.tar.gz", hash = "sha256:c6b3cf362970817da753061c62392f0eee0db41a25376dcfc8e1de205e378a68"},
 ]
 
 [package.dependencies]
