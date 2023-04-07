@@ -4,21 +4,22 @@ set -ex
 
 SCRIPT="$1"
 
-PYSPARK_PYTHON_PATH=${PYSPARK_PYTHON_PATH:-"/python_envs/.replay_venv/bin/python"}
+PYSPARK_PYTHON_PATH=${PYSPARK_PYTHON_PATH:-"/python_envs/.replay_venv/bin/python3"}
 DRIVER_CORES=${DRIVER_CORES:-"2"}
 DRIVER_MEMORY=${DRIVER_MEMORY:-"20g"}
 DRIVER_MAX_RESULT_SIZE=${DRIVER_MAX_RESULT_SIZE:-"5g"}
 EXECUTOR_CORES=${EXECUTOR_CORES:-"6"}
-EXECUTOR_MEMORY=${EXECUTOR_MEMORY:-"46g"}
+EXECUTOR_MEMORY=${EXECUTOR_MEMORY:-"20g"}
 FILTER_LOG=${FILTER_LOG:-"True"}
 SEED=${SEED:-"42"}
-K=${K:-"10"}
-K_LIST_METRICS=${K_LIST_METRICS:-"5,10"}
-USE_BUCKETING=${USE_BUCKETING:-"True"}
-ALS_RANK=${ALS_RANK:-"100"}
-NUM_NEIGHBOURS=${NUM_NEIGHBOURS:-"1000"}
+K=${K:-"100"}
+K_LIST_METRICS=${K_LIST_METRICS:-"5,10,25,100"}
+USE_BUCKETING=${USE_BUCKETING:-"True"} # True  False
+ALS_RANK=${ALS_RANK:-"10"}
+NUM_NEIGHBOURS=${NUM_NEIGHBOURS:-"10"} # 1000
 NUM_CLUSTERS=${NUM_CLUSTERS:-"100"}
 WORD2VEC_RANK=${WORD2VEC_RANK:-"100"}
+USE_RELEVANCE=${USE_RELEVANCE:-"True"}
 HNSWLIB_PARAMS=${HNSWLIB_PARAMS:-'{\"space\":\"ip\",\"M\":100,\"efS\":2000,\"efC\":2000,\"post\":0,\"index_path\":\"/tmp/hnswlib_index_{spark_app_id}\",\"build_index_on\":\"executor\"}'}
 NMSLIB_HNSW_PARAMS=${NMSLIB_HNSW_PARAMS:-'{\"method\":\"hnsw\",\"space\":\"negdotprod_sparse_fast\",\"M\":100,\"efS\":2000,\"efC\":2000,\"post\":0,\"index_path\":\"/tmp/nmslib_hnsw_index_{spark_app_id}\",\"build_index_on\":\"executor\"}'}
 
@@ -28,10 +29,11 @@ RS_DATASETS_DIR=${RS_DATASETS_DIR:-"/opt/spark_data/replay_datasets/"}
 FORCE_RECREATE_DATASETS=${FORCE_RECREATE_DATASETS:-"False"}
 CHECK_NUMBER_OF_ALLOCATED_EXECUTORS=${CHECK_NUMBER_OF_ALLOCATED_EXECUTORS:-"True"}
 
-EXECUTOR_INSTANCES=${EXECUTOR_INSTANCES:-"2"}
-DATASET=${DATASET:-"MovieLens"}
-MODEL=${MODEL:-"ALS_HNSWLIB"}
-EXPERIMENT=$MODEL"_$(cut -d'_' -f1 <<<$DATASET)"
+EXECUTOR_INSTANCES=${EXECUTOR_INSTANCES:-"16"}
+#DATASET=${DATASET:-"MillionSongDataset"} # MillionSongDataset MovieLens MovieLens__25m
+#MODEL=${MODEL:-"ItemKNN"} # ALS ALS_HNSWLIB SLIM_NMSLIB_HNSW PopRec RandomRec_uniform ItemKNN SLIM Wilson
+EXPERIMENT="one-stage_test"   #$MODEL"_$(cut -d'_' -f1 <<<$DATASET)"
+#EXPERIMENT=$MODEL"_partial_fit"
 
 # calculable variables
 # shellcheck disable=SC2004
@@ -109,8 +111,11 @@ spark-submit \
 --conf 'spark.files.overwrite=true' \
 --py-files 'dist/replay_rec-0.10.0-py3-none-any.whl,experiments/experiment_utils.py' \
 --num-executors ${EXECUTOR_INSTANCES} \
---jars 'scala/target/scala-2.12/replay_2.12-0.1.jar' \
+--jars 'replay/scala/target/scala-2.12/replay_2.12-0.1.jar' \
+--name ${EXPERIMENT} \
 "${SCRIPT}"
 
 # launch example:
-# ./experiments/submit.sh experiments/run_experiment.py
+# poetry build && ./experiments/submit.sh experiments/run_experiment.py
+# ./experiments/submit.sh experiments/run_experiment_two_fit.py
+# poetry build && ./experiments/submit.sh experiments/run_one_stage.py

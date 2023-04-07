@@ -174,3 +174,5 @@ airflow.yaml
 *.orig
 
 **/spark-warehouse/
+
+/experiments/old_dag.py

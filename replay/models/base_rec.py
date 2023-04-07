@@ -268,7 +268,11 @@ class BaseRecommender(ABC):
             train, test, item_features, "item_idx"
         )
         users = test.select("user_idx").distinct()
-        items = test.select("item_idx").distinct()
+        # items = test.select("item_idx").distinct()  # very interesting!
+        items = train.select("item_idx").distinct()  # very interesting!
+        print("items count", items.count())
+        print("users count", users.count())
+
         split_data = SplitData(
             train,
             test,

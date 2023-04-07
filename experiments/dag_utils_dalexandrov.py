@@ -180,7 +180,7 @@ class PartialTwoStageScenario(TwoStagesScenario):
                  ),
                  first_level_models: Optional[BaseRecommender] = None,
                  fallback_model: Optional[BaseRecommender] = PopRec(),
-                 use_first_level_models_feat: Union[List[bool], bool] = True,
+                 use_first_level_models_feat: Union[List[bool], bool] = False,
                  num_negatives: int = 100,
                  negatives_type: str = "first_level",
                  use_generated_features: bool = True,
@@ -838,8 +838,11 @@ def do_presplit_data(artifacts: ArtifactPaths, item_test_size: float,
             train_splitter=UserSplitter(item_test_size=item_test_size, shuffle=True, seed=42),  ## for fair comparison)
             presplitted_data=False
         )
-
-        scenario._split_data(artifacts.train)
+        if flt_exists and slp_exists:
+            logger.info(f"Datasets {artifacts.first_level_train_path}, {artifacts.second_level_positives_path} exist."
+                        f" Nothing to do.")
+        else:
+            scenario._split_data(artifacts.train)
         scenario._split_optimize(artifacts.first_level_train)
 
 
@@ -861,12 +864,16 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
         os.environ["MLFLOW_EXPERIMENT_ID"] = mlflow_experiments_id
         mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_ID", "delete"))
 
+        model_kwargs = FIRST_LEVELS_MODELS_PARAMS[model_class_name]
+
         if get_optimized_params:
             with open(os.path.join("file://", artifacts.base_path,
                                    f"best_params_{model_class_name}.pickle"), "rb") as f:
-                model_kwargs = pickle.load(f)[0][0]
-        else:
-            model_kwargs = FIRST_LEVELS_MODELS_PARAMS[model_class_name]
+                model_kwargs_opt = pickle.load(f)[0][0]
+                for par, par_val in model_kwargs_opt.items():
+                    model_kwargs[par] = par_val
+
+        # else:
 
         print("model params")
         print(model_kwargs)
@@ -889,7 +896,17 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                 mlflow.log_param("optimized", "False")
                 optimized_postfix = "default"
 
+            # for key, value in model_kwargs.items():
+            #     mlflow.log_param(str(key), str(value))
+
+
             first_level_model = _get_model(artifacts, model_class_name, model_kwargs)
+
+            print("Init args")
+            for init_arg_key, init_arg_value in first_level_model._init_args.items():
+                print(init_arg_key, init_arg_value)
+                mlflow.log_param(str(init_arg_key), str(init_arg_value))
+
 
             if artifacts.user_features is not None:
                 user_feature_transformer = load_transformer(artifacts.user_features_transformer_path)
@@ -1167,10 +1184,10 @@ def do_fit_predict_second_level_pure(
 
             roles = {"target": "target", "drop": ["user_idx", "item_idx", "na_i_log_features"]}
 
-            if "msd" in train_path:
-                # get dataset with negative sampling
-                print("get dataset with negative sampling")
-                train_path = train_path.replace(".parquet", "") + "_10neg.parquet"
+            # if "msd" in train_path:
+            #     # get dataset with negative sampling
+            #     print("get dataset with negative sampling")
+            #     train_path = train_path.replace(".parquet", "") + "_10neg.parquet"
             if outer_join:
                 print("outer_join")
                 train_path = train_path.replace(".parquet", "") + "_outer_join.parquet"
@@ -1578,7 +1595,9 @@ class DatasetCombiner:
             # new_train_df.count()
             # logger.info("count new is ok ")
             logger.info("Saving new parquet in ", combined_df_path)
-            new_train_df.write.parquet(combined_df_path)  # mode("overwrite")
+            cols = [c for c in new_train_df.columns if c not in ['user_factors', 'item_factors','factors_mult']]
+            new_train_df = new_train_df.select(*cols)
+            new_train_df.write.mode("overwrite").parquet(combined_df_path)  # mode("overwrite")
 
             logger.info("Saved")
 

@@ -58,6 +58,7 @@ def fit_predict_first_level_model_spark_submit(
         mlflow_experiments_id: str = "default",
         ):
     config_filename = f"task_config_{task_name}_{uuid.uuid4()}.pickle"
+
     with open(config_filename, "wb") as f:
         pickle.dump({
             "artifacts": artifacts,
@@ -167,7 +168,8 @@ def build_autorecsys_dag(
         # get_optimized_params: bool = False,
         # do_optimization: bool = False,
         k: int = 100,
-        model_name: str = "slama_fast"
+        model_name: str = "slama_fast",
+        sampling: int = 0,
 ):
     with DAG(
             dag_id=dag_id,
@@ -247,7 +249,7 @@ def build_autorecsys_dag(
             )
             return combiner
 
-        def second_level_model_task_pure(artifacts, model_name, combiner_suffix):
+        def second_level_model_task_pure(artifacts, model_name, combiner_suffix, sampling=0):
 
             combined_train_path = artifacts.make_path(f"combined_train_{combiner_suffix}.parquet")
             combined_predicts_path = artifacts.make_path(f"combined_predicts_{combiner_suffix}.parquet")
@@ -265,7 +267,7 @@ def build_autorecsys_dag(
                 cpu=EXTRA_BIG_CPU,
                 memory=EXTRA_BIG_MEMORY,
                 n=0,
-                sampling=0,
+                sampling=sampling,
                 mlflow_experiments_id=mlflow_exp_id)
 
             return second_level_model
@@ -291,11 +293,13 @@ def build_autorecsys_dag(
 
         second_level_model_task_pure_default = second_level_model_task_pure(artifacts_80,
                                                                             model_name,
-                                                                            combiner_suffix="4models_default")
+                                                                            combiner_suffix="4models_default",
+                                                                            sampling=sampling)
 
         second_level_model_task_pure_optimized = second_level_model_task_pure(artifacts_80,
                                                                               model_name,
-                                                                              combiner_suffix="4models_optimized")
+                                                                              combiner_suffix="4models_optimized",
+                                                                              sampling=sampling)
 
         chain(*first_level_models_100_default)
         chain(*first_level_models_100_optimization)
@@ -661,38 +665,38 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
 #     path_suffix="80_20_2"
 # )
 #
-msd_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
-    dag_id="msd_first_level_dag_submit_80_20",
-    mlflow_exp_id="222",
-    models=["als", "slim", "word2vec", "itemknn"],
-    dataset=DATASETS["msd"],
-    item_test_size=0.2,
-    path_suffix="80_20",
-    get_optimized_params=False,
-    do_optimization=False
-)
-
-msd_first_level_dag_submit_80_fair = build_fit_predict_first_level_models_dag(
-    dag_id="msd_first_level_dag_submit_fair",
-    mlflow_exp_id="222",
-    models=["als", "slim", "word2vec", "itemknn"],
-    dataset=DATASETS["msd"],
-    item_test_size=0.0,
-    path_suffix="fair",
-    get_optimized_params=False,
-    do_optimization=False
-)
-
-ml1m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
-    dag_id="ml1m_first_level_dag_submit_80_20",
-    mlflow_exp_id="222",
-    models=["als", "slim", "word2vec", "itemknn"],
-    dataset=DATASETS["ml1m"],
-    item_test_size=0.2,
-    path_suffix="80_20",
-    get_optimized_params=False,  # TODO: get default parameter if optimized not found
-    do_optimization=False
-)
+# msd_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
+#     dag_id="msd_first_level_dag_submit_80_20",
+#     mlflow_exp_id="222",
+#     models=["als", "slim", "word2vec", "itemknn"],
+#     dataset=DATASETS["msd"],
+#     item_test_size=0.2,
+#     path_suffix="80_20",
+#     get_optimized_params=False,
+#     do_optimization=False
+# )
+#
+# msd_first_level_dag_submit_80_fair = build_fit_predict_first_level_models_dag(
+#     dag_id="msd_first_level_dag_submit_fair",
+#     mlflow_exp_id="222",
+#     models=["als", "slim", "word2vec", "itemknn"],
+#     dataset=DATASETS["msd"],
+#     item_test_size=0.0,
+#     path_suffix="fair",
+#     get_optimized_params=False,
+#     do_optimization=False
+# )
+#
+# ml1m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
+#     dag_id="ml1m_first_level_dag_submit_80_20",
+#     mlflow_exp_id="222",
+#     models=["als", "slim", "word2vec", "itemknn"],
+#     dataset=DATASETS["ml1m"],
+#     item_test_size=0.2,
+#     path_suffix="80_20",
+#     get_optimized_params=False,  # TODO: get default parameter if optimized not found
+#     do_optimization=False
+# )
 
 # ml25m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
 #     dag_id="ml25m_first_level_dag_submit_80",
@@ -727,27 +731,27 @@ ml1m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
 # )
 
 
-ml25m_first_level_dag_submit_80_opt = build_fit_predict_first_level_models_dag(
-    dag_id="ml25m_first_level_dag_submit_80_opt",
-    mlflow_exp_id="222",
-    models=["als", "slim", "word2vec"],
-    dataset=DATASETS["ml25m"],
-    item_test_size=0.2,
-    path_suffix="80_20",
-    get_optimized_params=False,
-    do_optimization=True
-)
-
-ml25m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
-    dag_id="ml25m_first_level_dag_submit_80",
-    mlflow_exp_id="222",
-    models=["als", "slim", "word2vec", "itemknn"],
-    dataset=DATASETS["ml25m"],
-    item_test_size=0.2,
-    path_suffix="80_20",
-    get_optimized_params=False,
-    do_optimization=False
-)
+# ml25m_first_level_dag_submit_80_opt = build_fit_predict_first_level_models_dag(
+#     dag_id="ml25m_first_level_dag_submit_80_opt",
+#     mlflow_exp_id="222",
+#     models=["als", "slim", "word2vec"],
+#     dataset=DATASETS["ml25m"],
+#     item_test_size=0.2,
+#     path_suffix="80_20",
+#     get_optimized_params=False,
+#     do_optimization=True
+# )
+#
+# ml25m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
+#     dag_id="ml25m_first_level_dag_submit_80",
+#     mlflow_exp_id="222",
+#     models=["als", "slim", "word2vec", "itemknn"],
+#     dataset=DATASETS["ml25m"],
+#     item_test_size=0.2,
+#     path_suffix="80_20",
+#     get_optimized_params=False,
+#     do_optimization=False
+# )
 
 # ml1m_first_level_dag_submit_80_train_opt = build_fit_predict_first_level_models_dag(
 #     dag_id="ml1m_first_level_dag_submit_80_20_train_opt",
@@ -762,120 +766,129 @@ ml25m_first_level_dag_submit_80 = build_fit_predict_first_level_models_dag(
 #     optimize=False
 # )
 
-ml1m_first_level_dag_submit_80_train_opt = build_fit_predict_first_level_models_dag(
-    dag_id="ml1m_first_level_dag_submit_80_20_train_opt",
-    mlflow_exp_id="222",
-    models=["als", "slim", "word2vec"],
-    dataset=DATASETS["ml1m"],
-    item_test_size=0.2,
-    path_suffix="80_20",
-    get_optimized_params=True,  # TODO: get default parameter if optimized not found
-    do_optimization=False
-)
+# ml1m_first_level_dag_submit_80_train_opt = build_fit_predict_first_level_models_dag(
+#     dag_id="ml1m_first_level_dag_submit_80_20_train_opt",
+#     mlflow_exp_id="222",
+#     models=["als", "slim", "word2vec"],
+#     dataset=DATASETS["ml1m"],
+#     item_test_size=0.2,
+#     path_suffix="80_20",
+#     get_optimized_params=True,  # TODO: get default parameter if optimized not found
+#     do_optimization=False
+# )
+#
+# ml25m_first_level_dag_submit_80_train_opt = build_fit_predict_first_level_models_dag(
+#     dag_id="ml25m_first_level_dag_submit_80_20_train_opt",
+#     mlflow_exp_id="222",
+#     models=["als", "slim", "word2vec"],
+#     dataset=DATASETS["ml25m"],
+#     item_test_size=0.2,
+#     path_suffix="80_20",
+#     get_optimized_params=True,  # TODO: get default parameter if optimized not found
+#     do_optimization=False
+# )
+#
+# # second lvl DAGS
+# ml1m_combined_second_level_dag_80 = build_combiner_second_level(
+#     dag_id="ml1m_combined_second_level_dag_4models_80_20",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["ml1m"],
+#     path_suffix="80_20",
+#     model_name="slama_fast"
+# )
+#
+# ml25m_combined_second_level_dag_80 = build_combiner_second_level(
+#     dag_id="ml25m_combined_second_level_dag_4models_80_20",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["ml25m"],
+#     path_suffix="80_20",
+#     model_name="longer_slama_default"
+#
+# )
+#
+# msd_combined_second_level_dag_80 = build_combiner_second_level(
+#     dag_id="msd_combined_second_level_dag_4models_80_20",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["msd"],
+#     path_suffix="80_20",
+#     model_name="longer_slama_default"
+# )
+#
+# netflix_combined_second_level_dag_80 = build_combiner_second_level(
+#     dag_id="netflix_combined_second_level_dag_4models_80_20_fi",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["netflix"],
+#     path_suffix="80_20",
+#     model_name="longer_slama_default"
+# )
+#
+# msd_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
+#     dag_id="msd_combined_second_level_dag_4models_80_20_pure",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["msd"],
+#     path_suffix="80_20",
+#     model_name="slama_fast"
+# )
+#
+# ml1m_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
+#     dag_id="ml1m_combined_second_level_dag_4models_80_20_pure",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["ml1m"],
+#     path_suffix="80_20",
+#     model_name="slama_fast",
+#     sampling=1
+# )
+#
+# ml25m_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
+#     dag_id="ml25m_combined_second_level_dag_4models_80_20_pure",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["ml25m"],
+#     path_suffix="80_20",
+#     model_name="slama_fast",
+#     sampling=0
+# )
+#
+# netflix_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
+#     dag_id="netflix_combined_second_level_dag_4models_80_20_pure",
+#     mlflow_exp_id="two_stage_cluster",
+#     dataset=DATASETS["netflix"],
+#     path_suffix="80_20",
+#     model_name="slama_fast"
+# )
 
-ml25m_first_level_dag_submit_80_train_opt = build_fit_predict_first_level_models_dag(
-    dag_id="ml25m_first_level_dag_submit_80_20_train_opt",
-    mlflow_exp_id="222",
-    models=["als", "slim", "word2vec"],
-    dataset=DATASETS["ml25m"],
-    item_test_size=0.2,
-    path_suffix="80_20",
-    get_optimized_params=True,  # TODO: get default parameter if optimized not found
-    do_optimization=False
-)
-
-# second lvl DAGS
-ml1m_combined_second_level_dag_80 = build_combiner_second_level(
-    dag_id="ml1m_combined_second_level_dag_4models_80_20",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["ml1m"],
-    path_suffix="80_20",
-    model_name="slama_fast"
-)
-
-ml25m_combined_second_level_dag_80 = build_combiner_second_level(
-    dag_id="ml25m_combined_second_level_dag_4models_80_20",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["ml25m"],
-    path_suffix="80_20",
-    model_name="longer_slama_default"
-
-)
-
-msd_combined_second_level_dag_80 = build_combiner_second_level(
-    dag_id="msd_combined_second_level_dag_4models_80_20",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["msd"],
-    path_suffix="80_20",
-    model_name="longer_slama_default"
-)
-
-netflix_combined_second_level_dag_80 = build_combiner_second_level(
-    dag_id="netflix_combined_second_level_dag_4models_80_20_fi",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["netflix"],
-    path_suffix="80_20",
-    model_name="longer_slama_default"
-)
-
-msd_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
-    dag_id="msd_combined_second_level_dag_4models_80_20_pure",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["msd"],
-    path_suffix="80_20",
-    model_name="slama_fast"
-)
-
-ml1m_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
-    dag_id="ml1m_combined_second_level_dag_4models_80_20_pure",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["ml1m"],
-    path_suffix="80_20",
-    model_name="slama_fast",
-    sampling=1
-)
-
-ml25m_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
-    dag_id="ml25m_combined_second_level_dag_4models_80_20_pure",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["ml25m"],
-    path_suffix="80_20",
-    model_name="slama_fast",
-    sampling=0
-)
-
-netflix_combined_second_level_dag_80_pure = build_combiner_second_level_pure(
-    dag_id="netflix_combined_second_level_dag_4models_80_20_pure",
-    mlflow_exp_id="two_stage_cluster",
-    dataset=DATASETS["netflix"],
-    path_suffix="80_20",
-    model_name="slama_fast"
-)
-
-ml1m_autorecsys = build_autorecsys_dag(
-    dag_id="ml1m_autorecsys_dag_4models",
-    mlflow_exp_id="autorecsys",
-    dataset=DATASETS["ml1m"],
-    model_name="slama_fast",
-    models=["als", "slim", "word2vec", "itemknn"]
-)
+# ml1m_autorecsys = build_autorecsys_dag(
+#     dag_id="ml1m_autorecsys_dag_4models",
+#     mlflow_exp_id="autorecsys_test",
+#     dataset=DATASETS["ml1m"],
+#     model_name="slama_fast",
+#     models=["als", "slim", "word2vec", "itemknn"]
+# )
 
 
 ml25m_autorecsys = build_autorecsys_dag(
     dag_id="ml25m_autorecsys_dag_4models",
-    mlflow_exp_id="autorecsys",
+    mlflow_exp_id="autorecsys_test",
     dataset=DATASETS["ml25m"],
     model_name="longer_slama_default",
     models=["als", "slim", "word2vec", "itemknn"]
 )
-
+#
 netflix_autorecsys = build_autorecsys_dag(
     dag_id="netflix_autorecsys_dag_4models",
-    mlflow_exp_id="autorecsys",
+    mlflow_exp_id="autorecsys_test",
     dataset=DATASETS["netflix"],
     model_name="longer_slama_default",
     models=["als", "slim", "word2vec", "itemknn"]
 )
+#
+# msd_autorecsys = build_autorecsys_dag(
+#     dag_id="msd_autorecsys_dag_4models",
+#     mlflow_exp_id="autorecsys_test",
+#     dataset=DATASETS["msd"],
+#     model_name="longer_slama_default",
+#     models=["als", "slim", "word2vec", "itemknn"],
+#     sampling=10
+# )
 
 # ml1m_combined_second_level_dag_80_cv1 = build_combiner_second_level(
 #     dag_id="ml1m_combined_second_level_dag_4models_80_20_cv1",

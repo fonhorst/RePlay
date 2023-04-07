@@ -108,6 +108,9 @@ def eval_quality(
     logger.debug("Calculating criterion")
     criterion_value = criterion(recs, split_data.test, k)
     logger.debug("%s=%.6f", criterion, criterion_value)
+    print(criterion, criterion_value)
+    print("="*100)
+
     return criterion_value
 
 
@@ -132,6 +135,15 @@ def scenario_objective_calculator(
     """
     params_for_trial = suggest_params(trial, search_space)
     recommender.set_params(**params_for_trial)
+    print("Set params")
+    # print("="*100)
+    # print("rank")
+    # print(recommender.rank)
+    # print("_hnswlib_params")
+    for key, val in params_for_trial.items():
+        print(key, val)
+
+    # print(recommender._hnswlib_params)
     return eval_quality(split_data, recommender, criterion, k)
 
 
@@ -190,6 +202,12 @@ class ItemKNNObjective:
         """
         params_for_trial = suggest_params(trial, search_space)
         recommender.set_params(**params_for_trial)
+        print("Set params")
+        print("=" * 100)
+        print("num_neighbours")
+        print(recommender.num_neighbours)
+        print("_nmslib_hnsw_params")
+        print(recommender._nmslib_hnsw_params)
         recommender.fit_users = split_data.train.select("user_idx").distinct()
         recommender.fit_items = split_data.train.select("item_idx").distinct()
         similarity = recommender._shrink(self.dot_products, recommender.shrink)
@@ -208,6 +226,8 @@ class ItemKNNObjective:
         logger.debug("Calculating criterion")
         criterion_value = criterion(recs, split_data.test, k)
         logger.debug("%s=%.6f", criterion, criterion_value)
+        print(criterion, criterion_value)
+
         return criterion_value
 
     def __call__(self, trial: Trial) -> float:

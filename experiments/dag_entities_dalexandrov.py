@@ -78,7 +78,7 @@ FIRST_LEVELS_MODELS_PARAMS = {
         "seed": 42,
         "hnswlib_params": hnswlib_params,
     },
-    "replay.models.knn.ItemKNN": {"num_neighbours": 100}, #!!!was 1000
+    "replay.models.knn.ItemKNN": {"num_neighbours": 100},
     "replay.models.cluster.ClusterRec": {"num_clusters": 100},
     "replay.models.slim.SLIM": {"seed": 42,},
                                 # "hnswlib_params": nmslib_hnsw_params},
@@ -93,12 +93,12 @@ FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
     "replay.models.als.ALSWrap": {
         "rank": [10, 300]
     },
-    "replay.models.knn.ItemKNN": {"num_neighbours": [50, 200], #!!!was 1000
+    "replay.models.knn.ItemKNN": {"num_neighbours": [50, 1000],  # !!!was 1000
                                   # "weighting": [None, 'tf_idf', 'bm25'],
                                   # "shrink": [0, 0.1]},
                                   },
-    "replay.models.slim.SLIM": {"beta": [0.01, 0.1],
-                                "lambda_": [0.01, 0.1]},
+    "replay.models.slim.SLIM": {"beta": [1e-6, 1], # 1e-6, 5 #0.01, 0.1
+                                "lambda_": [1e-6, 1]}, # [1e-6, 2] #0.01, 0.1
     "replay.models.word2vec.Word2VecRec": {
         "rank": [10, 300],
         # "min_count": [3, 10],
@@ -263,7 +263,7 @@ YARN_SUBMIT_CONF = {
     "spark.driver.maxResultSize": "5g",
     "spark.executor.instances": "16",
     "spark.executor.cores": "6",
-    "spark.executor.memory": "24g",
+    "spark.executor.memory": "20g",
     "spark.cores.max": "48",
     "spark.memory.fraction": "0.4",
     "spark.sql.shuffle.partitions": f"{48 * 3}",

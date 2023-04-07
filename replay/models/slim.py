@@ -104,7 +104,9 @@ class SLIM(NeighbourRec):
             .session.createDataFrame(pandas_log.item_idx, st.IntegerType())
             .withColumnRenamed("value", "item_idx_one")
         )
-
+        # DEBUG
+        # similarity = similarity.limit(10)
+        #
         alpha = self.beta + self.lambda_
         l1_ratio = self.lambda_ / alpha
 
@@ -124,6 +126,7 @@ class SLIM(NeighbourRec):
             :param pandas_df: pd.Dataframe
             :return: pd.Dataframe
             """
+            k = 100
             idx = int(pandas_df["item_idx_one"][0])
             column = interactions_matrix[:, idx]
             column_arr = column.toarray().ravel()
@@ -131,15 +134,47 @@ class SLIM(NeighbourRec):
                 interactions_matrix[:, idx].nonzero()[0], idx
             ] = 0
 
+            # print("data to fit X: (interaction matrix)")
+            # print(interactions_matrix.count_nonzero())
+            # print("data to fix Y: (column_arr)")
+            # print("total size")
+            # print(column_arr.size)
+            # print("total positives")
+            # print(np.count_nonzero(column_arr))
+
+            # zero_idx = np.where(column_arr == 0)[0]
+            # sample_size = int(k * column_arr.nonzero()[0].size)
+            # if sample_size > zero_idx.size:
+            #     sample_size = zero_idx.size
+            # zero_idx_new = np.random.choice(zero_idx, size=sample_size, replace=False)
+            # new_idx = np.concatenate((column_arr.nonzero()[0], zero_idx_new), axis=0)
+            # column_arr = column_arr[new_idx]
+            # interactions_matrix = interactions_matrix[new_idx, :]
+            # print("total size")
+            # print(column_arr.size)
+            # print("total positives")
+            # print(np.count_nonzero(column_arr))
+            # End of sampling
             regression.fit(interactions_matrix, column_arr)
+            # regression.fit(interactions_matrix[new_idx, :], column_arr)  # перемешались индексы
             interactions_matrix[:, idx] = column
+            # print("regression coef_")
+            # print(np.count_nonzero(regression.coef_))
+            # print(regression.coef_)
             good_idx = np.argwhere(regression.coef_ > 0).reshape(-1)
+            # print("good_idx")
+            # print(good_idx)
+            # good_idx = new_idx[good_idx]  # for index mapping
+            # print("good_idx")
+            # print(good_idx)
             good_values = regression.coef_[good_idx]
             similarity_row = {
                 "item_idx_one": good_idx,
                 "item_idx_two": idx,
                 "similarity": good_values,
             }
+            # print("similarity row")
+            # print(similarity_row)
             return pd.DataFrame(data=similarity_row)
 
         self.similarity = similarity.groupby("item_idx_one").applyInPandas(
@@ -147,7 +182,7 @@ class SLIM(NeighbourRec):
             "item_idx_one int, item_idx_two int, similarity double",
         )
         self.similarity.cache().count()
-
+        # assert False
     # pylint: disable=too-many-arguments
     def _predict(
         self,
