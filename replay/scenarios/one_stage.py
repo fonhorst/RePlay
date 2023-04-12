@@ -27,6 +27,9 @@ from replay.utils import (
     unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
     cache_and_materialize_if_in_debug, JobGroupWithMetrics,
 )
+from replay.time import Timer
+from replay.model_handler import save, load
+
 logger = logging.getLogger("replay")
 
 
@@ -142,7 +145,8 @@ class OneStageScenario(HybridRecommender):
         custom_features_processor: HistoryBasedFeaturesProcessor = None,
         seed: int = 123,
         is_trial: bool = False,
-        experiment: Experiment = None
+        experiment: Experiment = None,
+        timeout: int = None
     ) -> None:
         """
 
@@ -186,8 +190,9 @@ class OneStageScenario(HybridRecommender):
         self._job_group_id = ""
         self._experiment = experiment
         self._is_trial = is_trial
+        if timeout:
+            self.timer = Timer(timeout=timeout)
 
-    # TO DO: add save/load for scenarios
     @property
     def _init_args(self):
         return {}
@@ -282,81 +287,6 @@ class OneStageScenario(HybridRecommender):
         if dataframe is None:
             return dataframe
         return dataframe.filter(condition)
-
-    def _predict_with_first_level_model(
-        self,
-        model: BaseRecommender,
-        log: DataFrame,
-        k: int,
-        users: DataFrame,
-        items: DataFrame,
-        user_features: DataFrame,
-        item_features: DataFrame,
-        log_to_filter: DataFrame,
-        prediction_label: str = ''
-    ) -> DataFrame:
-        """
-        Filter users and items using can_predict_cold_items and can_predict_cold_users, and predict
-        """
-        if not model.can_predict_cold_items:
-            log, items, item_features = [
-                self._filter_or_return(
-                    dataframe=df,
-                    condition=sf.col("item_idx") < self.first_level_item_len,
-                )
-                for df in [log, items, item_features]
-            ]
-        if not model.can_predict_cold_users:
-            log, users, user_features = [
-                self._filter_or_return(
-                    dataframe=df,
-                    condition=sf.col("user_idx") < self.first_level_user_len,
-                )
-                for df in [log, users, user_features]
-            ]
-
-        log_to_filter_cached = join_with_col_renaming(
-            left=log_to_filter,
-            right=users,
-            on_col_name="user_idx",
-        ).cache()
-        max_positives_to_filter = 0
-
-        with JobGroupWithMetrics(self._job_group_id, "calculating_max_positives_to_filter"):
-            if log_to_filter_cached.count() > 0:
-                max_positives_to_filter = (
-                    log_to_filter_cached.groupBy("user_idx")
-                    .agg(sf.count("item_idx").alias("num_positives"))
-                    .select(sf.max("num_positives"))
-                    .collect()[0][0]
-                )
-
-        with JobGroupWithMetrics(__file__, f"{type(model).__name__}._{prediction_label}_predict") as job_desc:
-            pred = model._inner_predict_wrap(
-                log,
-                k=k + max_positives_to_filter,
-                users=users,
-                items=items,
-                user_features=user_features,
-                item_features=item_features,
-                filter_seen_items=False,
-            )
-            cache_and_materialize_if_in_debug(pred, job_desc)
-
-        logger.info(f"{type(model).__name__} prediction: {pred}")
-        logger.info(f"Length of {type(model).__name__} prediction: {pred.count()}")
-
-        pred = pred.join(
-            log_to_filter_cached.select("user_idx", "item_idx"),
-            on=["user_idx", "item_idx"],
-            how="anti",
-        ).drop("user", "item")
-
-        # PERF - preventing potential losing time on repeated expensive computations
-        pred = pred.cache()
-        self.cached_list.extend([pred, log_to_filter_cached])
-
-        return get_top_k_recs(pred, k)
 
     # pylint: disable=too-many-locals,too-many-statements
     def _fit(
@@ -480,22 +410,44 @@ class OneStageScenario(HybridRecommender):
             # logger.info(f"model params : {model_params}")
             logger.debug("calculating metrics")
             self._experiment.add_result(f"{type(base_model).__name__}", recs)
+            # saving model
+            save(base_model, os.path.join("/tmp", f"model_{type(base_model).__name__}"), overwrite=True)
+            logger.debug(f"Model saved")
+            logger.info(f"Model {type(base_model).__name__} fitted")
+
+            if self._is_trial:
+                for dataframe in self.cached_list:
+                    logger.debug(f"unpersist if exists: {dataframe}")
+                    unpersist_if_exists(dataframe)
+                return
+
+            logger.info(f"Time left: {self.timer.time_left} sec")
+            logger.debug(f"time_limit_exceeded: {self.timer.time_limit_exceeded()}")
+
+            if self.timer.time_limit_exceeded():
+                logger.info("Time limit exceed")
+                if self._set_best_model:
+                    logger.info("comparing of fitted models")
+                    logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
+                    best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
+                    best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
+                    logger.info(f"best_model_name: {best_model_name}")
+                    # load best model
+                    self.best_model = load(os.path.join("/tmp", f"model_{type(base_model).__name__}"))
+                    return
+                else:
+                    logger.debug("Exit from fitting...")
+                    return
 
             # models_init_kwargs[MODEL_NAME_TO_FULL_MODEL_NAME[f"{type(base_model).__name__}"]] = model_params
         logger.debug(f"cached dataframes are: {self.cached_list}")
 
-        if self._is_trial:
-            for dataframe in self.cached_list:
-                logger.debug(f"unpersist if exists: {dataframe}")
-                unpersist_if_exists(dataframe)
-            return
+
 
         # Comparing models
         logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
         best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
-
         best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
-
         logger.info(f"best_model_name: {best_model_name}")
 
         def get_model(best_model_name: str) -> BaseRecommender:

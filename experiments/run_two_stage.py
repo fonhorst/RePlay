@@ -224,21 +224,21 @@ def main(spark: SparkSession, dataset_name: str):
 
         first_levels_models_params = {
             "replay.models.knn.ItemKNN": {"num_neighbours": int(os.environ.get("NUM_NEIGHBOURS", 100))},
-            "replay.models.als.ALSWrap": {
-                "rank": int(os.environ.get("ALS_RANK", 100)),
-                "seed": seed,
-                "num_item_blocks": int(os.environ.get("NUM_BLOCKS", 10)),
-                "num_user_blocks": int(os.environ.get("NUM_BLOCKS", 10)),
-                "hnswlib_params": {
-                    "space": "ip",
-                    "M": 100,
-                    "efS": 2000,
-                    "efC": 2000,
-                    "post": 0,
-                    "index_path": f"file:///tmp/als_hnswlib_index_{spark.sparkContext.applicationId}",
-                    "build_index_on": "executor",
-                },
-            },
+            # "replay.models.als.ALSWrap": {
+            #     "rank": int(os.environ.get("ALS_RANK", 100)),
+            #     "seed": seed,
+            #     "num_item_blocks": int(os.environ.get("NUM_BLOCKS", 10)),
+            #     "num_user_blocks": int(os.environ.get("NUM_BLOCKS", 10)),
+            #     "hnswlib_params": {
+            #         "space": "ip",
+            #         "M": 100,
+            #         "efS": 2000,
+            #         "efC": 2000,
+            #         "post": 0,
+            #         "index_path": f"file:///tmp/als_hnswlib_index_{spark.sparkContext.applicationId}",
+            #         "build_index_on": "executor",
+            #     },
+            # },
             "replay.models.word2vec.Word2VecRec": {
                 "rank": int(os.environ.get("WORD2VEC_RANK", 100)),
                 "seed": seed,
@@ -321,7 +321,7 @@ def main(spark: SparkSession, dataset_name: str):
         #     word2vec_model,
         # ]
         first_level_models = get_models(first_levels_models_params)
-        use_first_level_models_feat = [False, False, False]
+        use_first_level_models_feat = [False, False]
 
         assert len(first_level_models) == len(use_first_level_models_feat)
 
@@ -356,9 +356,9 @@ def main(spark: SparkSession, dataset_name: str):
             use_first_level_models_feat=use_first_level_models_feat,  # [True, False],
             second_model_type="slama",
             second_model_params=second_model_params,
-            # second_model_config_path=os.environ.get(
-            #     "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"
-            # ),
+            second_model_config_path=os.environ.get(
+                "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"
+            ),
             num_negatives=10,
             use_generated_features=True
         )

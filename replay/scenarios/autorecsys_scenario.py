@@ -2,6 +2,7 @@
 import logging
 import os
 import importlib
+import time
 
 from collections.abc import Iterable
 from typing import Dict, Optional, Tuple, List, Union, Any, cast
@@ -29,12 +30,14 @@ from replay.utils import (
 )
 from replay.scenarios import OneStageScenario, TwoStagesScenario
 from replay.splitters import Splitter, UserSplitter
-from experiments.experiment_utils import (
+from experiment_utils import (
     get_spark_configs_as_dict,
     check_number_of_allocated_executors,
     get_partition_num,
     get_models,
 )
+#experiments.
+
 from replay.time import Timer
 
 
@@ -120,8 +123,9 @@ class AutoRecSysScenario:
         #                                     "replay.models.slim.SLIM",
         #                                     "replay.models.knn.ItemKNN",
         #                                     "replay.models.word2vec.Word2VecRec"]
-        first_level_models_names_default = ["replay.models.als.ALSWrap",
-                                            "replay.models.knn.ItemKNN"]
+        first_level_models_names_default = ["replay.models.slim.SLIM",
+                                            "replay.models.knn.ItemKNN",
+                                            "replay.models.als.ALSWrap"]
 
         first_level_models_names_sparse = ["replay.models.knn.ItemKNN",
                                            "replay.models.als.ALSWrap",
@@ -166,7 +170,11 @@ class AutoRecSysScenario:
                     custom_features_processor=None,
                     num_negatives=10,
                     second_model_type="slama",
-                    second_model_params=second_model_params)
+                    # second_model_config_path="light_tabular_config.yml",
+                    second_model_params=second_model_params,
+                    second_model_config_path=os.environ.get(
+                        "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"),
+            )
 
         # TODO: add S2 condition
         else:
@@ -176,7 +184,8 @@ class AutoRecSysScenario:
                 first_level_models=first_level_models,
                 user_cat_features_list=None,
                 item_cat_features_list=None,
-                experiment=experiment
+                experiment=experiment,
+                timeout=self.timer.time_left
                 )
 
         return scenario
@@ -196,6 +205,7 @@ class AutoRecSysScenario:
         experiment = self.scenario.experiment
 
         # Determine which scenario will be next
+
         self.scenario = self.get_scenario(self, log=log, experiment=experiment)
         self.scenario.fit(log=log, user_features=user_features, item_features=item_features)
 

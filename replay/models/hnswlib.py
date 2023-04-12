@@ -299,8 +299,7 @@ class HnswlibMixin(ANNMixin):
             def infer_index(vectors: pd.Series) -> pd.DataFrame:
                 index_file_manager = index_file_manager_broadcast.value
                 index = index_file_manager.index
-                for val in vectors.values:
-                    logger.debug(f"vectors.value.shape: {val.shape}")
+                logger.debug(f"vectors comes to infer: {vectors}")
                 labels, distances = index.knn_query(
                     np.stack(vectors.values),
                     k=k,

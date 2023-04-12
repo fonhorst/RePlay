@@ -257,7 +257,6 @@ class TwoStagesScenario(HybridRecommender):
 
         self._job_group_id = ""
 
-    # TO DO: add save/load for scenarios
     @property
     def _init_args(self):
         return {}

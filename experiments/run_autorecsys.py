@@ -190,14 +190,14 @@ def main(spark: SparkSession, dataset_name: str):
                 },
             },
         }
-        mlflow.log_params(first_levels_models_params)
-
-        first_level_models = get_models(first_levels_models_params)
-
-        mlflow.log_param(
-            "first_level_models",
-            [type(m).__name__ for m in first_level_models],
-        )
+        # mlflow.log_params(first_levels_models_params)
+        #
+        # first_level_models = get_models(first_levels_models_params)
+        #
+        # mlflow.log_param(
+        #     "first_level_models",
+        #     [type(m).__name__ for m in first_level_models],
+        # )
         # mlflow.log_param(
         #     "use_first_level_models_feat", use_first_level_models_feat
         # )
@@ -205,7 +205,7 @@ def main(spark: SparkSession, dataset_name: str):
         scenario = AutoRecSysScenario(
             task="user2item",
             subtask="user_recs",
-            timeout=900,
+            timeout=50,
         )
 
         mlflow.log_param("timer", scenario.timer.timeout)
