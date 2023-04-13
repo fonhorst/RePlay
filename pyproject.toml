@@ -48,7 +48,8 @@ implicit = ">=0.5"
 nmslib = "*"
 hnswlib = "*"
 rs-datasets = "^0.5.1"
-sparklightautoml-dev = {path = "/home/dmitriy/Projects/LightAutoML_Spark/dist/sparklightautoml_dev-0.3.2.tar.gz"}
+sparklightautoml-dev = {path = "/home/dmitriy/Projects/LightAutoML_Spark/dist/sparklightautoml_dev-0.3.2-py3-none-any.whl"}
+hdfs3 = "^0.3.1"
 
 [tool.poetry.dev-dependencies]
 # dev only

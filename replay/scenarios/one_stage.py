@@ -146,7 +146,8 @@ class OneStageScenario(HybridRecommender):
         seed: int = 123,
         is_trial: bool = False,
         experiment: Experiment = None,
-        timeout: int = None
+        timeout: int = None,
+        set_best_model: bool = False
     ) -> None:
         """
 
@@ -192,6 +193,7 @@ class OneStageScenario(HybridRecommender):
         self._is_trial = is_trial
         if timeout:
             self.timer = Timer(timeout=timeout)
+        self._set_best_model = set_best_model
 
     @property
     def _init_args(self):
@@ -300,23 +302,27 @@ class OneStageScenario(HybridRecommender):
         self.cached_list = []
 
         # 1. Split train data to train-val parts for optimization and comparison
-        self.logger.info("Data splitting")
-        # print("Data splitting")
-        first_level_train, first_level_val = self._split_data(log)
-
-        self.first_level_item_len = (
-            first_level_train.select("item_idx").distinct().count()
-        )
-        self.first_level_user_len = (
-            first_level_train.select("user_idx").distinct().count()
-        )
-
         log.cache()
-        first_level_train.cache()
-        first_level_val.cache()
-        self.cached_list.extend(
-            [log, first_level_train, first_level_val]
-        )
+        self.cached_list.append(log)
+
+        if self._set_best_model:
+            self.logger.info("Data splitting")
+            first_level_train, first_level_val = self._split_data(log)
+
+        # self.first_level_item_len = (
+        #     first_level_train.select("item_idx").distinct().count()
+        # )
+        # self.first_level_user_len = (
+        #     first_level_train.select("user_idx").distinct().count()
+        # )
+
+            first_level_train.cache()
+            first_level_val.cache()
+            self.cached_list.extend(
+                [first_level_train, first_level_val]
+            )
+        else:
+            first_level_train = log
 
         # 2. Transform user and item features if applicable
         if user_features is not None:
@@ -348,14 +354,17 @@ class OneStageScenario(HybridRecommender):
         first_level_item_features = first_level_item_features.filter(sf.col("item_idx") < self.first_level_item_len) \
             if first_level_item_features is not None else None
 
+        self.first_level_user_features = first_level_user_features
+        self.first_level_item_features = first_level_item_features
+
+
         # 3. Fit first level models
-        logger.info(f"first_level_train: {str(first_level_train.columns)}")
+        # logger.info(f"first_level_train: {str(first_level_train.columns)}")
         # print(f"first_level_train: {str(first_level_train.columns)}")
         k = 100
 
-        resume = True
-        if not self._experiment:
-            resume = False
+        resume = True if self._experiment else False
+        if not self._experiment and self._set_best_model:
             self._experiment = Experiment(
                 first_level_val,
                 {
@@ -367,7 +376,7 @@ class OneStageScenario(HybridRecommender):
             "ItemKNN": "replay.models.knn.ItemKNN",
             "ALSWrap": "replay.models.als.ALSWrap",
             "Word2VecRec": "replay.models.word2vec.Word2VecRec",
-            "SLIM": "replay.models.slim.SLIM"}  # TODO: reactor this part
+            "SLIM": "replay.models.slim.SLIM"}  # TODO: refactor this part
 
         if self._is_trial:
             logger.info("Running trial model")
@@ -381,12 +390,18 @@ class OneStageScenario(HybridRecommender):
         first_level_models = self.first_level_models if not resume else self.first_level_models[1:]
 
         for base_model in first_level_models:
+            # logger.debug("start fitting")
+            # logger.debug(base_model.__dict__)
+
             with JobGroupWithMetrics(self._job_group_id, f"{type(base_model).__name__}._fit_wrap"):
                 base_model._fit_wrap(
                     log=first_level_train,
                     user_features=first_level_user_features,
                     item_features=first_level_item_features,
                 )
+
+            if not self._set_best_model:  # in the case when one stage is a part of the two stage
+                continue
 
             recs = base_model._predict(
                 log=log,
@@ -411,13 +426,13 @@ class OneStageScenario(HybridRecommender):
             logger.debug("calculating metrics")
             self._experiment.add_result(f"{type(base_model).__name__}", recs)
             # saving model
+            logger.debug("Saving model...")
             save(base_model, os.path.join("/tmp", f"model_{type(base_model).__name__}"), overwrite=True)
             logger.debug(f"Model saved")
             logger.info(f"Model {type(base_model).__name__} fitted")
 
             if self._is_trial:
                 for dataframe in self.cached_list:
-                    logger.debug(f"unpersist if exists: {dataframe}")
                     unpersist_if_exists(dataframe)
                 return
 
@@ -439,43 +454,38 @@ class OneStageScenario(HybridRecommender):
                     logger.debug("Exit from fitting...")
                     return
 
-            # models_init_kwargs[MODEL_NAME_TO_FULL_MODEL_NAME[f"{type(base_model).__name__}"]] = model_params
-        logger.debug(f"cached dataframes are: {self.cached_list}")
+        if self._set_best_model:
+            # Comparing models
+            logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
+            best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
+            best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
+            logger.info(f"best_model_name: {best_model_name}")
 
+            def get_model(best_model_name: str) -> BaseRecommender:
 
+                module_name = ".".join(best_model_name.split('.')[:-1])
+                class_name = best_model_name.split('.')[-1]
+                module = importlib.import_module(module_name)
+                clazz = getattr(module, class_name)
+                base_model = cast(BaseRecommender, clazz(**models_init_kwargs[best_model_name]))
 
-        # Comparing models
-        logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
-        best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
-        best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
-        logger.info(f"best_model_name: {best_model_name}")
+                return base_model
 
-        def get_model(best_model_name: str) -> BaseRecommender:
+            best_model = get_model(best_model_name)
+            logger.info(f"Fitting the best model: {best_model_name}")
+            best_model._fit_wrap(
+                log=log,
+                user_features=first_level_user_features,
+                item_features=first_level_item_features,
+            )
 
-            module_name = ".".join(best_model_name.split('.')[:-1])
-            class_name = best_model_name.split('.')[-1]
-            module = importlib.import_module(module_name)
-            clazz = getattr(module, class_name)
-            base_model = cast(BaseRecommender, clazz(**models_init_kwargs[best_model_name]))
-
-            return base_model
-
-        best_model = get_model(best_model_name)
-        logger.info(f"Fitting the best model: {best_model_name}")
-        best_model._fit_wrap(
-            log=log,
-            user_features=first_level_user_features,
-            item_features=first_level_item_features,
-        )
-
-        self.best_model = best_model
+            self.best_model = best_model
 
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
-        logger.debug(f"cached dataframes are: {self.cached_list}")
 
+        logger.debug(self.first_level_models[0].__dict__)
         for dataframe in self.cached_list:
-            logger.debug(f"unpersist if exists: {dataframe}")
             unpersist_if_exists(dataframe)
 
     # pylint: disable=too-many-arguments

@@ -51,15 +51,15 @@ first_levels_models_params = {
                 "seed": 42,
                 "num_item_blocks": 10,
                 "num_user_blocks": 10,
-                "hnswlib_params": {
-                    "space": "ip",
-                    "M": 100,
-                    "efS": 2000,
-                    "efC": 2000,
-                    "post": 0,
-                    "index_path": f"file:///tmp/als_hnswlib_index",
-                    "build_index_on": "executor",
-                },
+                # "hnswlib_params": {
+                #     "space": "ip",
+                #     "M": 100,
+                #     "efS": 2000,
+                #     "efC": 2000,
+                #     "post": 0,
+                #     "index_path": f"file:///tmp/als_hnswlib_index_123",
+                #     "build_index_on": "executor",
+                # },
             },
             "replay.models.word2vec.Word2VecRec": {
                 "rank": 100,
@@ -70,7 +70,7 @@ first_levels_models_params = {
                     "efS": 2000,
                     "efC": 2000,
                     "post": 0,
-                    "index_path": f"file:///tmp/word2vec_hnswlib_index",
+                    "index_path": f"file:///tmp/word2vec_hnswlib_index_123",
                     "build_index_on": "executor",
                 },
             },
@@ -107,9 +107,6 @@ class AutoRecSysScenario:
         self.task = task
         self.subtask = subtask
         self.timer = Timer(timeout=timeout)
-        # self.scenario = self.get_scenario(self,
-        #                                   log=log,
-        #                                   use_two_stage=True)
 
     @staticmethod
     def get_scenario(
@@ -123,9 +120,10 @@ class AutoRecSysScenario:
         #                                     "replay.models.slim.SLIM",
         #                                     "replay.models.knn.ItemKNN",
         #                                     "replay.models.word2vec.Word2VecRec"]
-        first_level_models_names_default = ["replay.models.slim.SLIM",
+        first_level_models_names_default = ["replay.models.als.ALSWrap",
+                                            "replay.models.slim.SLIM",
                                             "replay.models.knn.ItemKNN",
-                                            "replay.models.als.ALSWrap"]
+                                            ]
 
         first_level_models_names_sparse = ["replay.models.knn.ItemKNN",
                                            "replay.models.als.ALSWrap",
@@ -142,7 +140,8 @@ class AutoRecSysScenario:
                 first_level_models=first_level_models[0],
                 user_cat_features_list=None,
                 item_cat_features_list=None,
-                is_trial=is_trial
+                is_trial=is_trial,
+                set_best_model=True
             )
             return scenario
 
@@ -185,7 +184,8 @@ class AutoRecSysScenario:
                 user_cat_features_list=None,
                 item_cat_features_list=None,
                 experiment=experiment,
-                timeout=self.timer.time_left
+                timeout=self.timer.time_left,
+                set_best_model=True
                 )
 
         return scenario
