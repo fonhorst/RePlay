@@ -194,6 +194,7 @@ class OneStageScenario(HybridRecommender):
         if timeout:
             self.timer = Timer(timeout=timeout)
         self._set_best_model = set_best_model
+        self.fitted_models = []
 
     @property
     def _init_args(self):
@@ -357,10 +358,8 @@ class OneStageScenario(HybridRecommender):
         self.first_level_user_features = first_level_user_features
         self.first_level_item_features = first_level_item_features
 
-
         # 3. Fit first level models
-        # logger.info(f"first_level_train: {str(first_level_train.columns)}")
-        # print(f"first_level_train: {str(first_level_train.columns)}")
+
         k = 100
 
         resume = True if self._experiment else False
@@ -390,8 +389,6 @@ class OneStageScenario(HybridRecommender):
         first_level_models = self.first_level_models if not resume else self.first_level_models[1:]
 
         for base_model in first_level_models:
-            # logger.debug("start fitting")
-            # logger.debug(base_model.__dict__)
 
             with JobGroupWithMetrics(self._job_group_id, f"{type(base_model).__name__}._fit_wrap"):
                 base_model._fit_wrap(
@@ -400,7 +397,19 @@ class OneStageScenario(HybridRecommender):
                     item_features=first_level_item_features,
                 )
 
+            self.fitted_models.append(f"{type(base_model).__name__}")
             if not self._set_best_model:  # in the case when one stage is a part of the two stage
+                logger.info(f"Time left: {self.timer.time_left} sec")
+                logger.debug(f"time_limit_exceeded: {self.timer.time_limit_exceeded()}")
+                if self.timer.time_limit_exceeded():
+                    logger.info("Time limit exceed")
+                    logger.debug("Exit from fitting one stage models...")
+                    self.first_level_models = [
+                        m for m in self.first_level_models if type(m).__name__ in self.fitted_models
+                    ]
+                    assert len(self.first_level_models) > 0, \
+                        "Two-stage scenario need at least one fitted first level model"
+                    return
                 continue
 
             recs = base_model._predict(
@@ -414,7 +423,6 @@ class OneStageScenario(HybridRecommender):
             )
 
             recs = get_top_k_recs(recs, k)
-
             recs_cnt = recs.count()
             logger.info(f"recs count: {recs_cnt}")
             mean_recs = recs.groupBy("user_idx").count().select("count").collect()[0][0]
@@ -441,18 +449,14 @@ class OneStageScenario(HybridRecommender):
 
             if self.timer.time_limit_exceeded():
                 logger.info("Time limit exceed")
-                if self._set_best_model:
-                    logger.info("comparing of fitted models")
-                    logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
-                    best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
-                    best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
-                    logger.info(f"best_model_name: {best_model_name}")
-                    # load best model
-                    self.best_model = load(os.path.join("/tmp", f"model_{type(base_model).__name__}"))
-                    return
-                else:
-                    logger.debug("Exit from fitting...")
-                    return
+                logger.info("comparing of fitted models")
+                logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
+                best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
+                best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
+                logger.info(f"best_model_name: {best_model_name}")
+                # load best model
+                self.best_model = load(os.path.join("/tmp", f"model_{type(base_model).__name__}"))
+                return
 
         if self._set_best_model:
             # Comparing models

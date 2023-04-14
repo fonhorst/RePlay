@@ -666,7 +666,6 @@ class TwoStagesScenario(HybridRecommender):
         # logger.debug(self.one_stage_scenario.first_level_models[0].similarity.count())
 
         for idx, model in enumerate(self.one_stage_scenario.first_level_models):
-            logger.debug(model.__dict__)
 
             with JobGroupWithMetrics(self._job_group_id, f"{type(model).__name__}._predict_with_first_level_model"):
                 candidates = self._predict_with_first_level_model(
@@ -685,7 +684,6 @@ class TwoStagesScenario(HybridRecommender):
                 candidates = candidates.cache()
                 candidates.write.mode("overwrite").format("noop").save()
                 self.cached_list.append(candidates)
-
                 partial_dfs.append(candidates)
 
         if mode == 'union':
@@ -737,7 +735,7 @@ class TwoStagesScenario(HybridRecommender):
         logger.info("Making missing predictions")
         extended_train_dfs = [
             make_missing_predictions(model, mpairs, partial_df)
-            for model, mpairs, partial_df in zip(self.one_stage_scenario.first_level_models, missing_pairs, partial_dfs)
+            for model, mpairs, partial_df in zip([self.one_stage_scenario.first_level_models], missing_pairs, partial_dfs)
         ]
 
         # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
@@ -783,7 +781,6 @@ class TwoStagesScenario(HybridRecommender):
                                     user_features=user_features,
                                     item_features=item_features)
 
-        logger.debug(self.one_stage_scenario.first_level_models[0].__dict__)
         # # 2. Transform user and item features if applicable
         # if user_features is not None:
         #     user_features.cache()
