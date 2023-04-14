@@ -156,7 +156,7 @@ class AutoRecSysScenario:
             scenario = None
             pass
             #  TODO: add S4 here
-        elif self.timer.time_left >= 10 * self.timer.time_spent:
+        elif self.timer.time_left >= 3 * self.timer.time_spent:  # was 10
             logger.info("Two-stage scenario with default hyperparameters for 1st level models have been chosen (S3)")
 
             scenario = TwoStagesScenario(

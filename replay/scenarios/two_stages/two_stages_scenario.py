@@ -664,6 +664,7 @@ class TwoStagesScenario(HybridRecommender):
         # logger.debug(self.one_stage_scenario.first_level_models[0].__dict__)
         # logger.debug("similarity matrix count")
         # logger.debug(self.one_stage_scenario.first_level_models[0].similarity.count())
+        logger.debug(f"fitted models are: {self.one_stage_scenario.fitted_models}")
 
         for idx, model in enumerate(self.one_stage_scenario.first_level_models):
 
