@@ -160,48 +160,6 @@ def main(spark: SparkSession, dataset_name: str):
 
         train = train.repartition(partition_num, "user_idx")
         test = test.repartition(partition_num, "user_idx")
-        # first_levels_models_params = {
-        #     "replay.models.knn.ItemKNN": {"num_neighbours": int(os.environ.get("NUM_NEIGHBOURS", 100))},
-        #     "replay.models.als.ALSWrap": {
-        #         "rank": int(os.environ.get("ALS_RANK", 100)),
-        #         "seed": seed,
-        #         "num_item_blocks": int(os.environ.get("NUM_BLOCKS", 10)),
-        #         "num_user_blocks": int(os.environ.get("NUM_BLOCKS", 10)),
-        #         "hnswlib_params": {
-        #             "space": "ip",
-        #             "M": 100,
-        #             "efS": 2000,
-        #             "efC": 2000,
-        #             "post": 0,
-        #             "index_path": f"file:///tmp/als_hnswlib_index_{spark.sparkContext.applicationId}",
-        #             "build_index_on": "executor",
-        #         },
-        #     },
-        #     "replay.models.word2vec.Word2VecRec": {
-        #         "rank": int(os.environ.get("WORD2VEC_RANK", 100)),
-        #         "seed": seed,
-        #         "hnswlib_params": {
-        #             "space": "ip",
-        #             "M": 100,
-        #             "efS": 2000,
-        #             "efC": 2000,
-        #             "post": 0,
-        #             "index_path": f"file:///tmp/word2vec_hnswlib_index_{spark.sparkContext.applicationId}",
-        #             "build_index_on": "executor",
-        #         },
-        #     },
-        # }
-        # mlflow.log_params(first_levels_models_params)
-        #
-        # first_level_models = get_models(first_levels_models_params)
-        #
-        # mlflow.log_param(
-        #     "first_level_models",
-        #     [type(m).__name__ for m in first_level_models],
-        # )
-        # mlflow.log_param(
-        #     "use_first_level_models_feat", use_first_level_models_feat
-        # )
 
         scenario = AutoRecSysScenario(
             task="user2item",
