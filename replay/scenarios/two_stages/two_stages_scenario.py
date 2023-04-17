@@ -169,6 +169,7 @@ class TwoStagesScenario(HybridRecommender):
         item_cat_features_list: Optional[List] = None,
         custom_features_processor: HistoryBasedFeaturesProcessor = None,
         seed: int = 123,
+        one_stage_timeout: int = None
     ) -> None:
         """
         :param train_splitter: splitter to get ``first_level_train`` and ``second_level_train``.
@@ -214,7 +215,8 @@ class TwoStagesScenario(HybridRecommender):
             first_level_models=first_level_models,
             user_cat_features_list=user_cat_features_list,
             item_cat_features_list=item_cat_features_list,
-            set_best_model=False
+            set_best_model=False,
+            timeout=one_stage_timeout
 
         )
 
@@ -736,7 +738,7 @@ class TwoStagesScenario(HybridRecommender):
         logger.info("Making missing predictions")
         extended_train_dfs = [
             make_missing_predictions(model, mpairs, partial_df)
-            for model, mpairs, partial_df in zip([self.one_stage_scenario.first_level_models], missing_pairs, partial_dfs)
+            for model, mpairs, partial_df in zip(self.one_stage_scenario.first_level_models, missing_pairs, partial_dfs)
         ]
 
         # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
@@ -905,7 +907,12 @@ class TwoStagesScenario(HybridRecommender):
         # 7. Fit the second level model
         logger.info(f"Fitting {type(self.second_stage_model).__name__} on {second_level_train_to_convert}")
         # second_level_train_to_convert.write.parquet("hdfs://node21.bdcl:9000/tmp/second_level_train_to_convert.parquet")
+
         with JobGroupWithMetrics(self._job_group_id, f"{type(self.second_stage_model).__name__}_fitting"):
+            if self.one_stage_scenario.timer is not None:
+                logger.debug(f"Setting timer for second level model: timeout {self.one_stage_scenario.timer.time_left}")
+                self.second_stage_model.model.timer._timeout = self.one_stage_scenario.timer.time_left
+
             self.second_stage_model.fit(second_level_train_to_convert)
 
         for dataframe in self.cached_list:
@@ -987,6 +994,8 @@ class TwoStagesScenario(HybridRecommender):
             )
 
         # 4. Rerank recommendations with the second level model and produce final version of recommendations
+        logger.debug(f"candidates df cols: {candidates_features}")
+        logger.debug(f"candidates df count(): {candidates_features.count()}")
         with JobGroupWithMetrics(self._job_group_id, f"{type(self.second_stage_model).__name__}_predict"):
             predictions = self.second_stage_model.predict(data=candidates_features, k=k)
 

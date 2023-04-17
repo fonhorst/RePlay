@@ -193,6 +193,8 @@ class OneStageScenario(HybridRecommender):
         self._is_trial = is_trial
         if timeout:
             self.timer = Timer(timeout=timeout)
+        else:
+            self.timer = None
         self._set_best_model = set_best_model
         self.fitted_models = []
 
@@ -399,6 +401,8 @@ class OneStageScenario(HybridRecommender):
 
             self.fitted_models.append(f"{type(base_model).__name__}")
             if not self._set_best_model:  # in the case when one stage is a part of the two stage
+                if self.timer is None:
+                    continue
                 logger.info(f"Time left: {self.timer.time_left} sec")
                 logger.debug(f"time_limit_exceeded: {self.timer.time_limit_exceeded()}")
                 if self.timer.time_limit_exceeded():

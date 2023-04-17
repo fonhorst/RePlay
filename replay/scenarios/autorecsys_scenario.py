@@ -122,7 +122,7 @@ class AutoRecSysScenario:
         #                                     "replay.models.word2vec.Word2VecRec"]
         first_level_models_names_default = ["replay.models.als.ALSWrap",
                                             "replay.models.slim.SLIM",
-                                            "replay.models.knn.ItemKNN",
+                                            # "replay.models.knn.ItemKNN",
                                             ]
 
         first_level_models_names_sparse = ["replay.models.knn.ItemKNN",
@@ -173,6 +173,7 @@ class AutoRecSysScenario:
                     second_model_params=second_model_params,
                     second_model_config_path=os.environ.get(
                         "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"),
+                    one_stage_timeout=self.timer.time_left
             )
 
         # TODO: add S2 condition

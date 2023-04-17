@@ -155,7 +155,7 @@ def main(spark: SparkSession, dataset_name: str):
         )
 
         logger.debug(f"partition num: {partition_num}")
-        train = train.limit(25_000)
+        train = train.limit(50_000)
         test = test.limit(25_000)
 
         train = train.repartition(partition_num, "user_idx")
