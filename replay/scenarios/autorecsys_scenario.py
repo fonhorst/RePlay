@@ -30,13 +30,12 @@ from replay.utils import (
 )
 from replay.scenarios import OneStageScenario, TwoStagesScenario
 from replay.splitters import Splitter, UserSplitter
-from experiment_utils import (
+from experiments.experiment_utils import (
     get_spark_configs_as_dict,
     check_number_of_allocated_executors,
     get_partition_num,
     get_models,
 )
-#experiments.
 
 from replay.time import Timer
 
@@ -93,6 +92,25 @@ second_model_params = {
 }
 
 
+FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
+    "replay.models.als.ALSWrap": {
+        "rank": [10, 300]
+    },
+    "replay.models.knn.ItemKNN": {
+        "num_neighbours": [50, 1000],
+                                  },
+    "replay.models.slim.SLIM": {
+        "beta": [1e-6, 1],  # 1e-6, 5 #0.01, 0.1
+        "lambda_": [1e-6, 1]  # [1e-6, 2] #0.01, 0.1
+    },
+    "replay.models.word2vec.Word2VecRec": {
+        "rank": [10, 300],
+        "window_size": [1, 3],
+        "use_idf": [True, False]
+    },
+}
+
+
 class AutoRecSysScenario:
 
     """
@@ -113,8 +131,9 @@ class AutoRecSysScenario:
             self,
             log: DataFrame,
             is_trial: bool = False,
-            experiment: Experiment = None) -> Union[OneStageScenario, TwoStagesScenario]:
+            experiment: Experiment = None) -> Tuple[Union[OneStageScenario, TwoStagesScenario], bool]:
 
+        ds_size = 5000
         # TODO: add choosing models order based on dataset statistics
         # first_level_models_names_default = ["replay.models.als.ALSWrap",
         #                                     "replay.models.slim.SLIM",
@@ -132,7 +151,7 @@ class AutoRecSysScenario:
 
         # TODO: refactor this part
         first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names_default})
-        # TODO: add heuristics for choosing the most appropriate scenario
+        do_optimization = None
 
         # 0 trial one-stage scenario
         if is_trial:
@@ -143,7 +162,8 @@ class AutoRecSysScenario:
                 is_trial=is_trial,
                 set_best_model=True
             )
-            return scenario
+            do_optimization = False
+            return scenario, do_optimization
 
         #  heuristics here ==========================================
 
@@ -154,9 +174,10 @@ class AutoRecSysScenario:
         if self.timer.time_left >= 100 * self.timer.time_spent:
             logger.info("Two-stage scenario with 1st level models optimization have been chosen (S4)")
             scenario = None
-            pass
+            do_optimization = True
+
             #  TODO: add S4 here
-        elif self.timer.time_left >= 3 * self.timer.time_spent:  # was 10
+        elif self.timer.time_left >= 3 * self.timer.time_spent and ds_size >= 10_000:  # was 10
             logger.info("Two-stage scenario with default hyperparameters for 1st level models have been chosen (S3)")
 
             scenario = TwoStagesScenario(
@@ -169,14 +190,27 @@ class AutoRecSysScenario:
                     custom_features_processor=None,
                     num_negatives=10,
                     second_model_type="slama",
-                    # second_model_config_path="light_tabular_config.yml",
                     second_model_params=second_model_params,
                     second_model_config_path=os.environ.get(
                         "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"),
                     one_stage_timeout=self.timer.time_left
             )
+            do_optimization = False
 
         # TODO: add S2 condition
+        elif self.timer.time_left >= 3 and ds_size < 10_000:
+            logger.info("One scenario with hyperparameters optimization have been chosen (S2)")
+
+            scenario = OneStageScenario(
+                first_level_models=first_level_models,
+                user_cat_features_list=None,
+                item_cat_features_list=None,
+                experiment=experiment,
+                timeout=self.timer.time_left,
+                set_best_model=True
+            )
+            do_optimization = True
+
         else:
             logger.info("One scenario with default hyperparameters have been chosen (S1)")
 
@@ -188,8 +222,9 @@ class AutoRecSysScenario:
                 timeout=self.timer.time_left,
                 set_best_model=True
                 )
+            do_optimization = False
 
-        return scenario
+        return scenario, do_optimization
 
     def fit(
         self,
@@ -201,13 +236,49 @@ class AutoRecSysScenario:
         logger.info(f"Time left: {self.timer.time_left}")
 
         # Fit the first model from 1st scenario
-        self.scenario = self.get_scenario(self, log=log, is_trial=True)
+        self.scenario, _ = self.get_scenario(self, log=log, is_trial=True)
         self.scenario.fit(log=log, user_features=user_features, item_features=item_features)
         experiment = self.scenario.experiment
 
         # Determine which scenario will be next
 
-        self.scenario = self.get_scenario(self, log=log, experiment=experiment)
+        self.scenario, do_optimization = self.get_scenario(self, log=log, experiment=experiment)
+
+        if do_optimization:
+            spark = State().session
+            first_level_train = spark.read.parquet("/tmp/first_level_train.parquet")
+            first_level_val = spark.read.parquet("/tmp/first_level_val.parquet")
+            # optimize first level models with saving best parameters
+
+            first_level_models_names_default = ["replay.models.als.ALSWrap",
+                                                "replay.models.slim.SLIM",
+                                                # "replay.models.knn.ItemKNN",
+                                                ]
+
+            param_borders = [
+                FIRST_LEVELS_MODELS_PARAMS_BORDERS[model_name] for model_name in first_level_models_names_default
+            ]
+            logger.debug(f"param borders is: {param_borders}")
+            param_found, fallback_params, metrics_values = self.scenario.optimize(
+                train=first_level_train,
+                test=first_level_val,
+                param_borders=[*param_borders, None],
+                k=10,  # TODO: get from class
+                budget=3,  # TODO: change
+                criterion=NDCG()
+            )
+
+            if type(self.scenario).__name__ == "OneStageScenario":
+
+                logger.debug("choosing the best model inside optimization step: OneStageScenario")
+                logger.debug(f"models metric values are: {metrics_values}")
+                # choosing the best one model
+                best_model_index = metrics_values.index(max(metrics_values))
+                self.scenario.best_model = self.scenario.first_level_models[best_model_index]
+
+            else:
+                logger.error("not implemented")
+
         self.scenario.fit(log=log, user_features=user_features, item_features=item_features)
 
     def predict(

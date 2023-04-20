@@ -93,7 +93,7 @@ class BaseRecommender(ABC):
         k: int = 10,
         budget: int = 10,
         new_study: bool = True,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
         """
         Searches best parameters with optuna.
 
@@ -115,7 +115,7 @@ class BaseRecommender(ABC):
             self.logger.warning(
                 "%s has no hyper parameters to optimize", str(self)
             )
-            return None
+            return None, None
 
         if self.study is None or new_study:
             self.study = create_study(
@@ -143,7 +143,8 @@ class BaseRecommender(ABC):
         self.study.optimize(objective, budget)
         best_params = self.study.best_params
         self.set_params(**best_params)
-        return best_params
+        best_value = self.study.best_value
+        return best_params, best_value
 
     @property
     @abstractmethod

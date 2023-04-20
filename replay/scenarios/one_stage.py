@@ -13,7 +13,7 @@ from replay.constants import AnyDataFrame
 from replay.data_preparator import ToNumericFeatureTransformer
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.metrics import Metric, Precision, NDCG
-from replay.models import ALSWrap
+from replay.models import ALSWrap, PopRec
 from replay.models.base_rec import BaseRecommender, HybridRecommender
 from replay.session_handler import State
 from replay.splitters import Splitter, UserSplitter
@@ -140,6 +140,7 @@ class OneStageScenario(HybridRecommender):
         first_level_models: Union[
             List[BaseRecommender], BaseRecommender
         ] = ALSWrap(rank=128),
+        fallback_model: Optional[BaseRecommender] = PopRec(),
         user_cat_features_list: Optional[List] = None,
         item_cat_features_list: Optional[List] = None,
         custom_features_processor: HistoryBasedFeaturesProcessor = None,
@@ -170,7 +171,7 @@ class OneStageScenario(HybridRecommender):
         self.first_level_user_len = 0
 
         # self.random_model = RandomRec(seed=seed)
-        # self.fallback_model = fallback_model
+        self.fallback_model = fallback_model
         self.first_level_user_features_transformer = (
             ToNumericFeatureTransformer()
         )
@@ -187,7 +188,6 @@ class OneStageScenario(HybridRecommender):
             )
         )
         self.seed = seed
-
         self._job_group_id = ""
         self._experiment = experiment
         self._is_trial = is_trial
@@ -361,6 +361,15 @@ class OneStageScenario(HybridRecommender):
         self.first_level_item_features = first_level_item_features
 
         # 3. Fit first level models
+        if hasattr(self, "best_model"):
+            logger.info("fit the best model on full train")
+            logger.debug(f"model params are: {self.best_model._init_args}")
+            self.best_model._fit_wrap(
+                log=log,
+                user_features=user_features,
+                item_features=item_features,
+            )
+            return
 
         k = 100
 
@@ -381,6 +390,8 @@ class OneStageScenario(HybridRecommender):
 
         if self._is_trial:
             logger.info("Running trial model")
+            first_level_train.write.mode("overwrite").parquet("/tmp/first_level_train.parquet")
+            first_level_val.write.mode("overwrite").parquet("/tmp/first_level_val.parquet")
         if resume:
             logger.info("Resuming one-stage scenario")
 
@@ -581,7 +592,7 @@ class OneStageScenario(HybridRecommender):
         budget: int = 10,
         new_study: bool = True,
     ):
-        params = model.optimize(
+        params, value = model.optimize(
             train,
             test,
             user_features,
@@ -592,7 +603,7 @@ class OneStageScenario(HybridRecommender):
             budget,
             new_study,
         )
-        return params
+        return params, value
 
     # pylint: disable=too-many-arguments, too-many-locals
     def optimize(
@@ -606,7 +617,7 @@ class OneStageScenario(HybridRecommender):
         k: int = 10,
         budget: int = 10,
         new_study: bool = True,
-    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    ) -> Tuple[List[Optional[Dict[str, Any]]], Optional[Dict[str, Any]], List[Optional[float]]]:
         """
         Optimize first level models with optuna.
 
@@ -628,7 +639,8 @@ class OneStageScenario(HybridRecommender):
             number_of_models += 1
         if number_of_models != len(param_borders):
             raise ValueError(
-                "Provide search grid or None for every first level model"
+                f"Provide search grid or None for every first level model; "
+                f"number of models: {number_of_models}, param_borders count: {len(param_borders)}"
             )
 
         first_level_user_features_tr = ToNumericFeatureTransformer()
@@ -643,7 +655,8 @@ class OneStageScenario(HybridRecommender):
         first_level_user_features = cache_if_exists(first_level_user_features)
         first_level_item_features = cache_if_exists(first_level_item_features)
 
-        params_found = []
+        params_found, metrics_values = [], []
+
         for i, model in enumerate(self.first_level_models):
             if param_borders[i] is None or (
                 isinstance(param_borders[i], dict) and param_borders[i]
@@ -653,30 +666,34 @@ class OneStageScenario(HybridRecommender):
                     i,
                     model.__str__(),
                 )
-                params_found.append(
-                    self._optimize_one_model(
-                        model=model,
-                        train=train,
-                        test=test,
-                        user_features=first_level_user_features,
-                        item_features=first_level_item_features,
-                        param_borders=param_borders[i],
-                        criterion=criterion,
-                        k=k,
-                        budget=budget,
-                        new_study=new_study,
-                    )
+                self.logger.debug(f"param borders for this model is: {param_borders[i]}")
+
+                param, metric = self._optimize_one_model(
+                    model=model,
+                    train=train,
+                    test=test,
+                    user_features=first_level_user_features,
+                    item_features=first_level_item_features,
+                    param_borders=param_borders[i],
+                    criterion=criterion,
+                    k=k,
+                    budget=budget,
+                    new_study=new_study,
                 )
+
+                params_found.append(param)
+                metrics_values.append(metric)
             else:
                 params_found.append(None)
+                metrics_values.append(None)
 
         if self.fallback_model is None or (
             isinstance(param_borders[-1], dict) and not param_borders[-1]
         ):
-            return params_found, None
+            return params_found, None, metrics_values
 
         self.logger.info("Optimizing fallback-model")
-        fallback_params = self._optimize_one_model(
+        fallback_params, _ = self._optimize_one_model(
             model=self.fallback_model,
             train=train,
             test=test,
@@ -688,7 +705,7 @@ class OneStageScenario(HybridRecommender):
         )
         unpersist_if_exists(first_level_item_features)
         unpersist_if_exists(first_level_user_features)
-        return params_found, fallback_params
+        return params_found, fallback_params, metrics_values
 
     def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
                            candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:
