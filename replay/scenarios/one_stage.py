@@ -402,7 +402,7 @@ class OneStageScenario(HybridRecommender):
         first_level_models = self.first_level_models if not resume else self.first_level_models[1:]
 
         for base_model in first_level_models:
-
+            logger.debug(f"models params: {base_model._init_args}")
             with JobGroupWithMetrics(self._job_group_id, f"{type(base_model).__name__}._fit_wrap"):
                 base_model._fit_wrap(
                     log=first_level_train,
@@ -480,6 +480,7 @@ class OneStageScenario(HybridRecommender):
             best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
             logger.info(f"best_model_name: {best_model_name}")
 
+            # TODO: refactor this part
             def get_model(best_model_name: str) -> BaseRecommender:
 
                 module_name = ".".join(best_model_name.split('.')[:-1])
@@ -686,6 +687,14 @@ class OneStageScenario(HybridRecommender):
             else:
                 params_found.append(None)
                 metrics_values.append(None)
+
+            self.fitted_models.append(f"{type(model).__name__}")
+            logger.info(f"Time left: {self.timer.time_left} sec")
+
+            if self.timer.time_limit_exceeded():
+                logger.info("Time limit exceed")
+                logger.info("Aborting optimization step for first-level models")
+                break
 
         if self.fallback_model is None or (
             isinstance(param_borders[-1], dict) and not param_borders[-1]

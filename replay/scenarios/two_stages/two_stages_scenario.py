@@ -1034,31 +1034,31 @@ class TwoStagesScenario(HybridRecommender):
             filter_seen_items,
         )
 
-    @staticmethod
-    def _optimize_one_model(
-        model: BaseRecommender,
-        train: AnyDataFrame,
-        test: AnyDataFrame,
-        user_features: Optional[AnyDataFrame] = None,
-        item_features: Optional[AnyDataFrame] = None,
-        param_borders: Optional[Dict[str, List[Any]]] = None,
-        criterion: Metric = Precision(),
-        k: int = 10,
-        budget: int = 10,
-        new_study: bool = True,
-    ):
-        params = model.optimize(
-            train,
-            test,
-            user_features,
-            item_features,
-            param_borders,
-            criterion,
-            k,
-            budget,
-            new_study,
-        )
-        return params
+    # @staticmethod
+    # def _optimize_one_model(
+    #     model: BaseRecommender,
+    #     train: AnyDataFrame,
+    #     test: AnyDataFrame,
+    #     user_features: Optional[AnyDataFrame] = None,
+    #     item_features: Optional[AnyDataFrame] = None,
+    #     param_borders: Optional[Dict[str, List[Any]]] = None,
+    #     criterion: Metric = Precision(),
+    #     k: int = 10,
+    #     budget: int = 10,
+    #     new_study: bool = True,
+    # ):
+    #     params = model.optimize(
+    #         train,
+    #         test,
+    #         user_features,
+    #         item_features,
+    #         param_borders,
+    #         criterion,
+    #         k,
+    #         budget,
+    #         new_study,
+    #     )
+    #     return params
 
     # pylint: disable=too-many-arguments, too-many-locals
     def optimize(
@@ -1072,7 +1072,7 @@ class TwoStagesScenario(HybridRecommender):
         k: int = 10,
         budget: int = 10,
         new_study: bool = True,
-    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    ) -> Tuple[List[Optional[Dict[str, Any]]], Optional[Dict[str, Any]], List[Optional[float]]]:
         """
         Optimize first level models with optuna.
 
@@ -1089,72 +1089,88 @@ class TwoStagesScenario(HybridRecommender):
         :param new_study: keep searching with previous study or start a new study
         :return: list of dicts of parameters
         """
-        number_of_models = len(self.first_level_models)
-        if self.fallback_model is not None:
-            number_of_models += 1
-        if number_of_models != len(param_borders):
-            raise ValueError(
-                "Provide search grid or None for every first level model"
-            )
 
-        first_level_user_features_tr = ToNumericFeatureTransformer()
-        first_level_user_features = first_level_user_features_tr.fit_transform(
-            user_features
-        )
-        first_level_item_features_tr = ToNumericFeatureTransformer()
-        first_level_item_features = first_level_item_features_tr.fit_transform(
-            item_features
-        )
-
-        first_level_user_features = cache_if_exists(first_level_user_features)
-        first_level_item_features = cache_if_exists(first_level_item_features)
-
-        params_found = []
-        for i, model in enumerate(self.first_level_models):
-            if param_borders[i] is None or (
-                isinstance(param_borders[i], dict) and param_borders[i]
-            ):
-                self.logger.info(
-                    "Optimizing first level model number %s, %s",
-                    i,
-                    model.__str__(),
-                )
-                params_found.append(
-                    self._optimize_one_model(
-                        model=model,
-                        train=train,
-                        test=test,
-                        user_features=first_level_user_features,
-                        item_features=first_level_item_features,
-                        param_borders=param_borders[i],
-                        criterion=criterion,
-                        k=k,
-                        budget=budget,
-                        new_study=new_study,
-                    )
-                )
-            else:
-                params_found.append(None)
-
-        if self.fallback_model is None or (
-            isinstance(param_borders[-1], dict) and not param_borders[-1]
-        ):
-            return params_found, None
-
-        self.logger.info("Optimizing fallback-model")
-        fallback_params = self._optimize_one_model(
-            model=self.fallback_model,
+        params_found, fallback_params, metrics_values = self.one_stage_scenario.optimize(
             train=train,
             test=test,
-            user_features=first_level_user_features,
-            item_features=first_level_item_features,
-            param_borders=param_borders[-1],
+            user_features=user_features,
+            item_features=item_features,
+            param_borders=param_borders,
             criterion=criterion,
-            new_study=new_study,
+            k=k,
+            budget=budget,
+            new_study=new_study
         )
-        unpersist_if_exists(first_level_item_features)
-        unpersist_if_exists(first_level_user_features)
-        return params_found, fallback_params
+
+        return params_found, fallback_params, metrics_values
+
+
+        # number_of_models = len(self.first_level_models)
+        # if self.fallback_model is not None:
+        #     number_of_models += 1
+        # if number_of_models != len(param_borders):
+        #     raise ValueError(
+        #         "Provide search grid or None for every first level model"
+        #     )
+        #
+        # first_level_user_features_tr = ToNumericFeatureTransformer()
+        # first_level_user_features = first_level_user_features_tr.fit_transform(
+        #     user_features
+        # )
+        # first_level_item_features_tr = ToNumericFeatureTransformer()
+        # first_level_item_features = first_level_item_features_tr.fit_transform(
+        #     item_features
+        # )
+        #
+        # first_level_user_features = cache_if_exists(first_level_user_features)
+        # first_level_item_features = cache_if_exists(first_level_item_features)
+        #
+        # params_found = []
+        # for i, model in enumerate(self.first_level_models):
+        #     if param_borders[i] is None or (
+        #         isinstance(param_borders[i], dict) and param_borders[i]
+        #     ):
+        #         self.logger.info(
+        #             "Optimizing first level model number %s, %s",
+        #             i,
+        #             model.__str__(),
+        #         )
+        #         params_found.append(
+        #             self._optimize_one_model(
+        #                 model=model,
+        #                 train=train,
+        #                 test=test,
+        #                 user_features=first_level_user_features,
+        #                 item_features=first_level_item_features,
+        #                 param_borders=param_borders[i],
+        #                 criterion=criterion,
+        #                 k=k,
+        #                 budget=budget,
+        #                 new_study=new_study,
+        #             )
+        #         )
+        #     else:
+        #         params_found.append(None)
+        #
+        # if self.fallback_model is None or (
+        #     isinstance(param_borders[-1], dict) and not param_borders[-1]
+        # ):
+        #     return params_found, None
+        #
+        # self.logger.info("Optimizing fallback-model")
+        # fallback_params = self._optimize_one_model(
+        #     model=self.fallback_model,
+        #     train=train,
+        #     test=test,
+        #     user_features=first_level_user_features,
+        #     item_features=first_level_item_features,
+        #     param_borders=param_borders[-1],
+        #     criterion=criterion,
+        #     new_study=new_study,
+        # )
+        # unpersist_if_exists(first_level_item_features)
+        # unpersist_if_exists(first_level_user_features)
+        # return params_found, fallback_params
 
     def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
                            candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:

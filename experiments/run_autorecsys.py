@@ -164,7 +164,7 @@ def main(spark: SparkSession, dataset_name: str):
         scenario = AutoRecSysScenario(
             task="user2item",
             subtask="user_recs",
-            timeout=500,
+            timeout=150,
         )
 
         mlflow.log_param("timer", scenario.timer.timeout)
