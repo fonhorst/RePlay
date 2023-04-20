@@ -371,6 +371,7 @@ class OneStageScenario(HybridRecommender):
             )
             return
 
+        # TODO: get it from somewhere
         k = 100
 
         resume = True if self._experiment else False
@@ -442,13 +443,8 @@ class OneStageScenario(HybridRecommender):
             logger.info(f"recs count: {recs_cnt}")
             mean_recs = recs.groupBy("user_idx").count().select("count").collect()[0][0]
             logger.debug(f"mean recs per user: {mean_recs}")
-
-            # model_params = base_model._init_args
-
-            # logger.info(f"model params : {model_params}")
             logger.debug("calculating metrics")
             self._experiment.add_result(f"{type(base_model).__name__}", recs)
-            # saving model
             logger.debug("Saving model...")
             save(base_model, os.path.join("/tmp", f"model_{type(base_model).__name__}"), overwrite=True)
             logger.debug(f"Model saved")
@@ -470,7 +466,7 @@ class OneStageScenario(HybridRecommender):
                 best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
                 logger.info(f"best_model_name: {best_model_name}")
                 # load best model
-                self.best_model = load(os.path.join("/tmp", f"model_{type(base_model).__name__}"))
+                self.best_model = load(os.path.join("/tmp", f"model_{best_model_name}"))
                 return
 
         if self._set_best_model:
@@ -488,7 +484,6 @@ class OneStageScenario(HybridRecommender):
                 module = importlib.import_module(module_name)
                 clazz = getattr(module, class_name)
                 base_model = cast(BaseRecommender, clazz(**models_init_kwargs[best_model_name]))
-
                 return base_model
 
             best_model = get_model(best_model_name)

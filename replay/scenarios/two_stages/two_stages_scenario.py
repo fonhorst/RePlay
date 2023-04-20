@@ -663,9 +663,6 @@ class TwoStagesScenario(HybridRecommender):
     ) -> DataFrame:
 
         partial_dfs = []
-        # logger.debug(self.one_stage_scenario.first_level_models[0].__dict__)
-        # logger.debug("similarity matrix count")
-        # logger.debug(self.one_stage_scenario.first_level_models[0].similarity.count())
         logger.debug(f"fitted models are: {self.one_stage_scenario.fitted_models}")
 
         for idx, model in enumerate(self.one_stage_scenario.first_level_models):
@@ -784,47 +781,7 @@ class TwoStagesScenario(HybridRecommender):
                                     user_features=user_features,
                                     item_features=item_features)
 
-        # # 2. Transform user and item features if applicable
-        # if user_features is not None:
-        #     user_features.cache()
-        #     self.cached_list.append(user_features)
-        #
-        # if item_features is not None:
-        #     item_features.cache()
-        #     self.cached_list.append(item_features)
-        #
-        # with JobGroupWithMetrics(self._job_group_id, "item_features_transformer"):
-        #     if not self.first_level_item_features_transformer.fitted:
-        #         self.first_level_item_features_transformer.fit(item_features)
-        #
-        # with JobGroupWithMetrics(self._job_group_id, "user_features_transformer"):
-        #     if not self.first_level_user_features_transformer.fitted:
-        #         self.first_level_user_features_transformer.fit(user_features)
-        #
-        # first_level_item_features = cache_if_exists(
-        #     self.first_level_item_features_transformer.transform(item_features)
-        # )
-        # first_level_user_features = cache_if_exists(
-        #     self.first_level_user_features_transformer.transform(user_features)
-        # )
-        #
-        # first_level_user_features = first_level_user_features.filter(sf.col("user_idx") < self.first_level_user_len) \
-        #     if first_level_user_features is not None else None
-        #
-        # first_level_item_features = first_level_item_features.filter(sf.col("item_idx") < self.first_level_item_len) \
-        #     if first_level_item_features is not None else None
 
-        # # 3. Fit first level models
-        # logger.info(f"first_level_train: {str(first_level_train.columns)}")
-        #
-        # for base_model in [*self.first_level_models, self.random_model, self.fallback_model]:
-        #     with JobGroupWithMetrics(self._job_group_id, f"{type(base_model).__name__}._fit_wrap"):
-        #         base_model._fit_wrap(
-        #             log=first_level_train,
-        #             user_features=first_level_user_features,
-        #             item_features=first_level_item_features,
-        #         )
-        #
         # 4. Generate negative examples
         # by making predictions with first level models and combining them into final recommendation lists
         self.logger.info("Generate negative examples")
