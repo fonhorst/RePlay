@@ -147,7 +147,7 @@ class OneStageScenario(HybridRecommender):
         seed: int = 123,
         is_trial: bool = False,
         experiment: Experiment = None,
-        timeout: int = None,
+        timeout: float = None,
         set_best_model: bool = False
     ) -> None:
         """

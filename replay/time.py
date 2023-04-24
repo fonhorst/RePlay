@@ -230,7 +230,7 @@ def smoothe_time(
 class Timer:
     """Timer to limit the duration tasks."""
 
-    def __init__(self, timeout: int = 300):
+    def __init__(self, timeout: float = 300):
         self._timeout = timeout
         self.start_time = time()
 

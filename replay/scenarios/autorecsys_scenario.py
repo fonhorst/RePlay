@@ -119,24 +119,14 @@ class AutoRecSysScenario:
 
     """
 
-    def __init__(self, task: str, subtask: str, timeout: int):
+    def __init__(self, task: str, subtask: str, timeout: float):
 
         self.scenario = None
         self.task = task
         self.subtask = subtask
         self.timer = Timer(timeout=timeout)
 
-    @staticmethod
-    def get_scenario(
-            self,
-            log: DataFrame,
-            is_trial: bool = False,
-            experiment: Experiment = None) -> Tuple[Union[OneStageScenario, TwoStagesScenario], bool]:
-
-        ds_size = log.count()
-        ds_size = 5000  # tmp var for dev TODO: remove
-
-        # TODO: add choosing models order based on dataset statistics
+    def get_default_two_stage(self):
 
         first_level_models_names_default = ["replay.models.als.ALSWrap",
                                             "replay.models.slim.SLIM",
@@ -147,19 +137,66 @@ class AutoRecSysScenario:
                                            "replay.models.word2vec.Word2VecRec",
                                            "replay.models.slim.SLIM"]
 
-        # TODO: refactor this part
         first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names_default})
+
+        return TwoStagesScenario(
+            train_splitter=UserSplitter(
+                item_test_size=0.2,
+                shuffle=True,
+                seed=42),
+            first_level_models=get_models(
+                {m: first_levels_models_params[m] for m in first_level_models_names_default}),
+            custom_features_processor=None,
+            num_negatives=10,
+            second_model_type="slama",
+            second_model_params=second_model_params,
+            second_model_config_path=os.environ.get(
+                "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"),
+            one_stage_timeout=self.timer.time_left
+        )
+
+    def get_default_one_stage(self, experiment=None, is_trial=None):
+
+        first_level_models_names_default = ["replay.models.als.ALSWrap",
+                                            "replay.models.slim.SLIM",
+                                            ]
+
+        first_level_models_names_sparse = ["replay.models.knn.ItemKNN",
+                                           "replay.models.als.ALSWrap",
+                                           "replay.models.word2vec.Word2VecRec",
+                                           "replay.models.slim.SLIM"]
+
+        first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names_default})
+        if is_trial:
+            first_level_models = first_level_models[0]
+
+        return OneStageScenario(
+                first_level_models=first_level_models,
+                user_cat_features_list=None,
+                item_cat_features_list=None,
+                experiment=experiment,
+                timeout=self.timer.time_left,
+                set_best_model=True,
+                is_trial=is_trial
+            )
+
+    @staticmethod
+    def get_scenario(
+            self,
+            log: DataFrame,
+            is_trial: bool = False,
+            experiment: Experiment = None) -> Tuple[Union[OneStageScenario, TwoStagesScenario], bool]:
+
+        log_size = log.count()
+
+        # TODO: add choosing models order based on dataset statistics
+
         do_optimization = None
 
         # 0 trial one-stage scenario
         if is_trial:
-            scenario = OneStageScenario(
-                first_level_models=first_level_models[0],
-                user_cat_features_list=None,
-                item_cat_features_list=None,
-                is_trial=is_trial,
-                set_best_model=True
-            )
+
+            scenario = self.get_default_one_stage(experiment=experiment, is_trial=is_trial)
             do_optimization = False
             return scenario, do_optimization
 
@@ -169,72 +206,30 @@ class AutoRecSysScenario:
         logger.info(f"time_left: {self.timer.time_left} sec")
         logger.info(f"time_spent: {self.timer.time_spent} sec")
 
-        if self.timer.time_left >= 100 * self.timer.time_spent:
+        if log_size > 1_000_000 and self.timer.time_left >= 100 * self.timer.time_spent:
+            logger.info(f"log size: {log_size} bigger than 1m")
             logger.info("Two-stage scenario with 1st level models optimization have been chosen (S4)")
-            scenario = TwoStagesScenario(
-                train_splitter=UserSplitter(
-                    item_test_size=0.2,
-                    shuffle=True,
-                    seed=42),
-                first_level_models=get_models(
-                    {m: first_levels_models_params[m] for m in first_level_models_names_default}),
-                custom_features_processor=None,
-                num_negatives=10,
-                second_model_type="slama",
-                second_model_params=second_model_params,
-                second_model_config_path=os.environ.get(
-                    "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"),
-                one_stage_timeout=self.timer.time_left
-            )
-
+            scenario = self.get_default_two_stage()
             do_optimization = True
 
-        elif self.timer.time_left >= 10 * self.timer.time_spent and ds_size >= 10_000:
+        elif log_size > 1_000_000 and self.timer.time_left >= 10 * self.timer.time_spent:
             logger.info("Two-stage scenario with default hyperparameters for 1st level models have been chosen (S3)")
-
-            scenario = TwoStagesScenario(
-                    train_splitter=UserSplitter(
-                        item_test_size=0.2,
-                        shuffle=True,
-                        seed=42),
-                    first_level_models=get_models(
-                        {m: first_levels_models_params[m] for m in first_level_models_names_default}),
-                    custom_features_processor=None,
-                    num_negatives=10,
-                    second_model_type="slama",
-                    second_model_params=second_model_params,
-                    second_model_config_path=os.environ.get(
-                        "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"),
-                    one_stage_timeout=self.timer.time_left
-            )
+            scenario = self.get_default_two_stage()
             do_optimization = False
 
-        elif self.timer.time_left >= 10 * self.timer.time_spent and ds_size < 10_000:
+        elif log_size <= 1_000_000 and self.timer.time_left >= 80 * self.timer.time_spent:
+            logger.info(f"log size: {log_size} smaller than 1m")
             logger.info("One scenario with hyperparameters optimization have been chosen (S2)")
-
-            scenario = OneStageScenario(
-                first_level_models=first_level_models,
-                user_cat_features_list=None,
-                item_cat_features_list=None,
-                experiment=experiment,
-                timeout=self.timer.time_left,
-                set_best_model=True
-            )
+            scenario = self.get_default_one_stage(experiment=experiment)
             do_optimization = True
 
         else:
             logger.info("One scenario with default hyperparameters have been chosen (S1)")
 
-            scenario = OneStageScenario(
-                first_level_models=first_level_models,
-                user_cat_features_list=None,
-                item_cat_features_list=None,
-                experiment=experiment,
-                timeout=self.timer.time_left,
-                set_best_model=True
-                )
+            scenario = self.get_default_one_stage(experiment=experiment)
             do_optimization = False
 
+        # end of heuristics ===============================================================
         return scenario, do_optimization
 
     def fit(

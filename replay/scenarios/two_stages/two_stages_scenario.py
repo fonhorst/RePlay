@@ -169,7 +169,7 @@ class TwoStagesScenario(HybridRecommender):
         item_cat_features_list: Optional[List] = None,
         custom_features_processor: HistoryBasedFeaturesProcessor = None,
         seed: int = 123,
-        one_stage_timeout: int = None
+        one_stage_timeout: float = None
     ) -> None:
         """
         :param train_splitter: splitter to get ``first_level_train`` and ``second_level_train``.
@@ -780,7 +780,6 @@ class TwoStagesScenario(HybridRecommender):
         self.one_stage_scenario.fit(log=first_level_train,
                                     user_features=user_features,
                                     item_features=item_features)
-
 
         # 4. Generate negative examples
         # by making predictions with first level models and combining them into final recommendation lists
