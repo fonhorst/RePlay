@@ -126,26 +126,16 @@ class AutoRecSysScenario:
         self.subtask = subtask
         self.timer = Timer(timeout=timeout)
 
-    def get_default_two_stage(self):
+    def get_default_two_stage(self, first_level_models_names: List[str]):
 
-        first_level_models_names_default = ["replay.models.als.ALSWrap",
-                                            "replay.models.slim.SLIM",
-                                            ]
-
-        first_level_models_names_sparse = ["replay.models.knn.ItemKNN",
-                                           "replay.models.als.ALSWrap",
-                                           "replay.models.word2vec.Word2VecRec",
-                                           "replay.models.slim.SLIM"]
-
-        first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names_default})
+        first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names})
 
         return TwoStagesScenario(
             train_splitter=UserSplitter(
                 item_test_size=0.2,
                 shuffle=True,
                 seed=42),
-            first_level_models=get_models(
-                {m: first_levels_models_params[m] for m in first_level_models_names_default}),
+            first_level_models=first_level_models,
             custom_features_processor=None,
             num_negatives=10,
             second_model_type="slama",
@@ -155,18 +145,9 @@ class AutoRecSysScenario:
             one_stage_timeout=self.timer.time_left
         )
 
-    def get_default_one_stage(self, experiment=None, is_trial=None):
+    def get_default_one_stage(self, first_level_models_names: List[str], experiment=None, is_trial=None):
 
-        first_level_models_names_default = ["replay.models.als.ALSWrap",
-                                            "replay.models.slim.SLIM",
-                                            ]
-
-        first_level_models_names_sparse = ["replay.models.knn.ItemKNN",
-                                           "replay.models.als.ALSWrap",
-                                           "replay.models.word2vec.Word2VecRec",
-                                           "replay.models.slim.SLIM"]
-
-        first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names_default})
+        first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names})
         if is_trial:
             first_level_models = first_level_models[0]
 
@@ -181,6 +162,26 @@ class AutoRecSysScenario:
             )
 
     @staticmethod
+    def get_first_level_models_names(log):
+        users_per_item = log.groupBy("item_idx").agg(sf.count("user_idx").alias("user_count")).agg(
+            sf.mean("user_count")).first()[0]
+        logger.debug(f"user per items : {users_per_item}")
+        if users_per_item < 50:
+            first_level_models_names = ["replay.models.knn.ItemKNN",
+                                        "replay.models.als.ALSWrap",
+                                        "replay.models.word2vec.Word2VecRec"
+                                        ]
+        else:
+
+            first_level_models_names = ["replay.models.als.ALSWrap",
+                                        "replay.models.knn.ItemKNN",
+                                        "replay.models.slim.SLIM"
+                                        "replay.models.word2vec.Word2VecRec",
+                                        ]
+        logger.info(f"models for 1st level are: {first_level_models_names}")
+        return first_level_models_names
+
+    @staticmethod
     def get_scenario(
             self,
             log: DataFrame,
@@ -189,14 +190,14 @@ class AutoRecSysScenario:
 
         log_size = log.count()
 
-        # TODO: add choosing models order based on dataset statistics
-
+        first_level_models_names = self.get_first_level_models_names(log=log)
         do_optimization = None
 
         # 0 trial one-stage scenario
         if is_trial:
 
-            scenario = self.get_default_one_stage(experiment=experiment, is_trial=is_trial)
+            scenario = self.get_default_one_stage(experiment=experiment, is_trial=is_trial,
+                                                  first_level_models_names=first_level_models_names)
             do_optimization = False
             return scenario, do_optimization
 
@@ -209,24 +210,26 @@ class AutoRecSysScenario:
         if log_size > 1_000_000 and self.timer.time_left >= 45 * self.timer.time_spent:
             logger.info(f"log size: {log_size} bigger than 1m")
             logger.info("Two-stage scenario with 1st level models optimization have been chosen (S4)")
-            scenario = self.get_default_two_stage()
+            scenario = self.get_default_two_stage(first_level_models_names=first_level_models_names)
             do_optimization = True
 
         elif log_size > 1_000_000 and self.timer.time_left >= 10 * self.timer.time_spent:
             logger.info("Two-stage scenario with default hyperparameters for 1st level models have been chosen (S3)")
-            scenario = self.get_default_two_stage()
+            scenario = self.get_default_two_stage(first_level_models_names=first_level_models_names)
             do_optimization = False
 
         elif log_size <= 1_000_000 and self.timer.time_left >= 40 * self.timer.time_spent:
             logger.info(f"log size: {log_size} smaller than 1m")
             logger.info("One scenario with hyperparameters optimization have been chosen (S2)")
-            scenario = self.get_default_one_stage(experiment=experiment)
+            scenario = self.get_default_one_stage(first_level_models_names=first_level_models_names,
+                                                  experiment=experiment)
             do_optimization = True
 
         else:
             logger.info("One scenario with default hyperparameters have been chosen (S1)")
 
-            scenario = self.get_default_one_stage(experiment=experiment)
+            scenario = self.get_default_one_stage(first_level_models_names=first_level_models_names,
+                                                  experiment=experiment)
             do_optimization = False
 
         # end of heuristics ===============================================================
