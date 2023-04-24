@@ -206,7 +206,7 @@ class AutoRecSysScenario:
         logger.info(f"time_left: {self.timer.time_left} sec")
         logger.info(f"time_spent: {self.timer.time_spent} sec")
 
-        if log_size > 1_000_000 and self.timer.time_left >= 100 * self.timer.time_spent:
+        if log_size > 1_000_000 and self.timer.time_left >= 45 * self.timer.time_spent:
             logger.info(f"log size: {log_size} bigger than 1m")
             logger.info("Two-stage scenario with 1st level models optimization have been chosen (S4)")
             scenario = self.get_default_two_stage()
@@ -217,7 +217,7 @@ class AutoRecSysScenario:
             scenario = self.get_default_two_stage()
             do_optimization = False
 
-        elif log_size <= 1_000_000 and self.timer.time_left >= 80 * self.timer.time_spent:
+        elif log_size <= 1_000_000 and self.timer.time_left >= 40 * self.timer.time_spent:
             logger.info(f"log size: {log_size} smaller than 1m")
             logger.info("One scenario with hyperparameters optimization have been chosen (S2)")
             scenario = self.get_default_one_stage(experiment=experiment)
@@ -270,7 +270,7 @@ class AutoRecSysScenario:
                 test=first_level_val,
                 param_borders=[*param_borders, None],
                 k=10,  # TODO: get from class
-                budget=20,
+                budget=10,
                 criterion=NDCG()
             )
 
