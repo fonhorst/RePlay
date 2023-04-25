@@ -167,10 +167,18 @@ class AutoRecSysScenario:
             sf.mean("user_count")).first()[0]
         logger.debug(f"user per items : {users_per_item}")
         if users_per_item < 50:
-            first_level_models_names = ["replay.models.knn.ItemKNN",
+
+            # for debug purposes
+
+            first_level_models_names = [
                                         "replay.models.als.ALSWrap",
-                                        "replay.models.word2vec.Word2VecRec"
+                                        "replay.models.slim.SLIM"
                                         ]
+            # TODO: uncomment
+            # first_level_models_names = ["replay.models.knn.ItemKNN",
+            #                             "replay.models.als.ALSWrap",
+            #                             "replay.models.word2vec.Word2VecRec"
+            #                             ]
         else:
 
             first_level_models_names = ["replay.models.als.ALSWrap",

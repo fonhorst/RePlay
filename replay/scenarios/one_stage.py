@@ -312,13 +312,6 @@ class OneStageScenario(HybridRecommender):
             self.logger.info("Data splitting")
             first_level_train, first_level_val = self._split_data(log)
 
-        # self.first_level_item_len = (
-        #     first_level_train.select("item_idx").distinct().count()
-        # )
-        # self.first_level_user_len = (
-        #     first_level_train.select("user_idx").distinct().count()
-        # )
-
             first_level_train.cache()
             first_level_val.cache()
             self.cached_list.extend(
@@ -326,6 +319,14 @@ class OneStageScenario(HybridRecommender):
             )
         else:
             first_level_train = log
+
+        self.first_level_item_len = (
+            first_level_train.select("item_idx").distinct().count()
+        )
+        self.first_level_user_len = (
+            first_level_train.select("user_idx").distinct().count()
+        )
+
 
         # 2. Transform user and item features if applicable
         if user_features is not None:
@@ -455,19 +456,20 @@ class OneStageScenario(HybridRecommender):
                     unpersist_if_exists(dataframe)
                 return
 
-            logger.info(f"Time left: {self.timer.time_left} sec")
-            logger.debug(f"time_limit_exceeded: {self.timer.time_limit_exceeded()}")
+            if self.timer:
+                logger.info(f"Time left: {self.timer.time_left} sec")
+                logger.debug(f"time_limit_exceeded: {self.timer.time_limit_exceeded()}")
 
-            if self.timer.time_limit_exceeded():
-                logger.info("Time limit exceed")
-                logger.info("comparing of fitted models")
-                logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
-                best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
-                best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
-                logger.info(f"best_model_name: {best_model_name}")
-                # load best model
-                self.best_model = load(os.path.join("/tmp", f"model_{best_model_name}"))
-                return
+                if self.timer.time_limit_exceeded():
+                    logger.info("Time limit exceed")
+                    logger.info("comparing of fitted models")
+                    logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
+                    best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
+                    best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
+                    logger.info(f"best_model_name: {best_model_name}")
+                    # load best model
+                    self.best_model = load(os.path.join("/tmp", f"model_{best_model_name}"))
+                    return
 
         if self._set_best_model:
             # Comparing models
@@ -535,9 +537,8 @@ class OneStageScenario(HybridRecommender):
                 filter_seen_items=filter_seen_items)
             predictions = get_top_k_recs(predictions, k=k)
 
-        logger.debug(f"predictions count: {predictions.count()}")
+        logger.info(f"predictions count: {predictions.count()}")
         logger.info(f"predictions.columns: {predictions.columns}")
-
         return predictions
 
     def fit_predict(
@@ -684,12 +685,14 @@ class OneStageScenario(HybridRecommender):
                 metrics_values.append(None)
 
             self.fitted_models.append(f"{type(model).__name__}")
-            logger.info(f"Time left: {self.timer.time_left} sec")
 
-            if self.timer.time_limit_exceeded():
-                logger.info("Time limit exceed")
-                logger.info("Aborting optimization step for first-level models")
-                break
+            if self.timer:
+                logger.info(f"Time left: {self.timer.time_left} sec")
+
+                if self.timer.time_limit_exceeded():
+                    logger.info("Time limit exceed")
+                    logger.info("Aborting optimization step for first-level models")
+                    break
 
         if self.fallback_model is None or (
             isinstance(param_borders[-1], dict) and not param_borders[-1]
