@@ -540,6 +540,7 @@ class TwoStagesScenario(HybridRecommender):
         logger.debug(f"k: {k+max_positives_to_filter}")
         logger.debug(f"users count: {users.count()}")
         logger.debug(f"items count: {items.count()}")
+        logger.debug(f"model_params: {model._init_args}")
 
         with JobGroupWithMetrics(__file__, f"{type(model).__name__}._{prediction_label}_predict") as job_desc:
             pred = model._inner_predict_wrap(
@@ -666,6 +667,8 @@ class TwoStagesScenario(HybridRecommender):
         logger.debug(f"fitted models are: {self.one_stage_scenario.fitted_models}")
 
         for idx, model in enumerate(self.one_stage_scenario.first_level_models):
+
+            logger.debug(f"model __dict__ : {model.__dict__} ")
 
             with JobGroupWithMetrics(self._job_group_id, f"{type(model).__name__}._predict_with_first_level_model"):
                 candidates = self._predict_with_first_level_model(
@@ -823,11 +826,12 @@ class TwoStagesScenario(HybridRecommender):
 
         self.cached_list.append(second_level_train)
 
-        # # Apply negative sampling to balance positive / negative combination in the resulting train dataset
-        # neg = second_level_train.filter(second_level_train.target == 0)
-        # pos = second_level_train.filter(second_level_train.target == 1)
-        # neg_new = neg.sample(fraction=10 * pos.count() / neg.count())
-        # second_level_train = pos.union(neg_new)
+        logger.debug("applying negative sampling")
+        # Apply negative sampling to balance positive / negative combination in the resulting train dataset
+        neg = second_level_train.filter(second_level_train.target == 0)
+        pos = second_level_train.filter(second_level_train.target == 1)
+        neg_new = neg.sample(fraction=10 * pos.count() / neg.count())
+        second_level_train = pos.union(neg_new)
 
         with JobGroupWithMetrics(self._job_group_id, "inferring_class_distribution"):
             self.logger.info(

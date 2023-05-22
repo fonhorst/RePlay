@@ -14,9 +14,8 @@ from replay.metrics.base_metric import Metric
 SplitData = collections.namedtuple(
     "SplitData",
     "train test users items user_features_train "
-    "user_features_test item_features_train item_features_test",
+    "user_features_test item_features_train item_features_test test_infer",
 )
-
 
 # pylint: disable=too-few-public-methods
 class ObjectiveWrapper:
@@ -78,7 +77,7 @@ def suggest_params(
 
 
 def eval_quality(
-    split_data: SplitData, recommender, criterion: Metric, k: int,
+    split_data: SplitData, recommender, criterion: Metric, k: int, item2item:bool
 ) -> float:
     """
     Calculate criterion value for given parameters
@@ -97,16 +96,42 @@ def eval_quality(
         split_data.item_features_train,
     )
     logger.debug("Predicting inside optimization")
-    recs = recommender._predict_wrap(
-        log=split_data.train,
-        k=k,
-        users=split_data.users,
-        items=split_data.items,
-        user_features=split_data.user_features_test,
-        item_features=split_data.item_features_test,
-    )
-    logger.debug("Calculating criterion")
-    criterion_value = criterion(recs, split_data.test, k)
+
+    if item2item:
+        logger.debug("item2item predictions inside optimization")
+        nearest_items = recommender.get_nearest_items(items=split_data.test_infer.select("item_idx").distinct(), k=k)
+        nearest_items = nearest_items.filter(nearest_items.item_idx != nearest_items.neighbour_item_idx)
+        nearest_items = nearest_items \
+            .withColumnRenamed("cosine_similarity", "similarity") \
+            .withColumnRenamed("confidence", "similarity")
+
+        pred = split_data.test_infer.select("user_idx", "item_idx", "timestamp")\
+            .join(nearest_items, "item_idx", how="left") \
+            .select("user_idx", "neighbour_item_idx", "similarity", "timestamp")
+
+        pred = pred \
+            .withColumnRenamed("neighbour_item_idx", "item_idx") \
+            .withColumnRenamed("similarity", "relevance")
+
+        logger.debug(f"pred: {pred}")
+        logger.debug(f"pred count: {pred.count()}")
+        pred = pred.filter(pred.item_idx.isNotNull())
+
+        logger.debug("Calculating criterion")
+        criterion_value = criterion(pred, split_data.test.select("user_idx", "item_idx", "relevance", "timestamp"), k)
+
+    else:
+        recs = recommender._predict_wrap(
+            log=split_data.train,
+            k=k,
+            users=split_data.users,
+            items=split_data.items,
+            user_features=split_data.user_features_test,
+            item_features=split_data.item_features_test,
+        )
+        logger.debug("Calculating criterion")
+        criterion_value = criterion(recs, split_data.test, k)
+
     logger.debug("%s=%.6f", criterion, criterion_value)
     print(criterion, criterion_value)
     print("="*100)
@@ -122,6 +147,7 @@ def scenario_objective_calculator(
     recommender,
     criterion: Metric,
     k: int,
+    item2item: bool
 ) -> float:
     """
     Sample parameters and calculate criterion value
@@ -135,21 +161,14 @@ def scenario_objective_calculator(
     """
     params_for_trial = suggest_params(trial, search_space)
     recommender.set_params(**params_for_trial)
-    print("Set params")
-    # print("="*100)
-    # print("rank")
-    # print(recommender.rank)
-    # print("_hnswlib_params")
-    for key, val in params_for_trial.items():
-        print(key, val)
 
-    # print(recommender._hnswlib_params)
-    return eval_quality(split_data, recommender, criterion, k)
+    return eval_quality(split_data, recommender, criterion, k, item2item)
 
 
 MainObjective = partial(
     ObjectiveWrapper, objective_calculator=scenario_objective_calculator
 )
+
 
 
 # pylint: disable=too-few-public-methods
@@ -170,6 +189,7 @@ class ItemKNNObjective:
         max_neighbours = self.kwargs["search_space"]["num_neighbours"]["args"][
             1
         ]
+        print(f"max neighbours: {max_neighbours}")
         model = self.kwargs["recommender"]
         split_data = self.kwargs["split_data"]
         train = split_data.train
@@ -189,6 +209,7 @@ class ItemKNNObjective:
         recommender,
         criterion: Metric,
         k: int,
+        item2item: bool
     ) -> float:
         """
         Sample parameters and calculate criterion value
@@ -200,31 +221,57 @@ class ItemKNNObjective:
         :param k: length of a recommendation list
         :return: criterion value
         """
+
+        logger = logging.getLogger("replay")
+
         params_for_trial = suggest_params(trial, search_space)
         recommender.set_params(**params_for_trial)
-        print("Set params")
-        print("=" * 100)
-        print("num_neighbours")
-        print(recommender.num_neighbours)
-        print("_nmslib_hnsw_params")
-        print(recommender._nmslib_hnsw_params)
         recommender.fit_users = split_data.train.select("user_idx").distinct()
         recommender.fit_items = split_data.train.select("item_idx").distinct()
         similarity = recommender._shrink(self.dot_products, recommender.shrink)
+        print(f"recommender.num_neighbours: {recommender.num_neighbours}")
         recommender.similarity = recommender._get_k_most_similar(
             similarity
         ).cache()
-        recs = recommender._predict_wrap(
-            log=split_data.train,
-            k=k,
-            users=split_data.users,
-            items=split_data.items,
-            user_features=split_data.user_features_test,
-            item_features=split_data.item_features_test,
-        )
-        logger = logging.getLogger("replay")
-        logger.debug("Calculating criterion")
-        criterion_value = criterion(recs, split_data.test, k)
+
+
+        if item2item:
+            logger.debug("item2item predictions inside optimization")
+            nearest_items = recommender.get_nearest_items(items=split_data.test_infer.select("item_idx").distinct(),
+                                                          k=k)
+            nearest_items = nearest_items.filter(nearest_items.item_idx != nearest_items.neighbour_item_idx)
+            nearest_items = nearest_items \
+                .withColumnRenamed("cosine_similarity", "similarity") \
+                .withColumnRenamed("confidence", "similarity")
+
+            pred = split_data.test_infer.select("user_idx", "item_idx", "timestamp") \
+                .join(nearest_items, "item_idx", how="left") \
+                .select("user_idx", "neighbour_item_idx", "similarity", "timestamp")
+
+            pred = pred \
+                .withColumnRenamed("neighbour_item_idx", "item_idx") \
+                .withColumnRenamed("similarity", "relevance")
+
+            logger.debug(f"pred: {pred}")
+            logger.debug(f"pred count: {pred.count()}")
+            pred = pred.filter(pred.item_idx.isNotNull())
+
+            logger.debug("Calculating criterion")
+            criterion_value = criterion(pred, split_data.test.select("user_idx", "item_idx", "relevance", "timestamp"),
+                                        k)
+
+        else:
+
+            recs = recommender._predict_wrap(
+                log=split_data.train,
+                k=k,
+                users=split_data.users,
+                items=split_data.items,
+                user_features=split_data.user_features_test,
+                item_features=split_data.item_features_test,
+            )
+            logger.debug("Calculating criterion")
+            criterion_value = criterion(recs, split_data.test, k)
         logger.debug("%s=%.6f", criterion, criterion_value)
         print(criterion, criterion_value)
 

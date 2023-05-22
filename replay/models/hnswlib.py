@@ -299,7 +299,7 @@ class HnswlibMixin(ANNMixin):
             def infer_index(vectors: pd.Series) -> pd.DataFrame:
                 index_file_manager = index_file_manager_broadcast.value
                 index = index_file_manager.index
-                logger.debug(f"vectors comes to infer: {vectors}")
+                logger.info(f"vectors comes to infer: {vectors}")
                 labels, distances = index.knn_query(
                     np.stack(vectors.values),
                     k=k,
@@ -316,8 +316,10 @@ class HnswlibMixin(ANNMixin):
         if filter_seen_items:
             cols = ["num_items", "seen_item_idxs"]
 
+        useful_col = "user_idx" if "user_idx" in vectors.columns else "item_idx"
+
         res = vectors.select(
-            "user_idx",
+            useful_col,
             infer_index(features_col, *cols).alias("neighbours"),
         )
         res = self._unpack_infer_struct(res)

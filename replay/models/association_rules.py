@@ -401,3 +401,6 @@ class AssociationRulesItemRec(NeighbourRec, PartialFitMixin):
 
     def _get_ann_infer_params(self) -> Dict[str, Any]:
         pass
+
+    def _get_ann_infer_params_for_nearest_items(self) -> Dict[str, Any]:
+        pass

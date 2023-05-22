@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import Optional, Tuple, Union, Dict, Any
 
 import numpy as np
@@ -23,6 +24,9 @@ from replay.spark_custom_models.recommendation import ALS, ALSModel
 from replay.utils import list_to_vector_udf
 
 
+logger = logging.getLogger("replay")
+
+
 class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
     """Wrapper for `Spark ALS
     <https://spark.apache.org/docs/latest/api/python/pyspark.mllib.html#pyspark.mllib.recommendation.ALS>`_.
@@ -35,8 +39,25 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
             "index_dim": self.rank,
         }
 
+    def _get_ann_infer_params_for_nearest_items(self) -> Dict[str, Any]:
+        return {
+            "features_col": "item_factors",
+            "params": self._hnswlib_params,
+            "index_dim": self.rank,
+        }
+
+
     def _get_vectors_to_infer_ann_inner(self, log: DataFrame, users: DataFrame) -> DataFrame:
+        logger.debug(f"users count to get features: {users.count()}")
         user_vectors, _ = self.get_features(users)
+        logger.debug(f"user_vectors from _get_vectors_to_infer_ann_inner: {user_vectors}")
+        logger.debug(f"user_vectors count: {user_vectors.count()}")
+        logger.debug(f"user_vectors: {user_vectors.show(10)}")
+        user_vectors = user_vectors.filter(user_vectors.user_factors.isNotNull())  # for debug
+        logger.debug(f"user_vectors count after filtering: {user_vectors.count()}")
+
+
+
         return user_vectors
 
     def _get_ann_build_params(self, log: DataFrame):
@@ -53,7 +74,26 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
         item_vectors, _ = self.get_features(
             log.select("item_idx").distinct()
         )
+
         return item_vectors
+
+    def _get_item_vectors_to_infer_ann(
+            self, items: DataFrame
+    ) -> DataFrame:
+        logger.debug(f"item count to get features: {items.count()}")
+
+        item_vectors, _ = self.get_features(
+            items
+        )
+
+        logger.debug(f"item_vectors from _get_item_vectors_to_infer_ann: {item_vectors}")
+        logger.debug(f"item_vectors count: {item_vectors.count()}")
+        logger.debug(f"item_vectors: {item_vectors.show(10)}")
+        item_vectors = item_vectors.filter(item_vectors.item_factors.isNotNull())  # for debug
+        logger.debug(f"user_vectors count after filtering: {item_vectors.count()}")
+
+        return item_vectors
+
 
     @property
     def _use_ann(self) -> bool:
@@ -91,7 +131,9 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
             "rank": self.rank,
             "implicit_prefs": self.implicit_prefs,
             "seed": self._seed,
-            "hnswlib_params": self._hnswlib_params
+            "hnswlib_params": self._hnswlib_params,
+            "num_item_blocks": self._num_item_blocks,
+            "num_user_blocks": self._num_user_blocks
         }
 
     def _save_model(self, path: str):

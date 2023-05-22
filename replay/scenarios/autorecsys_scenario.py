@@ -2,6 +2,7 @@
 import logging
 import os
 import importlib
+import random
 import time
 
 from collections.abc import Iterable
@@ -30,7 +31,7 @@ from replay.utils import (
 )
 from replay.scenarios import OneStageScenario, TwoStagesScenario
 from replay.splitters import Splitter, UserSplitter
-from experiments.experiment_utils import (
+from experiment_utils import (
     get_spark_configs_as_dict,
     check_number_of_allocated_executors,
     get_partition_num,
@@ -41,6 +42,7 @@ from replay.time import Timer
 
 
 logger = logging.getLogger("replay")
+idx_num = random.randint(1, 1_000_000)
 
 first_levels_models_params = {
             "replay.models.knn.ItemKNN": {
@@ -48,17 +50,17 @@ first_levels_models_params = {
             "replay.models.als.ALSWrap": {
                 "rank": 100,
                 "seed": 42,
-                "num_item_blocks": 10,
-                "num_user_blocks": 10,
-                # "hnswlib_params": {
-                #     "space": "ip",
-                #     "M": 100,
-                #     "efS": 2000,
-                #     "efC": 2000,
-                #     "post": 0,
-                #     "index_path": f"file:///tmp/als_hnswlib_index_123",
-                #     "build_index_on": "executor",
-                # },
+                "num_item_blocks": 144,
+                "num_user_blocks": 144,
+                "hnswlib_params": {
+                    "space": "ip",
+                    "M": 100,
+                    "efS": 2000,
+                    "efC": 2000,
+                    "post": 0,
+                    "index_path": f"/tmp_index/als_hnswlib_index_{idx_num}",
+                    "build_index_on": "executor",
+                },
             },
             "replay.models.word2vec.Word2VecRec": {
                 "rank": 100,
@@ -69,7 +71,7 @@ first_levels_models_params = {
                     "efS": 2000,
                     "efC": 2000,
                     "post": 0,
-                    "index_path": f"file:///tmp/word2vec_hnswlib_index_123",
+                    "index_path": f"/tmp_index/word2vec_hnswlib_index_{idx_num}",
                     "build_index_on": "executor",
                 },
             },
@@ -88,7 +90,7 @@ second_model_params = {
                 "mini_batch_size": 1000,
             },
             "linear_l2_params": {"default_params": {"regParam": [1e-5]}},
-            "reader_params": {"cv": 2, "advanced_roles": False, "samples": 10_000}
+            "reader_params": {"cv": 5, "advanced_roles": False, "samples": 10_000}
 }
 
 
@@ -125,6 +127,7 @@ class AutoRecSysScenario:
         self.task = task
         self.subtask = subtask
         self.timer = Timer(timeout=timeout)
+        self.do_optimization = None
 
     def get_default_two_stage(self, first_level_models_names: List[str]):
 
@@ -137,7 +140,7 @@ class AutoRecSysScenario:
                 seed=42),
             first_level_models=first_level_models,
             custom_features_processor=None,
-            num_negatives=10,
+            num_negatives=100,
             second_model_type="slama",
             second_model_params=second_model_params,
             second_model_config_path=os.environ.get(
@@ -170,20 +173,18 @@ class AutoRecSysScenario:
 
             # for debug purposes
 
-            first_level_models_names = [
-                                        "replay.models.als.ALSWrap",
-                                        "replay.models.slim.SLIM"
-                                        ]
-            # TODO: uncomment
-            # first_level_models_names = ["replay.models.knn.ItemKNN",
-            #                             "replay.models.als.ALSWrap",
-            #                             "replay.models.word2vec.Word2VecRec"
+            # first_level_models_names = ["replay.models.als.ALSWrap",
+            #                             "replay.models.slim.SLIM"
             #                             ]
+            first_level_models_names = ["replay.models.knn.ItemKNN",
+                                        "replay.models.als.ALSWrap",
+                                        "replay.models.word2vec.Word2VecRec"
+                                        ]
         else:
 
             first_level_models_names = ["replay.models.als.ALSWrap",
                                         "replay.models.knn.ItemKNN",
-                                        "replay.models.slim.SLIM"
+                                        "replay.models.slim.SLIM",
                                         "replay.models.word2vec.Word2VecRec",
                                         ]
         logger.info(f"models for 1st level are: {first_level_models_names}")
@@ -194,10 +195,10 @@ class AutoRecSysScenario:
             self,
             log: DataFrame,
             is_trial: bool = False,
-            experiment: Experiment = None) -> Tuple[Union[OneStageScenario, TwoStagesScenario], bool]:
+            experiment: Experiment = None) -> Tuple[Union[OneStageScenario, TwoStagesScenario], bool, List[str]]:
 
         log_size = log.count()
-
+        # log_size = 1_000_001  # for debug purposes
         first_level_models_names = self.get_first_level_models_names(log=log)
         do_optimization = None
 
@@ -207,7 +208,7 @@ class AutoRecSysScenario:
             scenario = self.get_default_one_stage(experiment=experiment, is_trial=is_trial,
                                                   first_level_models_names=first_level_models_names)
             do_optimization = False
-            return scenario, do_optimization
+            return scenario, do_optimization, first_level_models_names
 
         #  heuristics here ==========================================
 
@@ -241,7 +242,7 @@ class AutoRecSysScenario:
             do_optimization = False
 
         # end of heuristics ===============================================================
-        return scenario, do_optimization
+        return scenario, do_optimization, first_level_models_names
 
     def fit(
         self,
@@ -253,34 +254,48 @@ class AutoRecSysScenario:
         logger.info(f"Time left: {self.timer.time_left}")
 
         # Fit the first model from 1st scenario
-        self.scenario, _ = self.get_scenario(self, log=log, is_trial=True)
+        self.scenario, _, _ = self.get_scenario(self, log=log, is_trial=True)
         self.scenario.fit(log=log, user_features=user_features, item_features=item_features)
         experiment = self.scenario.experiment
 
         # Determine which scenario will be next
 
-        self.scenario, do_optimization = self.get_scenario(self, log=log, experiment=experiment)
+        self.scenario, self.do_optimization, first_level_models_names = self.get_scenario(self,
+                                                                                          log=log,
+                                                                                          experiment=experiment)
 
-        if do_optimization:
+        if self.do_optimization:
+
+            logger.debug("do_optimization")
             spark = State().session
+            spark_conf = spark.sparkContext.getConf()
+            partition_num = get_partition_num(spark_conf)
+            logger.debug(f"partition num: {partition_num}")
+
             first_level_train = spark.read.parquet("/tmp/first_level_train.parquet")
             first_level_val = spark.read.parquet("/tmp/first_level_val.parquet")
 
+            logger.debug(f"first_level_train partition num: {first_level_train.rdd.getNumPartitions()}")
+
+            first_level_train = first_level_train.repartition(partition_num, "user_idx")
+            first_level_val = first_level_val.repartition(partition_num, "user_idx")
+
+            logger.debug(f"after repartition first_level_train partition num: {first_level_train.rdd.getNumPartitions()}")
+
             # optimize first level models
-            # TODO: get it from somewhere
-            first_level_models_names_default = ["replay.models.als.ALSWrap",
-                                                "replay.models.slim.SLIM",
-                                                ]
+            # first_level_models_names_default = ["replay.models.als.ALSWrap",
+            #                                     "replay.models.slim.SLIM",
+            #                                     ]
 
             param_borders = [
-                FIRST_LEVELS_MODELS_PARAMS_BORDERS[model_name] for model_name in first_level_models_names_default
+                FIRST_LEVELS_MODELS_PARAMS_BORDERS[model_name] for model_name in first_level_models_names
             ]
             logger.debug(f"param borders is: {param_borders}")
             param_found, fallback_params, metrics_values = self.scenario.optimize(
                 train=first_level_train,
                 test=first_level_val,
                 param_borders=[*param_borders, None],
-                k=10,  # TODO: get from class
+                k=100,  # TODO: get from class
                 budget=10,
                 criterion=NDCG()
             )

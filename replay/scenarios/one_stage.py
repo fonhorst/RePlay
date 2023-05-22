@@ -401,6 +401,7 @@ class OneStageScenario(HybridRecommender):
             MODEL_NAME_TO_FULL_MODEL_NAME[f"{type(base_model).__name__}"]:
                 base_model._init_args for base_model in self.first_level_models
         }
+        # logger.debug(f"model_init_kwargs: {models_init_kwargs}")
         first_level_models = self.first_level_models if not resume else self.first_level_models[1:]
 
         for base_model in first_level_models:
@@ -429,10 +430,10 @@ class OneStageScenario(HybridRecommender):
                     return
                 continue
 
-            recs = base_model._predict(
-                log=log,
+            recs = base_model._inner_predict_wrap(
+                log=first_level_train,
                 k=k,
-                users=log.select("user_idx").distinct(),
+                users=first_level_val.select("user_idx").distinct(),
                 items=log.select("item_idx").distinct(),
                 user_features=first_level_user_features,
                 item_features=first_level_item_features,
@@ -440,16 +441,22 @@ class OneStageScenario(HybridRecommender):
             )
 
             recs = get_top_k_recs(recs, k)
-            recs_cnt = recs.count()
-            logger.info(f"recs count: {recs_cnt}")
-            mean_recs = recs.groupBy("user_idx").count().select("count").collect()[0][0]
-            logger.debug(f"mean recs per user: {mean_recs}")
+            # recs_cnt = recs.count()
+            # logger.info(f"recs count: {recs_cnt}")
+            # mean_recs = recs.groupBy("user_idx").count().select("count").collect()[0][0]
+            # logger.debug(f"mean recs per user: {mean_recs}")
             logger.debug("calculating metrics")
             self._experiment.add_result(f"{type(base_model).__name__}", recs)
+            logger.debug(self._experiment.results)
             logger.debug("Saving model...")
             save(base_model, os.path.join("/tmp", f"model_{type(base_model).__name__}"), overwrite=True)
             logger.debug(f"Model saved")
             logger.info(f"Model {type(base_model).__name__} fitted")
+            # logger.debug("recs")
+            # logger.debug(recs.show())
+            # logger.debug("first_level_val")
+            # logger.debug(first_level_val.show())
+
 
             if self._is_trial:
                 for dataframe in self.cached_list:
@@ -490,6 +497,8 @@ class OneStageScenario(HybridRecommender):
 
             best_model = get_model(best_model_name)
             logger.info(f"Fitting the best model: {best_model_name}")
+            logger.debug(f"models_init_kwargs[best_model_name]: {models_init_kwargs[best_model_name]}")
+            logger.debug(f"best model init args: {best_model._init_args}")
             best_model._fit_wrap(
                 log=log,
                 user_features=first_level_user_features,
@@ -501,7 +510,6 @@ class OneStageScenario(HybridRecommender):
         unpersist_if_exists(first_level_user_features)
         unpersist_if_exists(first_level_item_features)
 
-        logger.debug(self.first_level_models[0].__dict__)
         for dataframe in self.cached_list:
             unpersist_if_exists(dataframe)
 

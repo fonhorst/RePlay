@@ -833,7 +833,7 @@ def get_default_fs() -> str:
     spark = SparkSession.getActiveSession()
     hadoop_conf = spark._jsc.hadoopConfiguration()
     default_fs = hadoop_conf.get("fs.defaultFS")
-    logger.debug(f"hadoop_conf.get('fs.defaultFS'): {default_fs}")
+    # logger.debug(f"hadoop_conf.get('fs.defaultFS'): {default_fs}")
     return default_fs
 
 
