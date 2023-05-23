@@ -52,31 +52,35 @@ first_levels_models_params = {
                 "seed": 42,
                 "num_item_blocks": 144,
                 "num_user_blocks": 144,
-                "hnswlib_params": {
-                    "space": "ip",
-                    "M": 100,
-                    "efS": 2000,
-                    "efC": 2000,
-                    "post": 0,
-                    "index_path": f"/tmp_index/als_hnswlib_index_{idx_num}",
-                    "build_index_on": "executor",
-                },
+                # "hnswlib_params": {
+                #     "space": "ip",
+                #     "M": 100,
+                #     "efS": 2000,
+                #     "efC": 2000,
+                #     "post": 0,
+                #     "index_path": f"/tmp_index/als_hnswlib_index_{idx_num}",
+                #     "build_index_on": "executor",
+                # },
             },
             "replay.models.word2vec.Word2VecRec": {
                 "rank": 100,
                 "seed": 42,
-                "hnswlib_params": {
-                    "space": "ip",
-                    "M": 100,
-                    "efS": 2000,
-                    "efC": 2000,
-                    "post": 0,
-                    "index_path": f"/tmp_index/word2vec_hnswlib_index_{idx_num}",
-                    "build_index_on": "executor",
-                },
+                # "hnswlib_params": {
+                #     "space": "ip",
+                #     "M": 100,
+                #     "efS": 2000,
+                #     "efC": 2000,
+                #     "post": 0,
+                #     "index_path": f"/tmp_index/word2vec_hnswlib_index_{idx_num}",
+                #     "build_index_on": "executor",
+                # },
             },
             "replay.models.slim.SLIM": {
                 "seed": 42},
+            "replay.models.association_rules.AssociationRulesItemRec": {
+                "num_neighbours": 100,
+                "min_item_count": 1,
+                "min_pair_count": 1},
         }
 
 second_model_params = {
@@ -110,6 +114,11 @@ FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
         "window_size": [1, 3],
         "use_idf": [True, False]
     },
+    "replay.models.association_rules.AssociationRulesItemRec": {
+        "min_item_count": [1, 10],
+        "min_pair_count": [1, 10],
+        "num_neighbours": [50, 200]
+    },
 }
 
 
@@ -121,11 +130,10 @@ class AutoRecSysScenario:
 
     """
 
-    def __init__(self, task: str, subtask: str, timeout: float):
+    def __init__(self, task: str, timeout: float):
 
         self.scenario = None
-        self.task = task
-        self.subtask = subtask
+        self.item2item = True if task == "item2item" else False
         self.timer = Timer(timeout=timeout)
         self.do_optimization = None
 
@@ -148,7 +156,11 @@ class AutoRecSysScenario:
             one_stage_timeout=self.timer.time_left
         )
 
-    def get_default_one_stage(self, first_level_models_names: List[str], experiment=None, is_trial=None):
+    def get_default_one_stage(self,
+                              first_level_models_names: List[str],
+                              experiment=None,
+                              is_trial=None,
+                              item2item: bool = False):
 
         first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names})
         if is_trial:
@@ -161,7 +173,8 @@ class AutoRecSysScenario:
                 experiment=experiment,
                 timeout=self.timer.time_left,
                 set_best_model=True,
-                is_trial=is_trial
+                is_trial=is_trial,
+                item2item=item2item
             )
 
     @staticmethod
@@ -173,13 +186,14 @@ class AutoRecSysScenario:
 
             # for debug purposes
 
-            # first_level_models_names = ["replay.models.als.ALSWrap",
-            #                             "replay.models.slim.SLIM"
-            #                             ]
             first_level_models_names = ["replay.models.knn.ItemKNN",
-                                        "replay.models.als.ALSWrap",
-                                        "replay.models.word2vec.Word2VecRec"
+                                        "replay.models.association_rules.AssociationRulesItemRec"
                                         ]
+
+            # first_level_models_names = ["replay.models.knn.ItemKNN",
+            #                             "replay.models.als.ALSWrap",
+            #                             "replay.models.word2vec.Word2VecRec"
+            #                             ]
         else:
 
             first_level_models_names = ["replay.models.als.ALSWrap",
@@ -195,18 +209,23 @@ class AutoRecSysScenario:
             self,
             log: DataFrame,
             is_trial: bool = False,
-            experiment: Experiment = None) -> Tuple[Union[OneStageScenario, TwoStagesScenario], bool, List[str]]:
+            experiment: Experiment = None,
+            item2item: bool = False) -> Tuple[Union[OneStageScenario, TwoStagesScenario], bool, List[str]]:
 
-        log_size = log.count()
+
+
         # log_size = 1_000_001  # for debug purposes
         first_level_models_names = self.get_first_level_models_names(log=log)
         do_optimization = None
 
         # 0 trial one-stage scenario
         if is_trial:
+            logger.debug("Choosing trial scenario")
 
-            scenario = self.get_default_one_stage(experiment=experiment, is_trial=is_trial,
-                                                  first_level_models_names=first_level_models_names)
+            scenario = self.get_default_one_stage(experiment=experiment,
+                                                  is_trial=is_trial,
+                                                  first_level_models_names=first_level_models_names,
+                                                  item2item=item2item)
             do_optimization = False
             return scenario, do_optimization, first_level_models_names
 
@@ -215,6 +234,21 @@ class AutoRecSysScenario:
         logger.info("Choosing the most appropriate scenario")
         logger.info(f"time_left: {self.timer.time_left} sec")
         logger.info(f"time_spent: {self.timer.time_spent} sec")
+
+        if self.item2item:
+
+            scenario = self.get_default_one_stage(first_level_models_names=first_level_models_names,
+                                                  experiment=experiment, item2item=self.item2item)
+            if self.timer.time_left >= 40 * self.timer.time_spent:
+                logger.info("One scenario with hyperparameters optimization have been chosen (S2)")
+                do_optimization = True
+            else:
+                logger.info("One scenario with default hyperparameters have been chosen (S1)")
+                do_optimization = False
+
+            return scenario, do_optimization, first_level_models_names
+
+        log_size = log.count()
 
         if log_size > 1_000_000 and self.timer.time_left >= 45 * self.timer.time_spent:
             logger.info(f"log size: {log_size} bigger than 1m")
@@ -254,7 +288,7 @@ class AutoRecSysScenario:
         logger.info(f"Time left: {self.timer.time_left}")
 
         # Fit the first model from 1st scenario
-        self.scenario, _, _ = self.get_scenario(self, log=log, is_trial=True)
+        self.scenario, _, _ = self.get_scenario(self, log=log, is_trial=True, item2item=self.item2item)
         self.scenario.fit(log=log, user_features=user_features, item_features=item_features)
         experiment = self.scenario.experiment
 
@@ -262,7 +296,8 @@ class AutoRecSysScenario:
 
         self.scenario, self.do_optimization, first_level_models_names = self.get_scenario(self,
                                                                                           log=log,
-                                                                                          experiment=experiment)
+                                                                                          experiment=experiment,
+                                                                                          item2item=self.item2item)
 
         if self.do_optimization:
 
@@ -296,8 +331,9 @@ class AutoRecSysScenario:
                 test=first_level_val,
                 param_borders=[*param_borders, None],
                 k=100,  # TODO: get from class
-                budget=10,
-                criterion=NDCG()
+                budget=2,  # TODO get back to 10
+                criterion=NDCG(),
+                item2item=self.item2item
             )
 
             if type(self.scenario).__name__ == "OneStageScenario":
@@ -321,6 +357,16 @@ class AutoRecSysScenario:
             item_features: Optional[DataFrame] = None,
             filter_seen_items: bool = True,
     ) -> DataFrame:
+
+        if self.item2item:
+            return self.scenario._predict(
+                log=log,
+                k=k, users=users,
+                items=items,
+                user_features=user_features,
+                item_features=item_features,
+                filter_seen_items=filter_seen_items)
+
 
         return self.scenario.predict(
             log=log,
