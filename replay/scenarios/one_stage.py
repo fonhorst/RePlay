@@ -3,6 +3,7 @@ import logging
 import os
 import importlib
 
+from abc import abstractmethod
 from collections.abc import Iterable
 from typing import Dict, Optional, Tuple, List, Union, Any, cast
 
@@ -149,7 +150,7 @@ class OneStageScenario(HybridRecommender):
         experiment: Experiment = None,
         timeout: float = None,
         set_best_model: bool = False,
-        item2item: bool = False
+        k: int = 10
     ) -> None:
         """
 
@@ -160,6 +161,7 @@ class OneStageScenario(HybridRecommender):
         :param seed: random seed
 
         """
+        self.k = k
         self.cached_list = []
         self.train_val_splitter = train_val_splitter
         self.first_level_models = (
@@ -198,7 +200,6 @@ class OneStageScenario(HybridRecommender):
             self.timer = None
         self._set_best_model = set_best_model
         self.fitted_models = []
-        self.item2item = item2item
 
     @property
     def _init_args(self):
@@ -295,6 +296,34 @@ class OneStageScenario(HybridRecommender):
             return dataframe
         return dataframe.filter(condition)
 
+    @abstractmethod
+    def _split_wrap(self, log: DataFrame):
+
+        """
+        splits log to train-val parts for optimization and comparison and cache dataframes
+        """
+    @abstractmethod
+    def _set_experiment(self, split_data: dict):
+        """
+        get data from split_data and set experiment depending on task
+        """
+
+    @abstractmethod
+    def _add_experiment(
+            self,
+            log: DataFrame,
+            split_data: dict,
+            base_model: BaseRecommender,
+            user_features: DataFrame,
+            item_features: DataFrame
+    ) -> None:
+        """
+        prepare data for predictions inside fit,
+        make predictions, add results
+        and save model for further model comparison
+
+        """
+
     # pylint: disable=too-many-locals,too-many-statements
     def _fit(
         self,
@@ -306,46 +335,8 @@ class OneStageScenario(HybridRecommender):
 
         self.cached_list = []
 
-        # 1. Split train data to train-val parts for optimization and comparison
-        log.cache()
-        self.cached_list.append(log)
-
-        if self._set_best_model:
-            self.logger.info("Data splitting")
-            first_level_train, first_level_val = self._split_data(log)
-
-            if self.item2item:
-
-                first_level_val_users = first_level_val\
-                    .groupBy("user_idx")\
-                    .agg(sf.count("item_idx").alias("item_count"))\
-                    .filter(sf.col("item_count") > 1)\
-                    .select("user_idx").distinct()
-                first_level_val = first_level_val.join(first_level_val_users, on="user_idx", how="right")
-
-                first_level_val = first_level_val \
-                    .withColumn("item_num", sf.row_number()
-                                .over(Window.partitionBy("user_idx").orderBy(sf.col("timestamp").asc())))
-
-                first_level_val_first_item = first_level_val.filter(first_level_val.item_num == 1)
-                logger.debug(f"first_level_val_first_item info : {get_log_info(first_level_val_first_item)}")
-
-                first_level_val_other_items = first_level_val.filter(first_level_val.item_num > 1)
-
-                first_level_val_first_item.cache()
-                first_level_val_other_items.cache()
-
-                self.cached_list.extend(
-                    [first_level_val_first_item, first_level_val_other_items]
-                )
-
-            first_level_train.cache()
-            first_level_val.cache()
-            self.cached_list.extend(
-                [first_level_train, first_level_val]
-            )
-        else:
-            first_level_train = log
+        split_data = self._split_wrap(log)
+        first_level_train = split_data["first_level_train"]
 
         self.first_level_item_len = (
             first_level_train.select("item_idx").distinct().count()
@@ -353,7 +344,6 @@ class OneStageScenario(HybridRecommender):
         self.first_level_user_len = (
             first_level_train.select("user_idx").distinct().count()
         )
-
 
         # 2. Transform user and item features if applicable
         if user_features is not None:
@@ -399,26 +389,19 @@ class OneStageScenario(HybridRecommender):
             )
             return
 
-        # TODO: get it from somewhere
-        k = 100
-
         resume = True if self._experiment else False
         if not self._experiment and self._set_best_model:
+            self._set_experiment(split_data)
 
-            if self.item2item:
-                self._experiment = Experiment(
-                    first_level_val_other_items,
-                    {
-                        NDCG(use_scala_udf=True): [k],
-                    },
-                )
-            else:
-                self._experiment = Experiment(
-                    first_level_val,
-                    {
-                        NDCG(use_scala_udf=True): [k],
-                    },
-                )
+        if self._is_trial:
+            logger.info("Running trial model")
+            first_level_val = split_data["first_level_val"]
+
+            first_level_train.write.mode("overwrite").parquet("/tmp/first_level_train.parquet")
+            first_level_val.write.mode("overwrite").parquet("/tmp/first_level_val.parquet")
+
+        if resume:
+            logger.info("Resuming one-stage scenario")
 
         MODEL_NAME_TO_FULL_MODEL_NAME = {
             "ItemKNN": "replay.models.knn.ItemKNN",
@@ -426,17 +409,6 @@ class OneStageScenario(HybridRecommender):
             "Word2VecRec": "replay.models.word2vec.Word2VecRec",
             "SLIM": "replay.models.slim.SLIM",  # TODO: refactor this part
             "AssociationRulesItemRec": "replay.models.association_rules.AssociationRulesItemRec"}
-
-        if self._is_trial:
-            logger.info("Running trial model")
-            first_level_train.write.mode("overwrite").parquet("/tmp/first_level_train.parquet")
-            first_level_val.write.mode("overwrite").parquet("/tmp/first_level_val.parquet")
-            if self.item2item:
-                first_level_val_first_item.write.mode("overwrite").parquet("/tmp/first_level_val_first_item.parquet")
-                first_level_val_other_items.write.mode("overwrite").parquet("/tmp/first_level_val_other_items.parquet")
-
-        if resume:
-            logger.info("Resuming one-stage scenario")
 
         models_init_kwargs = {
             MODEL_NAME_TO_FULL_MODEL_NAME[f"{type(base_model).__name__}"]:
@@ -471,70 +443,9 @@ class OneStageScenario(HybridRecommender):
                     return
                 continue
 
-            if self.item2item:
-
-                nearest_items = base_model.get_nearest_items(
-                    items=first_level_val_first_item.select("item_idx").distinct(), k=k)
-                logger.debug(f"nearest_items: {nearest_items}")
-                logger.debug(f"nearest_items count: {nearest_items.count()}")
-                nearest_items = nearest_items.filter(nearest_items.item_idx != nearest_items.neighbour_item_idx)
-
-                nearest_items = nearest_items \
-                    .withColumnRenamed("cosine_similarity", "similarity") \
-                    .withColumnRenamed("confidence", "similarity")
-
-                pred = first_level_val_first_item.select("user_idx", "item_idx", "timestamp")\
-                    .join(nearest_items, "item_idx", how="left") \
-                    .select("user_idx", "neighbour_item_idx", "similarity", "timestamp")
-
-                pred = pred \
-                    .withColumnRenamed("neighbour_item_idx", "item_idx") \
-                    .withColumnRenamed("similarity", "relevance")
-
-                logger.debug(f"pred: {pred}")
-                logger.debug(f"pred count: {pred.count()}")
-                pred = pred.filter(pred.item_idx.isNotNull())  # TODO: add smth to items which not in index
-
-                # pred.write.mode("overwrite").parquet("/opt/spark_data/replay_datasets/preds_original_1m.parquet")
-                # pred.write.mode("overwrite").parquet("/opt/spark_data/replay_datasets/preds_1m_w2w_v2.parquet")
-                # pred.write.mode("overwrite").parquet("/opt/spark_data/replay_datasets/preds_hnsw_w2w.parquet")
-
-                # pred.write.mode("overwrite").parquet("/opt/spark_data/replay_datasets/preds_hnsw_30k_cosine.parquet")
-
-                first_level_val_other_items = first_level_val_other_items.select("user_idx", "item_idx", "relevance", "timestamp")
-                logger.debug(f"users_other_items: {first_level_val_other_items}")
-                logger.debug("calculating metrics")
-                self._experiment.add_result(f"{type(base_model).__name__}", pred)
-                logger.debug(self._experiment.results)
-
-            else:
-
-                recs = base_model._inner_predict_wrap(
-                    log=first_level_train,
-                    k=k,
-                    users=first_level_val.select("user_idx").distinct(),
-                    items=log.select("item_idx").distinct(),
-                    user_features=first_level_user_features,
-                    item_features=first_level_item_features,
-                    filter_seen_items=True
-                )
-
-                recs = get_top_k_recs(recs, k)
-                # recs_cnt = recs.count()
-                # logger.info(f"recs count: {recs_cnt}")
-                # mean_recs = recs.groupBy("user_idx").count().select("count").collect()[0][0]
-                # logger.debug(f"mean recs per user: {mean_recs}")
-                logger.debug("calculating metrics")
-                self._experiment.add_result(f"{type(base_model).__name__}", recs)
-                logger.debug(self._experiment.results)
-            logger.debug("Saving model...")
-            save(base_model, os.path.join("/tmp", f"model_{type(base_model).__name__}"), overwrite=True)
-            logger.debug(f"Model saved")
-            logger.info(f"Model {type(base_model).__name__} fitted")
-                # logger.debug("recs")
-                # logger.debug(recs.show())
-                # logger.debug("first_level_val")
-                # logger.debug(first_level_val.show())
+            self._add_experiment(base_model=base_model, log=log,
+                                 user_features=first_level_user_features, item_features=first_level_item_features,
+                                 split_data=split_data)
 
             if self._is_trial:
                 for dataframe in self.cached_list:
@@ -548,8 +459,8 @@ class OneStageScenario(HybridRecommender):
                 if self.timer.time_limit_exceeded():
                     logger.info("Time limit exceed")
                     logger.info("comparing of fitted models")
-                    logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
-                    best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
+                    logger.info(self._experiment.results.sort_values(f"NDCG@{self.k}"))
+                    best_model_name = self._experiment.results.sort_values(f"NDCG@{self.k}", ascending=False).index[0]
                     best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
                     logger.info(f"best_model_name: {best_model_name}")
                     # load best model
@@ -558,8 +469,8 @@ class OneStageScenario(HybridRecommender):
 
         if self._set_best_model:
             # Comparing models
-            logger.info(self._experiment.results.sort_values(f"NDCG@{k}"))
-            best_model_name = self._experiment.results.sort_values(f"NDCG@{k}", ascending=False).index[0]
+            logger.info(self._experiment.results.sort_values(f"NDCG@{self.k}"))
+            best_model_name = self._experiment.results.sort_values(f"NDCG@{self.k}", ascending=False).index[0]
             best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
             logger.info(f"best_model_name: {best_model_name}")
 
@@ -591,7 +502,7 @@ class OneStageScenario(HybridRecommender):
         for dataframe in self.cached_list:
             unpersist_if_exists(dataframe)
 
-    # pylint: disable=too-many-arguments
+    @abstractmethod
     def _predict(
         self,
         log: DataFrame,
@@ -602,55 +513,10 @@ class OneStageScenario(HybridRecommender):
         item_features: Optional[DataFrame] = None,
         filter_seen_items: bool = True,
     ) -> DataFrame:
-        self._job_group_id = "1stage_predict"
-        self.cached_list = []
 
-        first_level_user_features = cache_if_exists(
-            self.first_level_user_features_transformer.transform(user_features)
-        )
-        first_level_item_features = cache_if_exists(
-            self.first_level_item_features_transformer.transform(item_features)
-        )
-
-        unpersist_if_exists(first_level_user_features)
-        unpersist_if_exists(first_level_item_features)
-
-        with JobGroupWithMetrics(self._job_group_id, f"{type(self.best_model).__name__}_predict"):
-
-            if self.item2item:
-
-                predictions = self.best_model.get_nearest_items(
-                    items=items.select("item_idx").distinct(), k=k)
-                logger.debug(f"nearest_items: {predictions}")
-                logger.debug(f"nearest_items count: {predictions.count()}")
-                predictions = predictions.filter(predictions.item_idx != predictions.neighbour_item_idx)
-
-                predictions = predictions \
-                    .withColumnRenamed("cosine_similarity", "similarity") \
-                    .withColumnRenamed("confidence", "similarity")
-
-                # pred = first_level_val_first_item.select("user_idx", "item_idx", "timestamp") \
-                #     .join(nearest_items, "item_idx", how="left") \
-                #     .select("user_idx", "neighbour_item_idx", "similarity", "timestamp")
-
-                # pred = pred \
-                #     .withColumnRenamed("neighbour_item_idx", "item_idx") \
-                #     .withColumnRenamed("similarity", "relevance")
-
-                # logger.debug(f"pred: {pred}")
-                # logger.debug(f"pred count: {pred.count()}")
-                # pred = pred.filter(pred.item_idx.isNotNull())  # TODO: add smth to items which not in index
-            else:
-                predictions = self.best_model._predict(
-                    log=log, k=k, users=users, items=items,
-                    user_features=first_level_user_features,
-                    item_features=first_level_item_features,
-                    filter_seen_items=filter_seen_items)
-                predictions = get_top_k_recs(predictions, k=k)
-
-        logger.info(f"predictions count: {predictions.count()}")
-        logger.info(f"predictions.columns: {predictions.columns}")
-        return predictions
+        """
+        make predictions
+        """
 
     def fit_predict(
         self,
@@ -688,6 +554,7 @@ class OneStageScenario(HybridRecommender):
         return self._experiment
 
     @staticmethod
+    @abstractmethod
     def _optimize_one_model(
         model: BaseRecommender,
         train: AnyDataFrame,
@@ -699,21 +566,8 @@ class OneStageScenario(HybridRecommender):
         k: int = 10,
         budget: int = 10,
         new_study: bool = True,
-        item2item: bool = False
     ):
-        params, value = model.optimize(
-            train,
-            test,
-            user_features,
-            item_features,
-            param_borders,
-            criterion,
-            k,
-            budget,
-            new_study,
-            item2item
-        )
-        return params, value
+        pass
 
     # pylint: disable=too-many-arguments, too-many-locals
     def optimize(
@@ -789,8 +643,7 @@ class OneStageScenario(HybridRecommender):
                     criterion=criterion,
                     k=k,
                     budget=budget,
-                    new_study=new_study,
-                    item2item=item2item
+                    new_study=new_study
                 )
 
                 params_found.append(param)
@@ -832,3 +685,314 @@ class OneStageScenario(HybridRecommender):
     def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
                            candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:
         raise NotImplementedError("Unsupported method")
+
+
+class OneStageUser2ItemScenario(OneStageScenario):
+
+    def _split_wrap(self, log):
+
+        output_dict = {}
+
+        log.cache()
+        self.cached_list.append(log)
+
+        if self._set_best_model:
+            self.logger.info("Data splitting")
+            first_level_train, first_level_val = self._split_data(log)
+            first_level_train.cache()
+            first_level_val.cache()
+            self.cached_list.extend(
+                [first_level_train, first_level_val]
+            )
+            output_dict["first_level_val"] = first_level_val
+        else:
+            first_level_train = log
+        output_dict["first_level_train"] = first_level_train
+
+        return output_dict
+
+    def _set_experiment(self, split_data: dict):
+
+        first_level_val = split_data["first_level_val"]
+
+        self._experiment = Experiment(
+            first_level_val,
+            {
+                NDCG(use_scala_udf=True): [self.k],
+            },
+        )
+
+    def _add_experiment(
+            self,
+            log: DataFrame,
+            split_data: dict,
+            base_model: BaseRecommender,
+            user_features: DataFrame,
+            item_features: DataFrame
+    ) -> None:
+
+        first_level_train = split_data["first_level_train"]
+        first_level_val = split_data["first_level_val"]
+
+        recs = base_model._inner_predict_wrap(
+            log=first_level_train,
+            k=self.k,
+            users=first_level_val.select("user_idx").distinct(),
+            items=log.select("item_idx").distinct(),
+            user_features=user_features,
+            item_features=item_features,
+            filter_seen_items=True
+        )
+
+        recs = get_top_k_recs(recs, self.k)
+        logger.debug("calculating metrics")
+        self._experiment.add_result(f"{type(base_model).__name__}", recs)
+        logger.debug(self._experiment.results)
+        logger.debug("Saving model...")
+        save(base_model, os.path.join("/tmp", f"model_{type(base_model).__name__}"), overwrite=True)
+        logger.debug(f"Model saved")
+        logger.info(f"Model {type(base_model).__name__} fitted")
+
+    @staticmethod
+    def _optimize_one_model(
+        model: BaseRecommender,
+        train: AnyDataFrame,
+        test: AnyDataFrame,
+        user_features: Optional[AnyDataFrame] = None,
+        item_features: Optional[AnyDataFrame] = None,
+        param_borders: Optional[Dict[str, List[Any]]] = None,
+        criterion: Metric = Precision(),
+        k: int = 10,
+        budget: int = 10,
+        new_study: bool = True,
+    ):
+        params, value = model.optimize(
+            train,
+            test,
+            user_features,
+            item_features,
+            param_borders,
+            criterion,
+            k,
+            budget,
+            new_study,
+            item2item=False
+        )
+        return params, value
+
+    def _predict(
+            self,
+            log: DataFrame,
+            k: int,
+            users: DataFrame,
+            items: DataFrame,
+            user_features: Optional[DataFrame] = None,
+            item_features: Optional[DataFrame] = None,
+            filter_seen_items: bool = True,
+    ) -> DataFrame:
+        self._job_group_id = "1stage_predict"
+        self.cached_list = []
+
+        first_level_user_features = cache_if_exists(
+            self.first_level_user_features_transformer.transform(user_features)
+        )
+        first_level_item_features = cache_if_exists(
+            self.first_level_item_features_transformer.transform(item_features)
+        )
+
+        unpersist_if_exists(first_level_user_features)
+        unpersist_if_exists(first_level_item_features)
+
+        with JobGroupWithMetrics(self._job_group_id, f"{type(self.best_model).__name__}_predict"):
+
+            predictions = self.best_model._predict(
+                log=log, k=k, users=users, items=items,
+                user_features=first_level_user_features,
+                item_features=first_level_item_features,
+                filter_seen_items=filter_seen_items)
+            predictions = get_top_k_recs(predictions, k=k)
+
+            logger.info(f"predictions count: {predictions.count()}")
+            logger.info(f"predictions.columns: {predictions.columns}")
+
+        return predictions
+
+
+class OneStageItem2ItemScenario(OneStageScenario):
+
+    def _split_wrap(self, log):
+
+        output_dict = {}
+        log.cache()
+        self.cached_list.append(log)
+
+        if self._set_best_model:
+            self.logger.info("Data splitting")
+            first_level_train, first_level_val = self._split_data(log)
+
+
+            first_level_val_users = first_level_val \
+                .groupBy("user_idx") \
+                .agg(sf.count("item_idx").alias("item_count")) \
+                .filter(sf.col("item_count") > 1) \
+                .select("user_idx").distinct()
+            first_level_val = first_level_val.join(first_level_val_users, on="user_idx", how="right")
+
+            first_level_val = first_level_val \
+                .withColumn("item_num", sf.row_number()
+                            .over(Window.partitionBy("user_idx").orderBy(sf.col("timestamp").asc())))
+
+            first_level_val_first_item = first_level_val.filter(first_level_val.item_num == 1)
+            logger.debug(f"first_level_val_first_item info : {get_log_info(first_level_val_first_item)}")
+
+            first_level_val_other_items = first_level_val.filter(first_level_val.item_num > 1)
+
+            first_level_val_first_item.cache()
+            first_level_val_other_items.cache()
+
+            self.cached_list.extend(
+                [first_level_val_first_item, first_level_val_other_items]
+            )
+
+            first_level_train.cache()
+            first_level_val.cache()
+            self.cached_list.extend(
+                [first_level_train, first_level_val]
+            )
+            output_dict["first_level_val_first_item"] = first_level_val_first_item
+            output_dict["first_level_val_other_items"] = first_level_val_other_items
+
+        else:
+            first_level_train = log
+
+        output_dict["first_level_train"] = first_level_train
+
+        return output_dict
+
+    def _set_experiment(self, split_data: dict):
+
+        first_level_val_first_item = split_data["first_level_val_first_item"]
+        first_level_val_other_items = split_data["first_level_val_other_items"]
+
+        self._experiment = Experiment(
+            first_level_val_other_items,
+            {
+                NDCG(use_scala_udf=True): [self.k],
+            },
+        )
+
+        if self._is_trial:
+            first_level_val_first_item.write.mode("overwrite").parquet("/tmp/first_level_val_first_item.parquet")
+            first_level_val_other_items.write.mode("overwrite").parquet("/tmp/first_level_val_other_items.parquet")
+
+    def _add_experiment(
+            self,
+            log: DataFrame,
+            split_data: dict,
+            base_model: BaseRecommender,
+            user_features: DataFrame,
+            item_features: DataFrame
+    ) -> None:
+
+        first_level_val_first_item = split_data["first_level_val_first_item"]
+        first_level_val_other_items = split_data["first_level_val_other_items"]
+
+        nearest_items = base_model.get_nearest_items(
+            items=first_level_val_first_item.select("item_idx").distinct(), k=self.k)
+        logger.debug(f"nearest_items: {nearest_items}")
+        logger.debug(f"nearest_items count: {nearest_items.count()}")
+        nearest_items = nearest_items.filter(nearest_items.item_idx != nearest_items.neighbour_item_idx)
+
+        nearest_items = nearest_items \
+            .withColumnRenamed("cosine_similarity", "similarity") \
+            .withColumnRenamed("confidence", "similarity")
+
+        pred = first_level_val_first_item.select("user_idx", "item_idx", "timestamp") \
+            .join(nearest_items, "item_idx", how="left") \
+            .select("user_idx", "neighbour_item_idx", "similarity", "timestamp")
+
+        pred = pred \
+            .withColumnRenamed("neighbour_item_idx", "item_idx") \
+            .withColumnRenamed("similarity", "relevance")
+
+        logger.debug(f"pred: {pred}")
+        logger.debug(f"pred count: {pred.count()}")
+        pred = pred.filter(pred.item_idx.isNotNull())
+
+        first_level_val_other_items = first_level_val_other_items.select("user_idx", "item_idx", "relevance",
+                                                                         "timestamp")
+        logger.debug(f"users_other_items: {first_level_val_other_items}")
+        logger.debug("calculating metrics")
+        self._experiment.add_result(f"{type(base_model).__name__}", pred)
+        logger.debug(self._experiment.results)
+
+        logger.debug("Saving model...")
+        save(base_model, os.path.join("/tmp", f"model_{type(base_model).__name__}"), overwrite=True)
+        logger.debug(f"Model saved")
+        logger.info(f"Model {type(base_model).__name__} fitted")
+
+    def _predict(
+            self,
+            log: DataFrame,
+            k: int,
+            users: DataFrame,
+            items: DataFrame,
+            user_features: Optional[DataFrame] = None,
+            item_features: Optional[DataFrame] = None,
+            filter_seen_items: bool = True,
+    ) -> DataFrame:
+        self._job_group_id = "1stage_predict"
+        self.cached_list = []
+
+        first_level_user_features = cache_if_exists(
+            self.first_level_user_features_transformer.transform(user_features)
+        )
+        first_level_item_features = cache_if_exists(
+            self.first_level_item_features_transformer.transform(item_features)
+        )
+
+        unpersist_if_exists(first_level_user_features)
+        unpersist_if_exists(first_level_item_features)
+
+        with JobGroupWithMetrics(self._job_group_id, f"{type(self.best_model).__name__}_predict"):
+
+            predictions = self.best_model.get_nearest_items(
+                items=items.select("item_idx").distinct(), k=k)
+            logger.debug(f"nearest_items: {predictions}")
+            logger.debug(f"nearest_items count: {predictions.count()}")
+            predictions = predictions.filter(predictions.item_idx != predictions.neighbour_item_idx)
+
+            predictions = predictions \
+                .withColumnRenamed("cosine_similarity", "similarity") \
+                .withColumnRenamed("confidence", "similarity")
+
+            logger.info(f"predictions count: {predictions.count()}")
+            logger.info(f"predictions.columns: {predictions.columns}")
+        return predictions
+
+    @staticmethod
+    def _optimize_one_model(
+        model: BaseRecommender,
+        train: AnyDataFrame,
+        test: AnyDataFrame,
+        user_features: Optional[AnyDataFrame] = None,
+        item_features: Optional[AnyDataFrame] = None,
+        param_borders: Optional[Dict[str, List[Any]]] = None,
+        criterion: Metric = Precision(),
+        k: int = 10,
+        budget: int = 10,
+        new_study: bool = True,
+    ):
+        params, value = model.optimize(
+            train,
+            test,
+            user_features,
+            item_features,
+            param_borders,
+            criterion,
+            k,
+            budget,
+            new_study,
+            item2item=True
+        )
+        return params, value
