@@ -29,7 +29,7 @@ from replay.utils import (
     unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
     cache_and_materialize_if_in_debug, JobGroupWithMetrics,
 )
-from replay.scenarios import OneStageScenario
+from replay.scenarios import OneStageUser2ItemScenario
 
 logger = logging.getLogger("replay")
 
@@ -193,25 +193,13 @@ class TwoStagesScenario(HybridRecommender):
         self.train_splitter = train_splitter
         self.cached_list = []
 
-        # self.first_level_models = (
-        #     first_level_models
-        #     if isinstance(first_level_models, Iterable)
-        #     else [first_level_models]
-        # )
-
         self.first_level_item_len = 0
         self.first_level_user_len = 0
 
         self.random_model = RandomRec(seed=seed)
         self.fallback_model = fallback_model
-        # self.first_level_user_features_transformer = (
-        #     ToNumericFeatureTransformer()
-        # )
-        # self.first_level_item_features_transformer = (
-        #     ToNumericFeatureTransformer()
-        # )
 
-        self.one_stage_scenario = OneStageScenario(
+        self.one_stage_scenario = OneStageUser2ItemScenario(
             first_level_models=first_level_models,
             user_cat_features_list=user_cat_features_list,
             item_cat_features_list=item_cat_features_list,
@@ -277,38 +265,41 @@ class TwoStagesScenario(HybridRecommender):
         spark = State().session
         create_folder(path, exists_ok=True)
 
-        # save features
-        if self.first_level_user_features_transformer is not None:
-            save_transformer(
-                self.first_level_user_features_transformer,
-                os.path.join(path, "first_level_user_features_transformer")
-            )
+        # # save features
+        # if self.first_level_user_features_transformer is not None:
+        #     save_transformer(
+        #         self.first_level_user_features_transformer,
+        #         os.path.join(path, "first_level_user_features_transformer")
+        #     )
+        #
+        # if self.first_level_item_features_transformer is not None:
+        #     save_transformer(
+        #         self.first_level_item_features_transformer,
+        #         os.path.join(path, "first_level_item_features_transformer")
+        #     )
+        one_stage_scenario_path = os.path.join(path, "one_stage_scenario")
+        if self.one_stage_scenario is not None:
+            self.one_stage_scenario._save_model(one_stage_scenario_path)
 
-        if self.first_level_item_features_transformer is not None:
-            save_transformer(
-                self.first_level_item_features_transformer,
-                os.path.join(path, "first_level_item_features_transformer")
-            )
+        # if self.features_processor is not None:
+        #     save_transformer(self.features_processor, os.path.join(path, "features_processor"))
 
-        if self.features_processor is not None:
-            save_transformer(self.features_processor, os.path.join(path, "features_processor"))
-
-        # Save first level models
-        first_level_models_path = os.path.join(path, "first_level_models")
-        create_folder(first_level_models_path)
-        for i, model in enumerate(self.first_level_models):
-            save(model, os.path.join(first_level_models_path, f"model_{i}"))
+        # # Save first level models
+        # first_level_models_path = os.path.join(path, "first_level_models")
+        # create_folder(first_level_models_path)
+        # for i, model in enumerate(self.first_level_models):
+        #     save(model, os.path.join(first_level_models_path, f"model_{i}"))
 
         # save auxillary models
         if self.random_model is not None:
-            save(self.random_model, os.path.join(path, "random_model"))
+            save(self.random_model, os.path.join(path, "random_model"), overwrite=True)
 
         if self.fallback_model is not None:
-            save(self.fallback_model, os.path.join(path, "fallback_model"))
+            save(self.fallback_model, os.path.join(path, "fallback_model"), overwrite=True)
 
         # save second stage model
         if self.second_stage_model is not None:
-            save_transformer(self.second_stage_model, os.path.join(path, "second_stage_model"))
+            save_transformer(self.second_stage_model, os.path.join(path, "second_stage_model"), overwrite=True)
 
         # save general data and settings
         data = {
@@ -331,26 +322,32 @@ class TwoStagesScenario(HybridRecommender):
         # load general data and settings
         data = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
 
-        # load transformers for features
-        comp_path = os.path.join(path, "first_level_user_features_transformer")
-        first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
+        # # load transformers for features
+        # comp_path = os.path.join(path, "first_level_user_features_transformer")
+        # first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
+        #
+        # comp_path = os.path.join(path, "first_level_item_features_transformer")
+        # first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
+        #
+        # comp_path = os.path.join(path, "features_processor")
+        # features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None
 
-        comp_path = os.path.join(path, "first_level_item_features_transformer")
-        first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
+        # # load first level models
+        # first_level_models_path = os.path.join(path, "first_level_models")
+        # if do_path_exists(first_level_models_path):
+        #     model_paths = [
+        #         os.path.join(first_level_models_path, model_path)
+        #         for model_path in list_folder(first_level_models_path)
+        #     ]
+        #     first_level_models = [load(model_path) for model_path in model_paths]
+        # else:
+        #     first_level_models = None
 
-        comp_path = os.path.join(path, "features_processor")
-        features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None
-
-        # load first level models
-        first_level_models_path = os.path.join(path, "first_level_models")
-        if do_path_exists(first_level_models_path):
-            model_paths = [
-                os.path.join(first_level_models_path, model_path)
-                for model_path in list_folder(first_level_models_path)
-            ]
-            first_level_models = [load(model_path) for model_path in model_paths]
+        one_stage_scenario_path = os.path.join(path, "one_stage_scenario")
+        if do_path_exists(one_stage_scenario_path):
+            one_stage_scenario = OneStageUser2ItemScenario()._load_model(one_stage_scenario_path)
         else:
-            first_level_models = None
+            one_stage_scenario = None
 
         # load auxillary models
         comp_path = os.path.join(path, "random_model")
@@ -364,12 +361,20 @@ class TwoStagesScenario(HybridRecommender):
         # second_stage_model = load_transformer(comp_path) if do_path_exists(comp_path) else None # TODO: fix it
         second_stage_model = None
 
+        # self.__dict__.update({
+        #     **data,
+        #     "first_level_user_features_transformer": first_level_user_features_transformer,
+        #     "first_level_item_features_transformer": first_level_item_features_transformer,
+        #     "features_processor": features_processor,
+        #     "first_level_models": first_level_models,
+        #     "random_model": random_model,
+        #     "fallback_model": fallback_model,
+        #     "second_stage_model": second_stage_model
+        # })
+
         self.__dict__.update({
             **data,
-            "first_level_user_features_transformer": first_level_user_features_transformer,
-            "first_level_item_features_transformer": first_level_item_features_transformer,
-            "features_processor": features_processor,
-            "first_level_models": first_level_models,
+            "one_stage_scenario": one_stage_scenario,
             "random_model": random_model,
             "fallback_model": fallback_model,
             "second_stage_model": second_stage_model
@@ -535,12 +540,6 @@ class TwoStagesScenario(HybridRecommender):
                     .select(sf.max("num_positives"))
                     .collect()[0][0]
                 )
-
-        logger.debug(f"log.count(): {log.count()}")
-        logger.debug(f"k: {k+max_positives_to_filter}")
-        logger.debug(f"users count: {users.count()}")
-        logger.debug(f"items count: {items.count()}")
-        logger.debug(f"model_params: {model._init_args}")
 
         with JobGroupWithMetrics(__file__, f"{type(model).__name__}._{prediction_label}_predict") as job_desc:
             pred = model._inner_predict_wrap(

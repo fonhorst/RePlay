@@ -200,6 +200,7 @@ class OneStageScenario(HybridRecommender):
             self.timer = None
         self._set_best_model = set_best_model
         self.fitted_models = []
+        self.best_model = None
 
     @property
     def _init_args(self):
@@ -249,7 +250,6 @@ class OneStageScenario(HybridRecommender):
         if self.best_model is not None:
             best_model_path = os.path.join(path, "first_level_models", "best_model")
             save(self.best_model, best_model_path, overwrite=True)
-
 
         # save general data and settings
         data = {
@@ -391,7 +391,8 @@ class OneStageScenario(HybridRecommender):
         self.first_level_item_features = first_level_item_features
 
         # 3. Fit first level models
-        if hasattr(self, "best_model"):
+        # if hasattr(self, "best_model"):
+        if self.best_model is not None:
             logger.info("fit the best model on full train")
             logger.debug(f"model params are: {self.best_model._init_args}")
             self.best_model._fit_wrap(
