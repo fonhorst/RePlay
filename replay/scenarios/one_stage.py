@@ -217,7 +217,6 @@ class OneStageScenario(HybridRecommender):
         )
         return first_level_train, first_level_val
 
-
     def _save_model(self, path: str):
         from replay.model_handler import save
         spark = State().session
@@ -227,23 +226,30 @@ class OneStageScenario(HybridRecommender):
         if self.first_level_user_features_transformer is not None:
             save_transformer(
                 self.first_level_user_features_transformer,
-                os.path.join(path, "first_level_user_features_transformer")
+                os.path.join(path, "first_level_user_features_transformer"),
+                overwrite=True
             )
 
         if self.first_level_item_features_transformer is not None:
             save_transformer(
                 self.first_level_item_features_transformer,
-                os.path.join(path, "first_level_item_features_transformer")
+                os.path.join(path, "first_level_item_features_transformer"),
+                overwrite=True
             )
 
         if self.features_processor is not None:
-            save_transformer(self.features_processor, os.path.join(path, "features_processor"))
+            save_transformer(self.features_processor, os.path.join(path, "features_processor"), overwrite=True)
 
         # Save first level models
         first_level_models_path = os.path.join(path, "first_level_models")
-        create_folder(first_level_models_path)
+        create_folder(first_level_models_path, exists_ok=True)
         for i, model in enumerate(self.first_level_models):
-            save(model, os.path.join(first_level_models_path, f"model_{i}"))
+            save(model, os.path.join(first_level_models_path, f"model_{i}"), overwrite=True)
+
+        if self.best_model is not None:
+            best_model_path = os.path.join(path, "first_level_models", "best_model")
+            save(self.best_model, best_model_path, overwrite=True)
+
 
         # save general data and settings
         data = {
@@ -252,7 +258,7 @@ class OneStageScenario(HybridRecommender):
             "seed": self.seed
         }
 
-        spark.createDataFrame([data]).write.parquet(os.path.join(path, "data.parquet"))
+        spark.createDataFrame([data]).write.mode("overwrite").parquet(os.path.join(path, "data.parquet"))
 
     def _load_model(self, path: str):
         from replay.model_handler import load
@@ -263,13 +269,13 @@ class OneStageScenario(HybridRecommender):
 
         # load transformers for features
         comp_path = os.path.join(path, "first_level_user_features_transformer")
-        first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None #TODO: check why this dir exists if user_features=None
+        first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
 
         comp_path = os.path.join(path, "first_level_item_features_transformer")
-        first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None #TODO same
+        first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
 
         comp_path = os.path.join(path, "features_processor")
-        features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None # TODO same
+        features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None
 
         # load first level models
         first_level_models_path = os.path.join(path, "first_level_models")
@@ -282,12 +288,19 @@ class OneStageScenario(HybridRecommender):
         else:
             first_level_models = None
 
+        best_model_path = os.path.join(path, "first_level_models", "best_model")
+        if do_path_exists(best_model_path):
+            best_model = load(best_model_path)
+        else:
+            best_model = None
+
         self.__dict__.update({
             **data,
             "first_level_user_features_transformer": first_level_user_features_transformer,
             "first_level_item_features_transformer": first_level_item_features_transformer,
             "features_processor": features_processor,
             "first_level_models": first_level_models,
+            "best_model": best_model
         })
 
     @staticmethod
