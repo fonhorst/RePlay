@@ -298,14 +298,13 @@ class OneStageScenario(HybridRecommender):
 
     @abstractmethod
     def _split_wrap(self, log: DataFrame):
-
         """
         splits log to train-val parts for optimization and comparison and cache dataframes
         """
     @abstractmethod
     def _set_experiment(self, split_data: dict):
         """
-        get data from split_data and set experiment depending on task
+        get data from split_data and set experiment depending on the task
         """
 
     @abstractmethod
@@ -321,7 +320,6 @@ class OneStageScenario(HybridRecommender):
         prepare data for predictions inside fit,
         make predictions, add results
         and save model for further model comparison
-
         """
 
     # pylint: disable=too-many-locals,too-many-statements
@@ -335,6 +333,7 @@ class OneStageScenario(HybridRecommender):
 
         self.cached_list = []
 
+        # 1. Split data
         split_data = self._split_wrap(log)
         first_level_train = split_data["first_level_train"]
 
@@ -403,18 +402,7 @@ class OneStageScenario(HybridRecommender):
         if resume:
             logger.info("Resuming one-stage scenario")
 
-        MODEL_NAME_TO_FULL_MODEL_NAME = {
-            "ItemKNN": "replay.models.knn.ItemKNN",
-            "ALSWrap": "replay.models.als.ALSWrap",
-            "Word2VecRec": "replay.models.word2vec.Word2VecRec",
-            "SLIM": "replay.models.slim.SLIM",  # TODO: refactor this part
-            "AssociationRulesItemRec": "replay.models.association_rules.AssociationRulesItemRec"}
-
-        models_init_kwargs = {
-            MODEL_NAME_TO_FULL_MODEL_NAME[f"{type(base_model).__name__}"]:
-                base_model._init_args for base_model in self.first_level_models
-        }
-        # logger.debug(f"model_init_kwargs: {models_init_kwargs}")
+        first_level_model_names = [type(base_model).__name__ for base_model in self.first_level_models]
         first_level_models = self.first_level_models if not resume else self.first_level_models[1:]
 
         for base_model in first_level_models:
@@ -461,7 +449,6 @@ class OneStageScenario(HybridRecommender):
                     logger.info("comparing of fitted models")
                     logger.info(self._experiment.results.sort_values(f"NDCG@{self.k}"))
                     best_model_name = self._experiment.results.sort_values(f"NDCG@{self.k}", ascending=False).index[0]
-                    best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
                     logger.info(f"best_model_name: {best_model_name}")
                     # load best model
                     self.best_model = load(os.path.join("/tmp", f"model_{best_model_name}"))
@@ -471,22 +458,10 @@ class OneStageScenario(HybridRecommender):
             # Comparing models
             logger.info(self._experiment.results.sort_values(f"NDCG@{self.k}"))
             best_model_name = self._experiment.results.sort_values(f"NDCG@{self.k}", ascending=False).index[0]
-            best_model_name = MODEL_NAME_TO_FULL_MODEL_NAME[best_model_name]
-            logger.info(f"best_model_name: {best_model_name}")
+            logger.debug(f"best_model_name: {best_model_name}")
 
-            # TODO: refactor this part
-            def get_model(best_model_name: str) -> BaseRecommender:
-
-                module_name = ".".join(best_model_name.split('.')[:-1])
-                class_name = best_model_name.split('.')[-1]
-                module = importlib.import_module(module_name)
-                clazz = getattr(module, class_name)
-                base_model = cast(BaseRecommender, clazz(**models_init_kwargs[best_model_name]))
-                return base_model
-
-            best_model = get_model(best_model_name)
+            best_model = self.first_level_models[first_level_model_names.index(best_model_name)]
             logger.info(f"Fitting the best model: {best_model_name}")
-            logger.debug(f"models_init_kwargs[best_model_name]: {models_init_kwargs[best_model_name]}")
             logger.debug(f"best model init args: {best_model._init_args}")
             best_model._fit_wrap(
                 log=log,

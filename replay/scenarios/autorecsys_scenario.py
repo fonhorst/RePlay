@@ -367,7 +367,6 @@ class AutoRecSysScenario:
                 item_features=item_features,
                 filter_seen_items=filter_seen_items)
 
-
         return self.scenario.predict(
             log=log,
             k=k, users=users,
