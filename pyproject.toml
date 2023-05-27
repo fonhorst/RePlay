@@ -48,6 +48,8 @@ pyarrow = "*"
 implicit = ">=0.5"
 nmslib = "*"
 hnswlib = "*"
+# extra packages
+pygloo-rec = { version = "*", optional = true }
 
 [tool.poetry.dev-dependencies]
 # dev only
@@ -81,6 +83,9 @@ pyspark-stubs = "*"
 autopep8 = "^1.7.0"
 # logging
 mlflow-skinny = "*"
+
+[tool.poetry.extras]
+distributed-lightfm = ["pygloo-rec"]
 
 [tool.black]
 line-length = 79
