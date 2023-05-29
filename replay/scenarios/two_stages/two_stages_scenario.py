@@ -265,31 +265,9 @@ class TwoStagesScenario(HybridRecommender):
         spark = State().session
         create_folder(path, exists_ok=True)
 
-        # # save features
-        # if self.first_level_user_features_transformer is not None:
-        #     save_transformer(
-        #         self.first_level_user_features_transformer,
-        #         os.path.join(path, "first_level_user_features_transformer")
-        #     )
-        #
-        # if self.first_level_item_features_transformer is not None:
-        #     save_transformer(
-        #         self.first_level_item_features_transformer,
-        #         os.path.join(path, "first_level_item_features_transformer")
-        #     )
         one_stage_scenario_path = os.path.join(path, "one_stage_scenario")
         if self.one_stage_scenario is not None:
             save(self.one_stage_scenario, one_stage_scenario_path, overwrite=True)
-            # self.one_stage_scenario._save_model(one_stage_scenario_path)
-
-        # if self.features_processor is not None:
-        #     save_transformer(self.features_processor, os.path.join(path, "features_processor"))
-
-        # # Save first level models
-        # first_level_models_path = os.path.join(path, "first_level_models")
-        # create_folder(first_level_models_path)
-        # for i, model in enumerate(self.first_level_models):
-        #     save(model, os.path.join(first_level_models_path, f"model_{i}"))
 
         # save auxillary models
         if self.random_model is not None:
@@ -1003,32 +981,6 @@ class TwoStagesScenario(HybridRecommender):
             filter_seen_items,
         )
 
-    # @staticmethod
-    # def _optimize_one_model(
-    #     model: BaseRecommender,
-    #     train: AnyDataFrame,
-    #     test: AnyDataFrame,
-    #     user_features: Optional[AnyDataFrame] = None,
-    #     item_features: Optional[AnyDataFrame] = None,
-    #     param_borders: Optional[Dict[str, List[Any]]] = None,
-    #     criterion: Metric = Precision(),
-    #     k: int = 10,
-    #     budget: int = 10,
-    #     new_study: bool = True,
-    # ):
-    #     params = model.optimize(
-    #         train,
-    #         test,
-    #         user_features,
-    #         item_features,
-    #         param_borders,
-    #         criterion,
-    #         k,
-    #         budget,
-    #         new_study,
-    #     )
-    #     return params
-
     # pylint: disable=too-many-arguments, too-many-locals
     def optimize(
         self,
@@ -1072,74 +1024,6 @@ class TwoStagesScenario(HybridRecommender):
         )
 
         return params_found, fallback_params, metrics_values
-
-
-        # number_of_models = len(self.first_level_models)
-        # if self.fallback_model is not None:
-        #     number_of_models += 1
-        # if number_of_models != len(param_borders):
-        #     raise ValueError(
-        #         "Provide search grid or None for every first level model"
-        #     )
-        #
-        # first_level_user_features_tr = ToNumericFeatureTransformer()
-        # first_level_user_features = first_level_user_features_tr.fit_transform(
-        #     user_features
-        # )
-        # first_level_item_features_tr = ToNumericFeatureTransformer()
-        # first_level_item_features = first_level_item_features_tr.fit_transform(
-        #     item_features
-        # )
-        #
-        # first_level_user_features = cache_if_exists(first_level_user_features)
-        # first_level_item_features = cache_if_exists(first_level_item_features)
-        #
-        # params_found = []
-        # for i, model in enumerate(self.first_level_models):
-        #     if param_borders[i] is None or (
-        #         isinstance(param_borders[i], dict) and param_borders[i]
-        #     ):
-        #         self.logger.info(
-        #             "Optimizing first level model number %s, %s",
-        #             i,
-        #             model.__str__(),
-        #         )
-        #         params_found.append(
-        #             self._optimize_one_model(
-        #                 model=model,
-        #                 train=train,
-        #                 test=test,
-        #                 user_features=first_level_user_features,
-        #                 item_features=first_level_item_features,
-        #                 param_borders=param_borders[i],
-        #                 criterion=criterion,
-        #                 k=k,
-        #                 budget=budget,
-        #                 new_study=new_study,
-        #             )
-        #         )
-        #     else:
-        #         params_found.append(None)
-        #
-        # if self.fallback_model is None or (
-        #     isinstance(param_borders[-1], dict) and not param_borders[-1]
-        # ):
-        #     return params_found, None
-        #
-        # self.logger.info("Optimizing fallback-model")
-        # fallback_params = self._optimize_one_model(
-        #     model=self.fallback_model,
-        #     train=train,
-        #     test=test,
-        #     user_features=first_level_user_features,
-        #     item_features=first_level_item_features,
-        #     param_borders=param_borders[-1],
-        #     criterion=criterion,
-        #     new_study=new_study,
-        # )
-        # unpersist_if_exists(first_level_item_features)
-        # unpersist_if_exists(first_level_user_features)
-        # return params_found, fallback_params
 
     def _get_nearest_items(self, items: DataFrame, metric: Optional[str] = None,
                            candidates: Optional[DataFrame] = None) -> Optional[DataFrame]:

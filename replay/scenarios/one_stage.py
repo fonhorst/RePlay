@@ -1,7 +1,6 @@
 # pylint: disable=too-many-lines
 import logging
 import os
-import importlib
 
 from abc import abstractmethod
 from collections.abc import Iterable
@@ -24,15 +23,12 @@ from replay.utils import (
     get_log_info,
     get_top_k_recs,
     join_or_return,
-    join_with_col_renaming,
-    unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
-    cache_and_materialize_if_in_debug, JobGroupWithMetrics,
+    unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder,
+    JobGroupWithMetrics,
 )
 from replay.time import Timer
-# from replay.model_handler import save, load
 
 logger = logging.getLogger("replay")
-
 
 
 # pylint: disable=too-many-locals, too-many-arguments
@@ -173,7 +169,6 @@ class OneStageScenario(HybridRecommender):
         self.first_level_item_len = 0
         self.first_level_user_len = 0
 
-        # self.random_model = RandomRec(seed=seed)
         self.fallback_model = fallback_model
         self.first_level_user_features_transformer = (
             ToNumericFeatureTransformer()
@@ -392,7 +387,6 @@ class OneStageScenario(HybridRecommender):
         self.first_level_item_features = first_level_item_features
 
         # 3. Fit first level models
-        # if hasattr(self, "best_model"):
         if self.best_model is not None:
             logger.info("fit the best model on full train")
             logger.debug(f"model params are: {self.best_model._init_args}")
