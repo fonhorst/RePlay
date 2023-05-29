@@ -29,14 +29,8 @@ from replay.utils import (
     unpersist_if_exists, create_folder, save_transformer, do_path_exists, load_transformer, list_folder, JobGroup,
     cache_and_materialize_if_in_debug, JobGroupWithMetrics,
 )
-from replay.scenarios import OneStageScenario, TwoStagesScenario
+from replay.scenarios import OneStageScenario, TwoStagesScenario, OneStageItem2ItemScenario, OneStageUser2ItemScenario
 from replay.splitters import Splitter, UserSplitter
-from experiment_utils import (
-    get_spark_configs_as_dict,
-    check_number_of_allocated_executors,
-    get_partition_num,
-    get_models,
-)
 
 from replay.time import Timer
 
@@ -44,7 +38,8 @@ from replay.time import Timer
 logger = logging.getLogger("replay")
 idx_num = random.randint(1, 1_000_000)
 
-first_levels_models_params = {
+
+FIRST_LEVEL_MODELS_PARAMS = {
             "replay.models.knn.ItemKNN": {
                 "num_neighbours": 100},
             "replay.models.als.ALSWrap": {
@@ -83,7 +78,7 @@ first_levels_models_params = {
                 "min_pair_count": 1},
         }
 
-second_model_params = {
+SECOND_MODEL_PARAMS = {
             "cpu_limit": 20,  # 20
             "memory_limit": int(80 * 0.95),  # 40
             "timeout": 400,
@@ -97,7 +92,6 @@ second_model_params = {
             "reader_params": {"cv": 5, "advanced_roles": False, "samples": 10_000}
 }
 
-
 FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
     "replay.models.als.ALSWrap": {
         "rank": [10, 300]
@@ -106,8 +100,8 @@ FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
         "num_neighbours": [50, 1000],
                                   },
     "replay.models.slim.SLIM": {
-        "beta": [1e-6, 1],  # 1e-6, 5 #0.01, 0.1
-        "lambda_": [1e-6, 1]  # [1e-6, 2] #0.01, 0.1
+        "beta": [1e-6, 1],
+        "lambda_": [1e-6, 1]
     },
     "replay.models.word2vec.Word2VecRec": {
         "rank": [10, 300],
@@ -122,7 +116,22 @@ FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
 }
 
 
-class AutoRecSysScenario:
+def get_models(models: Dict) -> List[BaseRecommender]:
+
+    list_of_models = []
+    for model_class_name, model_kwargs in models.items():
+        module_name = ".".join(model_class_name.split('.')[:-1])
+        class_name = model_class_name.split('.')[-1]
+        module = importlib.import_module(module_name)
+        clazz = getattr(module, class_name)
+
+        base_model = cast(BaseRecommender, clazz(**model_kwargs))
+        list_of_models.append(base_model)
+
+    return list_of_models
+
+
+class AutoRecSysScenario(HybridRecommender):
 
     """
 
@@ -130,16 +139,57 @@ class AutoRecSysScenario:
 
     """
 
-    def __init__(self, task: str, timeout: float):
+    def __init__(self, task: str = "user2item", timeout: float = 1000):
 
         self.scenario = None
         self.item2item = True if task == "item2item" else False
         self.timer = Timer(timeout=timeout)
         self.do_optimization = None
 
+    @property
+    def _init_args(self):
+        return {}
+
+    def _save_model(self, path: str):
+        from replay.model_handler import save
+        spark = State().session
+        create_folder(path, exists_ok=True)
+
+        scenario_path = os.path.join(path, "scenario")
+        if self.scenario is not None:
+            save(self.scenario, scenario_path, overwrite=True)
+
+        # save general data and settings
+        data = {
+            "item2item": self.item2item,
+            "timer": self.timer,
+            "do_optimization": self.do_optimization,
+        }
+
+        spark.createDataFrame([data]).write.mode("overwrite").parquet(os.path.join(path, "data.parquet"))
+
+    def _load_model(self, path: str):
+        from replay.model_handler import load
+        spark = State().session
+
+        # load general data and settings
+        data = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
+
+        scenario_path = os.path.join(path, "scenario")
+        if do_path_exists(scenario_path):
+            logger.debug("loading  scenario")
+            scenario = load(scenario_path)
+        else:
+            scenario = None
+
+        self.__dict__.update({
+            **data,
+            "scenario": scenario,
+        })
+
     def get_default_two_stage(self, first_level_models_names: List[str]):
 
-        first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names})
+        first_level_models = get_models({m: FIRST_LEVEL_MODELS_PARAMS[m] for m in first_level_models_names})
 
         return TwoStagesScenario(
             train_splitter=UserSplitter(
@@ -150,7 +200,7 @@ class AutoRecSysScenario:
             custom_features_processor=None,
             num_negatives=100,
             second_model_type="slama",
-            second_model_params=second_model_params,
+            second_model_params=SECOND_MODEL_PARAMS,
             second_model_config_path=os.environ.get(
                 "PATH_TO_SLAMA_TABULAR_CONFIG", "tabular_config.yml"),
             one_stage_timeout=self.timer.time_left
@@ -162,11 +212,23 @@ class AutoRecSysScenario:
                               is_trial=None,
                               item2item: bool = False):
 
-        first_level_models = get_models({m: first_levels_models_params[m] for m in first_level_models_names})
+        first_level_models = get_models({m: FIRST_LEVEL_MODELS_PARAMS[m] for m in first_level_models_names})
         if is_trial:
             first_level_models = first_level_models[0]
 
-        return OneStageScenario(
+        if item2item:
+            return OneStageItem2ItemScenario(
+                    first_level_models=first_level_models,
+                    user_cat_features_list=None,
+                    item_cat_features_list=None,
+                    experiment=experiment,
+                    timeout=self.timer.time_left,
+                    set_best_model=True,
+                    is_trial=is_trial,
+                )
+
+        else:
+            return OneStageUser2ItemScenario(
                 first_level_models=first_level_models,
                 user_cat_features_list=None,
                 item_cat_features_list=None,
@@ -174,7 +236,6 @@ class AutoRecSysScenario:
                 timeout=self.timer.time_left,
                 set_best_model=True,
                 is_trial=is_trial,
-                item2item=item2item
             )
 
     @staticmethod
@@ -211,8 +272,6 @@ class AutoRecSysScenario:
             is_trial: bool = False,
             experiment: Experiment = None,
             item2item: bool = False) -> Tuple[Union[OneStageScenario, TwoStagesScenario], bool, List[str]]:
-
-
 
         # log_size = 1_000_001  # for debug purposes
         first_level_models_names = self.get_first_level_models_names(log=log)
@@ -278,7 +337,7 @@ class AutoRecSysScenario:
         # end of heuristics ===============================================================
         return scenario, do_optimization, first_level_models_names
 
-    def fit(
+    def _fit(
         self,
         log: DataFrame,
         user_features: Optional[DataFrame] = None,
@@ -303,17 +362,18 @@ class AutoRecSysScenario:
 
             logger.debug("do_optimization")
             spark = State().session
-            spark_conf = spark.sparkContext.getConf()
-            partition_num = get_partition_num(spark_conf)
-            logger.debug(f"partition num: {partition_num}")
+            # spark_conf = spark.sparkContext.getConf()
+
+            # partition_num = get_partition_num(spark_conf)
+            # logger.debug(f"partition num: {partition_num}")
 
             first_level_train = spark.read.parquet("/tmp/first_level_train.parquet")
             first_level_val = spark.read.parquet("/tmp/first_level_val.parquet")
 
             logger.debug(f"first_level_train partition num: {first_level_train.rdd.getNumPartitions()}")
 
-            first_level_train = first_level_train.repartition(partition_num, "user_idx")
-            first_level_val = first_level_val.repartition(partition_num, "user_idx")
+            # first_level_train = first_level_train.repartition(partition_num, "user_idx")
+            # first_level_val = first_level_val.repartition(partition_num, "user_idx")
 
             logger.debug(f"after repartition first_level_train partition num: {first_level_train.rdd.getNumPartitions()}")
 
@@ -347,7 +407,7 @@ class AutoRecSysScenario:
 
         self.scenario.fit(log=log, user_features=user_features, item_features=item_features)
 
-    def predict(
+    def _predict(
             self,
             log: DataFrame,
             k: int,
@@ -355,27 +415,55 @@ class AutoRecSysScenario:
             items: DataFrame,
             user_features: Optional[DataFrame] = None,
             item_features: Optional[DataFrame] = None,
-            filter_seen_items: bool = True,
+            filter_seen_items: bool = True
     ) -> DataFrame:
 
-        if self.item2item:
-            return self.scenario._predict(
-                log=log,
-                k=k, users=users,
-                items=items,
-                user_features=user_features,
-                item_features=item_features,
-                filter_seen_items=filter_seen_items)
+        # if self.item2item:
+        #     return self.scenario.predict(
+        #         log=log,
+        #         k=k, users=users,
+        #         items=items,
+        #         user_features=user_features,
+        #         item_features=item_features,
+        #         filter_seen_items=False)
 
         return self.scenario.predict(
             log=log,
-            k=k, users=users,
+            k=k,
+            users=users,
             items=items,
             user_features=user_features,
             item_features=item_features,
-            filter_seen_items=filter_seen_items)
+            filter_seen_items=filter_seen_items
+        )
 
-    def fit_predict(self):
-        pass
-
-
+    def fit_predict(
+            self,
+            log: AnyDataFrame,
+            k: int,
+            users: Optional[Union[AnyDataFrame, Iterable]] = None,
+            items: Optional[Union[AnyDataFrame, Iterable]] = None,
+            user_features: Optional[AnyDataFrame] = None,
+            item_features: Optional[AnyDataFrame] = None,
+            filter_seen_items: bool = True,
+    ) -> DataFrame:
+        """
+        :param log: input DataFrame ``[user_id, item_id, timestamp, relevance]``
+        :param k: length of a recommendation list, must be smaller than the number of ``items``
+        :param users: users to get recommendations for
+        :param items: items to get recommendations for
+        :param user_features: user features``[user_id]`` + feature columns
+        :param item_features: item features``[item_id]`` + feature columns
+        :param filter_seen_items: flag to removed seen items from recommendations
+        :return: DataFrame ``[user_id, item_id, relevance]``
+        """
+        self.fit(log, user_features, item_features)
+        return self.predict(
+            log,
+            k,
+            users,
+            items,
+            user_features,
+            item_features,
+            filter_seen_items,
+        )

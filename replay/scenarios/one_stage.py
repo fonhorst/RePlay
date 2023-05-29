@@ -29,7 +29,7 @@ from replay.utils import (
     cache_and_materialize_if_in_debug, JobGroupWithMetrics,
 )
 from replay.time import Timer
-from replay.model_handler import save, load
+# from replay.model_handler import save, load
 
 logger = logging.getLogger("replay")
 
@@ -255,7 +255,8 @@ class OneStageScenario(HybridRecommender):
         data = {
             "first_level_item_len": self.first_level_item_len,
             "first_level_user_len": self.first_level_user_len,
-            "seed": self.seed
+            "seed": self.seed,
+            "fitted_models": self.fitted_models
         }
 
         spark.createDataFrame([data]).write.mode("overwrite").parquet(os.path.join(path, "data.parquet"))
@@ -459,6 +460,7 @@ class OneStageScenario(HybridRecommender):
                 logger.debug(f"time_limit_exceeded: {self.timer.time_limit_exceeded()}")
 
                 if self.timer.time_limit_exceeded():
+                    from replay.model_handler import load
                     logger.info("Time limit exceed")
                     logger.info("comparing of fitted models")
                     logger.info(self._experiment.results.sort_values(f"NDCG@{self.k}"))
@@ -719,6 +721,7 @@ class OneStageUser2ItemScenario(OneStageScenario):
             user_features: DataFrame,
             item_features: DataFrame
     ) -> None:
+        from replay.model_handler import save
 
         first_level_train = split_data["first_level_train"]
         first_level_val = split_data["first_level_val"]
@@ -850,6 +853,7 @@ class OneStageItem2ItemScenario(OneStageScenario):
             )
             output_dict["first_level_val_first_item"] = first_level_val_first_item
             output_dict["first_level_val_other_items"] = first_level_val_other_items
+            output_dict["first_level_val"] = first_level_val
 
         else:
             first_level_train = log
@@ -882,6 +886,7 @@ class OneStageItem2ItemScenario(OneStageScenario):
             user_features: DataFrame,
             item_features: DataFrame
     ) -> None:
+        from replay.model_handler import save
 
         first_level_val_first_item = split_data["first_level_val_first_item"]
         first_level_val_other_items = split_data["first_level_val_other_items"]

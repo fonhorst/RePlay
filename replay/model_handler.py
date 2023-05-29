@@ -10,6 +10,7 @@ from pyspark.ml.feature import StringIndexerModel, IndexToString
 
 from replay.data_preparator import Indexer
 from replay.models import *
+from replay.scenarios import *
 from replay.models.base_rec import BaseRecommender
 from replay.session_handler import State
 from replay.splitters import *

@@ -279,7 +279,8 @@ class TwoStagesScenario(HybridRecommender):
         #     )
         one_stage_scenario_path = os.path.join(path, "one_stage_scenario")
         if self.one_stage_scenario is not None:
-            self.one_stage_scenario._save_model(one_stage_scenario_path)
+            save(self.one_stage_scenario, one_stage_scenario_path, overwrite=True)
+            # self.one_stage_scenario._save_model(one_stage_scenario_path)
 
         # if self.features_processor is not None:
         #     save_transformer(self.features_processor, os.path.join(path, "features_processor"))
@@ -313,7 +314,7 @@ class TwoStagesScenario(HybridRecommender):
             "seed": self.seed
         }
 
-        spark.createDataFrame([data]).write.parquet(os.path.join(path, "data.parquet"))
+        spark.createDataFrame([data]).write.mode("overwrite").parquet(os.path.join(path, "data.parquet"))
 
     def _load_model(self, path: str):
         from replay.model_handler import load
@@ -345,7 +346,9 @@ class TwoStagesScenario(HybridRecommender):
 
         one_stage_scenario_path = os.path.join(path, "one_stage_scenario")
         if do_path_exists(one_stage_scenario_path):
-            one_stage_scenario = OneStageUser2ItemScenario()._load_model(one_stage_scenario_path)
+            logger.debug("loading one-stage scenario inside two-stage scenario")
+            # one_stage_scenario = OneStageUser2ItemScenario()._load_model(one_stage_scenario_path)
+            one_stage_scenario = load(one_stage_scenario_path)
         else:
             one_stage_scenario = None
 
@@ -358,8 +361,7 @@ class TwoStagesScenario(HybridRecommender):
 
         # load second stage model
         comp_path = os.path.join(path, "second_stage_model")
-        # second_stage_model = load_transformer(comp_path) if do_path_exists(comp_path) else None # TODO: fix it
-        second_stage_model = None
+        second_stage_model = load_transformer(comp_path) if do_path_exists(comp_path) else None
 
         # self.__dict__.update({
         #     **data,
@@ -782,6 +784,14 @@ class TwoStagesScenario(HybridRecommender):
         self.one_stage_scenario.fit(log=first_level_train,
                                     user_features=user_features,
                                     item_features=item_features)
+
+        for base_model in [self.random_model, self.fallback_model]:
+
+            base_model._fit_wrap(
+                log=first_level_train,
+                user_features=user_features,
+                item_features=item_features,
+            )
 
         # 4. Generate negative examples
         # by making predictions with first level models and combining them into final recommendation lists
