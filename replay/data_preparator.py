@@ -6,20 +6,30 @@ Contains classes for data preparation and categorical features transformation.
 ``ToNumericFeatureTransformer`` leaves only numerical features
 by one-hot encoding of some features and deleting the others.
 """
+import json
 import logging
+import os
+import pickle
 import string
-from typing import Dict, List, Optional
+from functools import singledispatchmethod
+from os.path import join
+from typing import Dict, List, Optional, overload, Any, cast
 
+from pyspark.ml import Transformer, Estimator
 from pyspark.ml.feature import StringIndexerModel, IndexToString, StringIndexer
-from pyspark.sql import DataFrame
+from pyspark.ml.param import Param, Params
+from pyspark.ml.util import MLWriter, MLWritable, MLReader, MLReadable, DefaultParamsWriter, DefaultParamsReader
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as sf
 from pyspark.sql.types import DoubleType, NumericType
 
 from replay.constants import AnyDataFrame
 from replay.session_handler import State
-from replay.utils import convert2spark, process_timestamp_column
+from replay.utils import convert2spark, process_timestamp_column, AbleToSaveAndLoad, load_transformer, \
+    save_transformer, create_folder
 
 LOG_COLUMNS = ["user_id", "item_id", "timestamp", "relevance"]
+logger = logging.getLogger("replay")
 
 
 class Indexer:  # pylint: disable=too-many-instance-attributes
@@ -186,7 +196,244 @@ class Indexer:  # pylint: disable=too-many-instance-attributes
             inv_indexer.setLabels(new_labels)
 
 
-class DataPreparator:
+# We need to inherit it from DefaultParamsWriter to make it being saved correctly within Pipeline
+class JoinIndexerMLWriter(DefaultParamsWriter):
+    """Implements saving the JoinIndexerTransformer instance to disk.
+    Used when saving a trained pipeline.
+    Implements MLWriter.saveImpl(path) method.
+    """
+
+    def __init__(self, instance):
+        super().__init__(instance)
+        self.instance = instance
+
+    def saveImpl(self, path: str) -> None:
+        super().saveImpl(path)
+        # print(f"Saving {type(self.instance).__name__} to '{path}'")
+
+        spark = SparkSession.getActiveSession()
+
+        init_args = self.instance._init_args
+        sc = spark.sparkContext
+        df = spark.read.json(sc.parallelize([json.dumps(init_args)]))
+        df.coalesce(1).write.mode("overwrite").json(join(path, "init_args.json"))
+
+        self.instance.user_col_2_index_map.write.mode("overwrite").save(join(path, "user_col_2_index_map.parquet"))
+        self.instance.item_col_2_index_map.write.mode("overwrite").save(join(path, "item_col_2_index_map.parquet"))
+
+
+class JoinIndexerMLReader(MLReader):
+    def load(self, path):
+        """Load the ML instance from the input path."""
+
+        spark = SparkSession.getActiveSession()
+        args = spark.read.json(join(path, "init_args.json")).first().asDict(recursive=True)
+        user_col_2_index_map = spark.read.parquet(join(path, "user_col_2_index_map.parquet"))
+        item_col_2_index_map = spark.read.parquet(join(path, "item_col_2_index_map.parquet"))
+
+        indexer = JoinBasedIndexerTransformer(
+            user_col=args["user_col"],
+            user_type=args["user_type"],
+            user_col_2_index_map=user_col_2_index_map,
+            item_col=args["item_col"],
+            item_type=args["item_type"],
+            item_col_2_index_map=item_col_2_index_map,
+
+        )
+
+        return indexer
+
+
+class JoinBasedIndexerTransformer(Transformer, MLWritable, MLReadable):
+    def __init__(
+            self,
+            user_col: str,
+            item_col: str,
+            user_type: str,
+            item_type: str,
+            user_col_2_index_map: DataFrame,
+            item_col_2_index_map: DataFrame,
+            update_map_on_transform: bool = False,
+            force_broadcast_on_mapping_joins: bool = True
+    ):
+        super().__init__()
+        self.user_col = user_col
+        self.item_col = item_col
+        self.user_type = user_type
+        self.item_type = item_type
+        self.user_col_2_index_map = user_col_2_index_map
+        self.item_col_2_index_map = item_col_2_index_map
+        self.update_map_on_transform = update_map_on_transform
+        self.force_broadcast_on_mapping_joins = force_broadcast_on_mapping_joins
+
+    @property
+    def _init_args(self):
+        return {
+            "user_col": self.user_col,
+            "item_col": self.item_col,
+            "user_type": self.user_type,
+            "item_type": self.item_type,
+            "update_map_on_transform": self.update_map_on_transform,
+            "force_broadcast_on_mapping_joins": self.force_broadcast_on_mapping_joins
+        }
+
+    def set_update_map_on_transform(self, value: bool):
+        """Sets 'update_map_on_transform' flag"""
+        self.update_map_on_transform = value
+
+    def set_force_broadcast_on_mapping_joins(self, value: bool):
+        """Sets 'force_broadcast_on_mapping_joins' flag"""
+        self.force_broadcast_on_mapping_joins = value
+
+    def _get_item_mapping(self) -> DataFrame:
+        if self.force_broadcast_on_mapping_joins:
+            mapping = sf.broadcast(self.item_col_2_index_map)
+        else:
+            mapping = self.item_col_2_index_map
+        return mapping
+
+    def _get_user_mapping(self) -> DataFrame:
+        if self.force_broadcast_on_mapping_joins:
+            mapping = sf.broadcast(self.user_col_2_index_map)
+        else:
+            mapping = self.user_col_2_index_map
+        return mapping
+
+    def write(self) -> MLWriter:
+        """Returns MLWriter instance that can save the Transformer instance."""
+        return JoinIndexerMLWriter(self)
+
+    @classmethod
+    def read(cls):
+        """Returns an MLReader instance for this class."""
+        return JoinIndexerMLReader()
+
+    def _update_maps(self, df: DataFrame):
+
+        new_items = (
+            df.join(self._get_item_mapping(), on=self.item_col, how="left_anti")
+            .select(self.item_col).distinct()
+        )
+        prev_item_count = self.item_col_2_index_map.count()
+        new_items_map = (
+            JoinBasedIndexerEstimator.get_map(new_items, self.item_col, "item_idx")
+            .select(self.item_col, (sf.col("item_idx") + prev_item_count).alias("item_idx"))
+        )
+        self.item_col_2_index_map = self.item_col_2_index_map.union(new_items_map)
+
+        new_users = (
+            df.join(self._get_user_mapping(), on=self.user_col, how="left_anti")
+            .select(self.user_col).distinct()
+        )
+        prev_user_count = self.user_col_2_index_map.count()
+        new_users_map = (
+            JoinBasedIndexerEstimator.get_map(new_users, self.user_col, "user_idx")
+            .select(self.user_col, (sf.col("user_idx") + prev_user_count).alias("user_idx"))
+        )
+        self.user_col_2_index_map = self.user_col_2_index_map.union(new_users_map)
+
+    def _transform(self, df: DataFrame) -> DataFrame:
+
+        if self.update_map_on_transform:
+            self._update_maps(df)
+
+        if self.item_col in df.columns:
+            remaining_cols = df.drop(self.item_col).columns
+            df = df.join(self._get_item_mapping(), on=self.item_col, how="left").select(
+                sf.col("item_idx").cast("int").alias("item_idx"),
+                *remaining_cols,
+            )
+        if self.user_col in df.columns:
+            remaining_cols = df.drop(self.user_col).columns
+            df = df.join(self._get_user_mapping(), on=self.user_col, how="left").select(
+                sf.col("user_idx").cast("int").alias("user_idx"),
+                *remaining_cols,
+            )
+        return df
+
+    def inverse_transform(self, df: DataFrame) -> DataFrame:
+        """
+        Convert DataFrame to the initial indexes.
+
+        :param df: DataFrame with numerical ``user_idx/item_idx`` columns
+        :return: DataFrame with original user/item columns
+        """
+        if "item_idx" in df.columns:
+            remaining_cols = df.drop("item_idx").columns
+            df = df.join(self._get_item_mapping(), on="item_idx", how="left").select(
+                sf.col(self.item_col).cast(self.item_type).alias(self.item_col),
+                *remaining_cols,
+            )
+        if "user_idx" in df.columns:
+            remaining_cols = df.drop("user_idx").columns
+            df = df.join(self._get_user_mapping(), on="user_idx", how="left").select(
+                sf.col(self.user_col).cast(self.user_type).alias(self.user_col),
+                *remaining_cols,
+            )
+        return df
+
+
+class JoinBasedIndexerEstimator(Estimator):
+
+    def __init__(self, user_col="user_id", item_col="item_id"):
+        """
+        Provide column names for indexer to use
+        """
+        self.user_col = user_col
+        self.item_col = item_col
+        self.user_col_2_index_map = None
+        self.item_col_2_index_map = None
+
+    @staticmethod
+    def get_map(df: DataFrame, col_name: str, idx_col_name: str) -> DataFrame:
+        uid_rdd = (
+            df.select(col_name).distinct()
+            .rdd.map(lambda x: x[col_name])
+            .zipWithIndex()
+        )
+
+        spark = SparkSession.getActiveSession()
+        _map = spark.createDataFrame(uid_rdd, [col_name, idx_col_name])
+        return _map
+
+    def _fit(self, df: DataFrame) -> Transformer:
+        """
+        Creates indexers to map raw id to numerical idx so that spark can handle them.
+        :param df: DataFrame containing user column and item column
+        :return:
+        """
+
+        self.user_col_2_index_map = self.get_map(df, self.user_col, "user_idx")
+        self.item_col_2_index_map = self.get_map(df, self.item_col, "item_idx")
+
+        self.user_type = df.schema[
+            self.user_col
+        ].dataType
+        self.item_type = df.schema[
+            self.item_col
+        ].dataType
+
+        return JoinBasedIndexerTransformer(
+            user_col=self.user_col,
+            user_type=str(self.user_type),
+            item_col=self.item_col,
+            item_type=str(self.item_type),
+            user_col_2_index_map=self.user_col_2_index_map,
+            item_col_2_index_map=self.item_col_2_index_map
+        )
+
+
+class DataPreparatorWriter(DefaultParamsWriter):
+    def __init__(self, instance: 'DataPreparator'):
+        super().__init__(instance)
+
+
+class DataPreparatorReader(DefaultParamsReader):
+    def __init__(self, cls):
+        super().__init__(cls)
+
+
+class DataPreparator(Transformer, MLWritable, MLReadable):
     """Transforms data to a library format:
         - read as a spark dataframe/ convert pandas dataframe to spark
         - check for nulls
@@ -246,8 +493,26 @@ class DataPreparator:
     <BLANKLINE>
 
     """
+    columnsMapping = Param(Params._dummy(), "columnsMapping", "columns mapping")
 
     _logger: Optional[logging.Logger] = None
+
+    def __init__(self, columns_mapping: Optional[Dict[str, str]] = None):
+        super().__init__()
+        self.setColumnsMapping(columns_mapping)
+
+    def getColumnsMapping(self):
+        return self.getOrDefault(self.columnsMapping)
+
+    def setColumnsMapping(self, value):
+        self.set(self.columnsMapping, value)
+
+    def write(self) -> MLWriter:
+        return DataPreparatorWriter(self)
+
+    @classmethod
+    def read(cls) -> MLReader:
+        return DataPreparatorReader(cls)
 
     @property
     def logger(self) -> logging.Logger:
@@ -397,10 +662,74 @@ class DataPreparator:
                 df = df.withColumnRenamed(in_col, out_col)
         return df
 
+    @overload
+    def transform(self, dataset: DataFrame, params: Optional[Dict[Param, Any]] = None):
+        """
+            :param dataset: DataFrame to process
+            :param params: A dict with settings to be applied for dataset processing
+            :return: processed DataFrame
+        """
+        ...
+
+    # noinspection PyMethodOverriding
+    @overload
+    def transform(self,
+                  columns_mapping: Dict[str, str],
+                  data: Optional[AnyDataFrame],
+                  path: Optional[str],
+                  format_type: Optional[str],
+                  date_format: Optional[str],
+                  reader_kwargs: Optional[Dict]) -> DataFrame:
+        """
+            :param columns_mapping: dictionary mapping "key: column name in input DataFrame".
+                Possible keys: ``[user_id, user_id, timestamp, relevance]``
+                ``columns_mapping`` values specifies the nature of the DataFrame:
+                - if both ``[user_id, item_id]`` are present,
+                  then the dataframe is a log of interactions.
+                  Specify ``timestamp, relevance`` columns in mapping if present.
+                - if ether ``user_id`` or ``item_id`` is present,
+                  then the dataframe is a dataframe of user/item features
+
+            :param data: DataFrame to process
+            :param path: path to data
+            :param format_type: file type, one of ``[csv , parquet , json , table]``
+            :param date_format: format for the ``timestamp`` column
+            :param reader_kwargs: extra arguments passed to
+                ``spark.read.<format>(path, **reader_kwargs)``
+            :return: processed DataFrame
+        """
+        ...
+
+    def transform(self, *args, **kwargs):
+        """
+                   Transforms log, user or item features into a Spark DataFrame
+                   ``[user_id, user_id, timestamp, relevance]``,
+                   ``[user_id, *features]``, or  ``[item_id, *features]``.
+                   Input is either file of ``format_type``
+                   at ``path``, or ``pandas.DataFrame`` or ``spark.DataFrame``.
+                   Transform performs:
+                   - dataframe reading/convert to spark DataFrame format
+                   - check dataframe (nulls, columns_mapping)
+                   - rename columns from mapping to standard names (user_id, user_id, timestamp, relevance)
+                   - for interactions log: create absent columns,
+                   convert ``timestamp`` column to TimestampType and ``relevance`` to DoubleType
+
+
+               """
+        return self._do_transform(*args, **kwargs)
+
+    @singledispatchmethod
+    def _do_transform(self, dataset: DataFrame, params: Optional[Dict[Param, Any]] = None):
+        return super().transform(dataset, params)
+
+    def _transform(self, dataset):
+        return self.transform(self.getColumnsMapping(), data=dataset)
+
     # pylint: disable=too-many-arguments
-    def transform(
+    @_do_transform.register
+    def _(
         self,
-        columns_mapping: Dict[str, str],
+        columns_mapping: dict, #Dict[str, str],
         data: Optional[AnyDataFrame] = None,
         path: Optional[str] = None,
         format_type: Optional[str] = None,
@@ -481,9 +810,18 @@ class DataPreparator:
         return dataframe
 
 
-class CatFeaturesTransformer:
+class CatFeaturesTransformer(AbleToSaveAndLoad):
     """Transform categorical features in ``cat_cols_list``
     with one-hot encoding and remove original columns."""
+
+    @classmethod
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        spark = spark or cls._get_spark_session()
+        row = spark.read.parquet(path).first().asDict()
+
+        transformer = cast(CatFeaturesTransformer, pickle.loads(row["data"]))
+
+        return transformer
 
     def __init__(
         self,
@@ -495,7 +833,7 @@ class CatFeaturesTransformer:
         :param alias: prefix for one-hot encoding columns
         """
         self.cat_cols_list = cat_cols_list
-        self.expressions_list = []
+        self.cat_feat_values_dict = None
         self.alias = alias
 
     def fit(self, spark_df: Optional[DataFrame]) -> None:
@@ -506,23 +844,25 @@ class CatFeaturesTransformer:
         if spark_df is None:
             return
 
-        cat_feat_values_dict = {
+        self.cat_feat_values_dict = {
             name: (
                 spark_df.select(sf.collect_set(sf.col(name))).collect()[0][0]
             )
             for name in self.cat_cols_list
         }
-        self.expressions_list = [
+
+    def _expressions_list(self):
+        return [
             sf.when(sf.col(col_name) == cur_name, 1)
-            .otherwise(0)
-            .alias(
+                .otherwise(0)
+                .alias(
                 f"""{self.alias}_{col_name}_{str(cur_name).translate(
-                        str.maketrans(
-                            "", "", string.punctuation + string.whitespace
-                        )
-                    )[:30]}"""
+                    str.maketrans(
+                        "", "", string.punctuation + string.whitespace
+                    )
+                )[:30]}"""
             )
-            for col_name, col_values in cat_feat_values_dict.items()
+            for col_name, col_values in self.cat_feat_values_dict.items()
             for cur_name in col_values
         ]
 
@@ -535,12 +875,24 @@ class CatFeaturesTransformer:
         """
         if spark_df is None:
             return None
-        return spark_df.select(*spark_df.columns, *self.expressions_list).drop(
+        return spark_df.select(*spark_df.columns, *self._expressions_list()).drop(
             *self.cat_cols_list
         )
 
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        spark = spark or self._get_spark_session()
 
-class ToNumericFeatureTransformer:
+        data = pickle.dumps(self)
+
+        df = spark.createDataFrame([{
+            "classname": self.get_classname(),
+            "data": data
+        }])
+
+        df.write.parquet(path, mode='overwrite' if overwrite else 'error')
+
+
+class ToNumericFeatureTransformer(AbleToSaveAndLoad):
     """Transform user/item features to numeric types:
     - numeric features stays as is
     - categorical features:
@@ -554,6 +906,21 @@ class ToNumericFeatureTransformer:
     cols_to_ohe: Optional[List]
     cols_to_del: Optional[List]
     all_columns: Optional[List]
+
+    @classmethod
+    def load(cls, path: str, spark: Optional[SparkSession] = None):
+        spark = spark or cls._get_spark_session()
+        row = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
+
+        if row["has_cat_feat_transformer"]:
+            cat_feat_transformer = load_transformer(os.path.join(path, "cat_feat_transformer"))
+        else:
+            cat_feat_transformer = None
+
+        transformer = pickle.loads(row["data"])
+        transformer.cat_feat_transformer = cat_feat_transformer
+
+        return transformer
 
     def __init__(self, threshold: Optional[int] = 100):
         self.threshold = threshold
@@ -612,7 +979,7 @@ class ToNumericFeatureTransformer:
             ]
 
             if self.cols_to_del:
-                State().logger.warning(
+                logger.warning(
                     "%s columns contain more that threshold unique "
                     "values and will be deleted",
                     self.cols_to_del,
@@ -660,3 +1027,21 @@ class ToNumericFeatureTransformer:
         """
         self.fit(spark_df)
         return self.transform(spark_df)
+
+    def save(self, path: str, overwrite: bool = False, spark: Optional[SparkSession] = None):
+        create_folder(path, delete_if_exists=overwrite)
+
+        cat_feat_transformer = self.cat_feat_transformer
+        self.cat_feat_transformer = None
+        dump = pickle.dumps(self)
+        self.cat_feat_transformer = cat_feat_transformer
+
+        if self.cat_feat_transformer is not None:
+            save_transformer(self.cat_feat_transformer, os.path.join(path, "cat_feat_transformer"))
+
+        df = SparkSession.getActiveSession().createDataFrame([{
+            "classname": self.get_classname(),
+            "data": dump,
+            "has_cat_feat_transformer": self.cat_feat_transformer is not None
+        }])
+        df.write.parquet(os.path.join(path, "data.parquet"))

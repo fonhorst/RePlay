@@ -10,6 +10,7 @@ from pyspark.ml.feature import StringIndexerModel, IndexToString
 
 from replay.data_preparator import Indexer
 from replay.models import *
+from replay.scenarios import *
 from replay.models.base_rec import BaseRecommender
 from replay.session_handler import State
 from replay.splitters import *
@@ -111,7 +112,7 @@ def save_indexer(indexer: Indexer, path: str, overwrite: bool = False):
     :param path: destination where indexer files will be stored
     """
     spark = State().session
-    
+
     if not overwrite:
         fs = spark._jvm.org.apache.hadoop.fs.FileSystem.get(spark._jsc.hadoopConfiguration())
         is_exists = fs.exists(spark._jvm.org.apache.hadoop.fs.Path(path))

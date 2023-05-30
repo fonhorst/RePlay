@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Union, Optional
 
 import pandas as pd
+from pyspark.sql import Column
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
@@ -99,6 +100,23 @@ def preprocess_gt(
     return true_items_by_users
 
 
+def filter_sort(recommendations: AnyDataFrame) -> DataFrame:
+    """
+    Filter duplicated predictions by choosing the most relevant,
+     and sort items in predictions by relevance
+    """
+    return (
+        recommendations.withColumn("_num", sf.row_number().over(
+            Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
+        .drop("_num")
+        .groupby("user_idx")
+        .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))
+        .withColumn('pred', sf.reverse(sf.array_sort('pred')))
+        .withColumn('pred', sf.col('pred.item_idx'))
+        .withColumn("pred", sf.col("pred").cast(st.ArrayType(recommendations.schema["item_idx"].dataType, True)))
+    )
+
+
 def get_enriched_recommendations(
     recommendations: AnyDataFrame,
     ground_truth: AnyDataFrame,
@@ -122,18 +140,9 @@ def get_enriched_recommendations(
     # if there are duplicates in recommendations,
     # we will leave fewer than k recommendations after sort_udf
     recommendations = get_top_k_recs(recommendations, k=max_k)
-    sort_udf = sf.udf(
-        sorter,
-        returnType=st.ArrayType(recommendations.schema["item_idx"].dataType),
-    )
 
     true_items_by_users = preprocess_gt(ground_truth, ground_truth_users)
-    joined = (
-        recommendations.groupby("user_idx")
-        .agg(sf.collect_list(sf.struct("relevance", "item_idx")).alias("pred"))
-        .select("user_idx", sort_udf(sf.col("pred")).alias("pred"))
-        .join(true_items_by_users, how="right", on=["user_idx"])
-    )
+    joined = filter_sort(recommendations).join(true_items_by_users, how="right", on=["user_idx"])
 
     return fill_na_with_empty_array(
         joined, "pred", recommendations.schema["item_idx"].dataType
@@ -162,6 +171,9 @@ class Metric(ABC):
     """Base metric class"""
 
     _logger: Optional[logging.Logger] = None
+
+    def __init__(self, use_scala_udf: bool = False) -> None:
+        self._use_scala_udf = use_scala_udf
 
     @property
     def logger(self) -> logging.Logger:
@@ -206,6 +218,7 @@ class Metric(ABC):
         quantile = norm.ppf((1 + alpha) / 2)
         for k in k_list:
             distribution = self._get_metric_distribution(recs, k)
+
             value = (
                 distribution.agg(
                     sf.stddev("value").alias("std"),
@@ -254,6 +267,14 @@ class Metric(ABC):
         :param k: depth cut-off
         :return: metric distribution for different cut-offs and users
         """
+        if self._use_scala_udf:
+            # Possibly bad approach to define column names for udf call
+            # because we don't know columns ordering
+            # and we don't know exactly what is columns in recs
+            cols = [col for col in recs.columns if col != "user_idx"]
+            metric_value_col = self._get_metric_value_by_user_scala_udf(sf.lit(k).alias("k"), *cols).alias("value")
+            return recs.select("user_idx", metric_value_col)
+
         cur_class = self.__class__
         distribution = recs.rdd.flatMap(
             # pylint: disable=protected-access
@@ -264,6 +285,12 @@ class Metric(ABC):
             f"user_idx {recs.schema['user_idx'].dataType.typeName()}, value double"
         )
         return distribution
+
+    @staticmethod
+    @abstractmethod
+    def _get_metric_value_by_user_scala_udf(k, pred, ground_truth) -> Column:
+        """Returns scala udf that calcs metric for one user as Column
+        """
 
     @staticmethod
     @abstractmethod
@@ -402,6 +429,7 @@ class NCISMetric(Metric):
         prev_policy_weights: AnyDataFrame,
         threshold: float = 10.0,
         activation: Optional[str] = None,
+        use_scala_udf: bool = False,
     ):  # pylint: disable=super-init-not-called
         """
         :param prev_policy_weights: historical item of user-item relevance (previous policy values)
@@ -410,6 +438,7 @@ class NCISMetric(Metric):
         :activation: activation function, applied over relevance values.
             "logit"/"sigmoid", "softmax" or None
         """
+        self._use_scala_udf = use_scala_udf
         self.prev_policy_weights = convert2spark(
             prev_policy_weights
         ).withColumnRenamed("relevance", "prev_relevance")
@@ -546,33 +575,24 @@ class NCISMetric(Metric):
         weight_type = recommendations.schema["weight"].dataType
         item_type = ground_truth.schema["item_idx"].dataType
 
-        sort_ids_weights_udf = sf.udf(
-            lambda x: sorter(items=x, extra_position=2),
-            returnType=st.StructType(
-                [
-                    st.StructField("pred", st.ArrayType(item_type)),
-                    st.StructField("weight", st.ArrayType(weight_type)),
-                ]
-            ),
-        )
-
         recommendations = (
-            recommendations.groupby("user_idx")
+            recommendations.withColumn("_num", sf.row_number().over(Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
+            .drop("_num")
+            .groupby("user_idx")
             .agg(
                 sf.collect_list(
                     sf.struct("relevance", "item_idx", "weight")
                 ).alias("rel_id_weight")
             )
-            .withColumn(
-                "pred_weight",
-                sort_ids_weights_udf(sf.col("rel_id_weight")),
-            )
+            .withColumn('pred_weight', sf.reverse(sf.array_sort('rel_id_weight')))
             .select(
                 "user_idx",
-                sf.col("pred_weight.pred"),
+                sf.col("pred_weight.item_idx").alias('pred'),
                 sf.col("pred_weight.weight"),
             )
+            .withColumn("pred", sf.col("pred").cast(st.ArrayType(recommendations.schema["item_idx"].dataType, True)))
         )
+
         if ground_truth_users is not None:
             true_items_by_users = true_items_by_users.join(
                 ground_truth_users, on="user_idx", how="right"

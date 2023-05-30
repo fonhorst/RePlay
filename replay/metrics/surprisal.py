@@ -2,7 +2,7 @@ from functools import partial
 from typing import Optional
 
 import numpy as np
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as sf
 from pyspark.sql import types as st
 
@@ -13,6 +13,10 @@ from replay.metrics.base_metric import (
     RecOnlyMetric,
     sorter,
 )
+
+from pyspark.sql import SparkSession, Column
+# noinspection PyUnresolvedReferences
+from pyspark.sql.column import _to_java_column, _to_seq
 
 
 # pylint: disable=too-few-public-methods
@@ -46,13 +50,15 @@ class Surprisal(RecOnlyMetric):
     """
 
     def __init__(
-        self, log: AnyDataFrame
+        self, log: AnyDataFrame,
+        use_scala_udf: bool = False
     ):  # pylint: disable=super-init-not-called
         """
         Here we calculate self-information for each item
 
         :param log: historical data
         """
+        self._use_scala_udf = use_scala_udf
         self.log = convert2spark(log)
         n_users = self.log.select("user_idx").distinct().count()  # type: ignore
         self.item_weights = self.log.groupby("item_idx").agg(
@@ -67,6 +73,16 @@ class Surprisal(RecOnlyMetric):
         weigths = args[0]
         return sum(weigths[:k]) / k
 
+    @staticmethod
+    def _get_metric_value_by_user_scala_udf(k, weigths) -> Column:
+        sc = SparkSession.getActiveSession().sparkContext
+        _f = (
+            sc._jvm.org.apache.spark.replay.utils.ScalaPySparkUDFs.getSurprisalMetricValue()
+        )
+        return Column(
+            _f.apply(_to_seq(sc, [k, weigths], _to_java_column))
+        )
+
     def _get_enriched_recommendations(
         self,
         recommendations: DataFrame,
@@ -77,41 +93,23 @@ class Surprisal(RecOnlyMetric):
         recommendations = convert2spark(recommendations)
         ground_truth_users = convert2spark(ground_truth_users)
         recommendations = get_top_k_recs(recommendations, max_k)
-        sort_udf = sf.udf(
-            partial(sorter, extra_position=2),
-            returnType=st.StructType(
-                [
-                    st.StructField(
-                        "pred",
-                        st.ArrayType(
-                            self.item_weights.schema["item_idx"].dataType
-                        ),
-                    ),
-                    st.StructField(
-                        "rec_weight",
-                        st.ArrayType(
-                            self.item_weights.schema["rec_weight"].dataType
-                        ),
-                    ),
-                ],
-            ),
-        )
+
         recommendations = (
-            recommendations.join(self.item_weights, on="item_idx", how="left")
-            .fillna(1.0)
+            recommendations.withColumn("_num", sf.row_number().over(
+                Window.partitionBy("user_idx", "item_idx").orderBy("relevance"))).where(sf.col("_num") == 1)
+            .drop("_num")
+            .join(self.item_weights, on="item_idx", how="left")
+            .fillna(1)
             .groupby("user_idx")
             .agg(
                 sf.collect_list(
                     sf.struct("relevance", "item_idx", "rec_weight")
                 ).alias("rel_id_weight")
             )
-            .withColumn("pred_rec_weight", sort_udf(sf.col("rel_id_weight")))
-            .select(
-                "user_idx",
-                sf.col("pred_rec_weight.rec_weight").alias("rec_weight"),
-            )
+            .withColumn('pred_rec_weight', sf.reverse(sf.array_sort('rel_id_weight')))
+            .select("user_idx", sf.col("pred_rec_weight.rec_weight"))
+            .withColumn("rec_weight", sf.col("rec_weight").cast(st.ArrayType(st.DoubleType(), True)))
         )
-
         if ground_truth_users is not None:
             recommendations = fill_na_with_empty_array(
                 recommendations.join(

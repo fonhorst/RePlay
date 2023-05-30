@@ -38,6 +38,9 @@ def get_spark_session(
     user_home = os.environ["HOME"]
     spark = (
         SparkSession.builder.config("spark.driver.memory", driver_memory)
+        .config("spark.jars", 'scala/target/scala-2.12/replay_2.12-0.1.jar,spark-lightautoml_2.12-0.1.1.jar')
+        .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.9.5-35-e962330b-SNAPSHOT")
+        .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven")
         .config(
             "spark.driver.extraJavaOptions",
             "-Dio.netty.tryReflectionSetAccessible=true",
@@ -55,22 +58,6 @@ def get_spark_session(
         .getOrCreate()
     )
     return spark
-
-
-def logger_with_settings() -> logging.Logger:
-    """Set up default logging"""
-    spark_logger = logging.getLogger("py4j")
-    spark_logger.setLevel(logging.WARN)
-    logger = logging.getLogger("replay")
-    formatter = logging.Formatter(
-        "%(asctime)s, %(name)s, %(levelname)s: %(message)s",
-        datefmt="%d-%b-%y %H:%M:%S",
-    )
-    hdlr = logging.StreamHandler()
-    hdlr.setFormatter(formatter)
-    logger.addHandler(hdlr)
-    logger.setLevel(logging.INFO)
-    return logger
 
 
 # pylint: disable=too-few-public-methods
@@ -99,9 +86,6 @@ class State(Borg):
         device: Optional[torch.device] = None,
     ):
         Borg.__init__(self)
-        if not hasattr(self, "logger_set"):
-            self.logger = logger_with_settings()
-            self.logger_set = True
 
         if session is None:
             if not hasattr(self, "session"):

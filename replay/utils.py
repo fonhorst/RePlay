@@ -14,7 +14,6 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 import pyspark.sql.types as st
-
 from numpy.random import default_rng
 from pyarrow import fs
 from pyspark.ml.linalg import DenseVector, Vectors, VectorUDT
