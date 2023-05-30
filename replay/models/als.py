@@ -13,9 +13,6 @@ from replay.models.hnswlib import HnswlibMixin
 from replay.utils import list_to_vector_udf
 
 
-logger = logging.getLogger("replay")
-
-
 class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
     """Wrapper for `Spark ALS
     <https://spark.apache.org/docs/latest/api/python/pyspark.mllib.html#pyspark.mllib.recommendation.ALS>`_.
@@ -35,18 +32,10 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
             "index_dim": self.rank,
         }
 
-
     def _get_vectors_to_infer_ann_inner(self, log: DataFrame, users: DataFrame) -> DataFrame:
-        logger.debug(f"users count to get features: {users.count()}")
+
         user_vectors, _ = self.get_features(users)
-        logger.debug(f"user_vectors from _get_vectors_to_infer_ann_inner: {user_vectors}")
-        logger.debug(f"user_vectors count: {user_vectors.count()}")
-        logger.debug(f"user_vectors: {user_vectors.show(10)}")
-        user_vectors = user_vectors.filter(user_vectors.user_factors.isNotNull())  # for debug
-        logger.debug(f"user_vectors count after filtering: {user_vectors.count()}")
-
-
-
+        user_vectors = user_vectors.filter(user_vectors.user_factors.isNotNull())
         return user_vectors
 
     def _get_ann_build_params(self, log: DataFrame):
@@ -69,18 +58,12 @@ class ALSWrap(Recommender, ItemVectorModel, HnswlibMixin):
     def _get_item_vectors_to_infer_ann(
             self, items: DataFrame
     ) -> DataFrame:
-        logger.debug(f"item count to get features: {items.count()}")
 
         item_vectors, _ = self.get_features(
             items
         )
 
-        logger.debug(f"item_vectors from _get_item_vectors_to_infer_ann: {item_vectors}")
-        logger.debug(f"item_vectors count: {item_vectors.count()}")
-        logger.debug(f"item_vectors: {item_vectors.show(10)}")
-        item_vectors = item_vectors.filter(item_vectors.item_factors.isNotNull())  # for debug
-        logger.debug(f"user_vectors count after filtering: {item_vectors.count()}")
-
+        item_vectors = item_vectors.filter(item_vectors.item_factors.isNotNull())
         return item_vectors
 
 

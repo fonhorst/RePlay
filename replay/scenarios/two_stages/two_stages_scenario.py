@@ -301,31 +301,9 @@ class TwoStagesScenario(HybridRecommender):
         # load general data and settings
         data = spark.read.parquet(os.path.join(path, "data.parquet")).first().asDict()
 
-        # # load transformers for features
-        # comp_path = os.path.join(path, "first_level_user_features_transformer")
-        # first_level_user_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
-        #
-        # comp_path = os.path.join(path, "first_level_item_features_transformer")
-        # first_level_item_features_transformer = load_transformer(comp_path) if do_path_exists(comp_path) else None
-        #
-        # comp_path = os.path.join(path, "features_processor")
-        # features_processor = load_transformer(comp_path) if do_path_exists(comp_path) else None
-
-        # # load first level models
-        # first_level_models_path = os.path.join(path, "first_level_models")
-        # if do_path_exists(first_level_models_path):
-        #     model_paths = [
-        #         os.path.join(first_level_models_path, model_path)
-        #         for model_path in list_folder(first_level_models_path)
-        #     ]
-        #     first_level_models = [load(model_path) for model_path in model_paths]
-        # else:
-        #     first_level_models = None
-
         one_stage_scenario_path = os.path.join(path, "one_stage_scenario")
         if do_path_exists(one_stage_scenario_path):
             logger.debug("loading one-stage scenario inside two-stage scenario")
-            # one_stage_scenario = OneStageUser2ItemScenario()._load_model(one_stage_scenario_path)
             one_stage_scenario = load(one_stage_scenario_path)
         else:
             one_stage_scenario = None
@@ -340,17 +318,6 @@ class TwoStagesScenario(HybridRecommender):
         # load second stage model
         comp_path = os.path.join(path, "second_stage_model")
         second_stage_model = load_transformer(comp_path) if do_path_exists(comp_path) else None
-
-        # self.__dict__.update({
-        #     **data,
-        #     "first_level_user_features_transformer": first_level_user_features_transformer,
-        #     "first_level_item_features_transformer": first_level_item_features_transformer,
-        #     "features_processor": features_processor,
-        #     "first_level_models": first_level_models,
-        #     "random_model": random_model,
-        #     "fallback_model": fallback_model,
-        #     "second_stage_model": second_stage_model
-        # })
 
         self.__dict__.update({
             **data,
@@ -775,7 +742,7 @@ class TwoStagesScenario(HybridRecommender):
         # by making predictions with first level models and combining them into final recommendation lists
         self.logger.info("Generate negative examples")
         negatives_source = (
-            self.first_level_models[0]
+            self.one_stage_scenario.first_level_models[0]
             if self.negatives_type == "first_level"
             else self.random_model
         )

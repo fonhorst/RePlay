@@ -934,13 +934,6 @@ class BaseRecommender(RecommenderCommons, IsSavable, ABC):
         if candidates is not None:
             candidates = get_unique_entities(candidates, "item_idx")
 
-        # old code
-        # nearest_items_to_filter = self._get_nearest_items(
-        #     items=items,
-        #     metric=metric,
-        #     candidates=candidates,
-        # )
-
         nearest_items_to_filter = self._inner_get_nearest_items_wrap(items=items,
                                                                      k=k,
                                                                      metric=metric,

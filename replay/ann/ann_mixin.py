@@ -1,5 +1,4 @@
 import uuid
-import logging
 from abc import abstractmethod
 from functools import cached_property
 from typing import Optional, Dict, Union, Any, Iterable
@@ -8,8 +7,6 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 
 from replay.models.base_rec import BaseRecommender
-
-logger = logging.getLogger("replay")
 
 
 class ANNMixin(BaseRecommender):
@@ -163,7 +160,6 @@ class ANNMixin(BaseRecommender):
     ) -> Optional[DataFrame]:
 
         if self._use_ann:
-            logger.debug("get nearest items using ann")
             item_vectors = self._get_item_vectors_to_infer_ann(
                 items
             )
@@ -176,7 +172,6 @@ class ANNMixin(BaseRecommender):
                 **ann_params,
             )
         else:
-            logger.debug("get nearest items without using ann")
 
             return self._get_nearest_items(
                 items=items,
