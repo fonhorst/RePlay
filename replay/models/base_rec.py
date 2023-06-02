@@ -206,7 +206,7 @@ class BaseRecommender(RecommenderCommons, IsSavable, ABC):
 
         if self.study is None or new_study:
             self.study = create_study(
-                direction="maximize", sampler=TPESampler()
+                direction="maximize", sampler=TPESampler(seed=22)
             )
 
         search_space = self._prepare_param_borders(param_borders)
