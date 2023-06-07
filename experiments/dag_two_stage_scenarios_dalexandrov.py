@@ -41,10 +41,10 @@ def fit_feature_transformers(artifacts: 'ArtifactPaths', cpu: int = DEFAULT_CPU,
 
 
 @task
-def presplit_data(artifacts: ArtifactPaths, item_test_size: float,
+def presplit_data(artifacts: ArtifactPaths, item_test_size_second_level: float, item_test_size_opt,
                   cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
     from dag_utils_dalexandrov import do_presplit_data
-    do_presplit_data(artifacts, item_test_size, cpu, memory)
+    do_presplit_data(artifacts, item_test_size_second_level, item_test_size_opt, cpu, memory)
 
 
 def fit_predict_first_level_model_spark_submit(
@@ -90,14 +90,15 @@ def fit_predict_first_level_model_spark_submit(
 def build_fit_predict_first_level_models_dag(
         dag_id: str,
         mlflow_exp_id: str,
-        # model_params_map: Dict[str, Dict[str, Any]],
         models: list[str],
         dataset: DatasetInfo,
         path_suffix: str = 'default',
-        item_test_size: float = 0.5,
+        item_test_size_second_level: float = 0.5,
+        item_test_size_opt: float = 0.5,
         get_optimized_params: bool = False,
         do_optimization: bool = False,
-        k: int = 100
+        k: int = 100,
+        all_splits: bool = False
 ):
     with DAG(
             dag_id=dag_id,
@@ -109,13 +110,73 @@ def build_fit_predict_first_level_models_dag(
         os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8822"
         os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
 
-        # TODO: fix it later
-        # path_suffix = Variable.get(f'{dataset.name}_artefacts_dir_suffix', 'default')
-        # path_suffix = 'default'
-        artifacts = ArtifactPaths(
-            base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
-            dataset=dataset
-        )
+        if all_splits:
+            item_test_size_opt_list = [0.10, 0.15, 0.20, 0.25, 0.30]
+            artifacts_list = [ArtifactPaths(
+                base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_"
+                          f"second_level_{item_test_size_second_level}_opt_{x}",
+                dataset=dataset
+            ) for x in item_test_size_opt_list]
+
+            dataset_splitting_list = [dataset_splitting(a, partitions_num=100) for a in artifacts_list]
+            presplit_data_list = [presplit_data(
+                a,
+                item_test_size_second_level=item_test_size_second_level,
+                item_test_size_opt=i) for i, a in zip(item_test_size_opt_list, artifacts_list)]
+
+            first_level_models_list = []
+            for model_name in models:
+                for i, a in enumerate(artifacts_list):
+                    first_level_models_list.append(fit_predict_first_level_model_spark_submit(
+                        task_name=f"fit_predict_first_level_model_{MODELNAME2FULLNAME[model_name].split('.')[-1]}_{i}",
+                        artifacts=a,
+                        model_class_name=MODELNAME2FULLNAME[model_name],
+                        k=k,
+                        get_optimized_params=get_optimized_params,
+                        do_optimization=do_optimization,
+                        mlflow_experiments_id=mlflow_exp_id
+                    ))
+
+            chain(*dataset_splitting_list)
+            chain(*presplit_data_list)
+            chain(*first_level_models_list)
+
+            dataset_splitting_list[-1] >> presplit_data_list[0]
+            presplit_data_list[-1] >> first_level_models_list[0]
+
+            # dataset_splitting(artifacts_100, partitions_num=100) \
+            # >> dataset_splitting(artifacts_80, partitions_num=100) \
+            # >> presplit_data(artifacts_100, item_test_size=0.0) \
+            # >> presplit_data(artifacts_80, item_test_size=0.2) \
+            # >> first_level_models_100_default[0]
+            #
+            # first_level_models_100_default[-1] >> first_level_models_100_optimization[0]
+            # first_level_models_100_optimization[-1] >> first_level_models_100_optimized[0]
+            #
+            # first_level_models_100_optimized[-1] >> first_level_models_80_default[0]
+            # first_level_models_80_default[-1] >> first_level_models_80_optimization[0]
+            # first_level_models_80_optimization[-1] >> first_level_models_80_optimized[0]
+            # first_level_models_80_optimized[-1] >> combiner_default \
+            # >> second_level_model_task_pure_default \
+            # >> combiner_optimized \
+            # >> second_level_model_task_pure_optimized
+            #
+            #
+            # dataset_splitting_list \
+            # >> presplit_data_list \
+            # >> first_level_models_list
+            # # dataset_splitting(artifacts, partitions_num=100) \
+            # >> presplit_data(artifacts,
+            #                  item_test_size_second_level=item_test_size_second_level,
+            #                  item_test_size_opt=item_test_size_opt) \
+            # >> first_level_models
+            # #  >> fit_feature_transformers(artifacts) \
+
+        else:
+            artifacts = ArtifactPaths(
+                base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_first_level_{path_suffix}",
+                dataset=dataset
+            )
 
         # if get_optimized_params:
         #     PARAMS =None
@@ -136,23 +197,25 @@ def build_fit_predict_first_level_models_dag(
         #     for model_class_name, model_kwargs in model_params_map.items()
         # ]
 
-        first_level_models = [
+            first_level_models = [
 
-            fit_predict_first_level_model_spark_submit(
-                task_name=f"fit_predict_first_level_model_{MODELNAME2FULLNAME[model_name].split('.')[-1]}",
-                artifacts=artifacts,
-                model_class_name=MODELNAME2FULLNAME[model_name],
-                k=k,
-                get_optimized_params=get_optimized_params,
-                do_optimization=do_optimization
-            )
-            for model_name in models
-        ]
+                fit_predict_first_level_model_spark_submit(
+                    task_name=f"fit_predict_first_level_model_{MODELNAME2FULLNAME[model_name].split('.')[-1]}",
+                    artifacts=artifacts,
+                    model_class_name=MODELNAME2FULLNAME[model_name],
+                    k=k,
+                    get_optimized_params=get_optimized_params,
+                    do_optimization=do_optimization
+                )
+                for model_name in models
+            ]
 
-        dataset_splitting(artifacts, partitions_num=100) \
-        >> presplit_data(artifacts, item_test_size=item_test_size) \
-        >> first_level_models
-    #  >> fit_feature_transformers(artifacts) \
+            dataset_splitting(artifacts, partitions_num=100) \
+            >> presplit_data(artifacts,
+                             item_test_size_second_level=item_test_size_second_level,
+                             item_test_size_opt=item_test_size_opt) \
+            >> first_level_models
+        #  >> fit_feature_transformers(artifacts) \
 
     return dag
 
@@ -626,16 +689,34 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
 
 
 # DAG SUBMIT series
-ml1m_one_stage = build_fit_predict_first_level_models_dag(
+
+ml1m_one_stage_default = build_fit_predict_first_level_models_dag(
     dag_id="ml1m_one_stage_default",
     mlflow_exp_id="paper_recsys",
     models=["als", "itemknn", "slim", "word2vec"],
     dataset=DATASETS["ml1m"],
-    item_test_size=0.2,
+    item_test_size_second_level=0.0,
+    item_test_size_opt=0.1,
     path_suffix="fair",
     get_optimized_params=False,
-    do_optimization=False
+    do_optimization=False,
+    all_splits=True
 )
+
+ml1m_one_stage_opt = build_fit_predict_first_level_models_dag(
+    dag_id="ml1m_one_stage_opt",
+    mlflow_exp_id="paper_recsys",
+    models=["als", "itemknn", "slim", "word2vec"],
+    dataset=DATASETS["ml1m"],
+    item_test_size_second_level=0.0,
+    item_test_size_opt=0.1,
+    path_suffix="fair",
+    get_optimized_params=False,
+    do_optimization=True,
+    all_splits=True
+)
+
+
 # fair first lvl DAGS
 
 # netflix_first_level_dag_submit_fair = build_fit_predict_first_level_models_dag(

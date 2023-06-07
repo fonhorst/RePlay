@@ -26,7 +26,7 @@ from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.model_handler import save, Splitter, load, ALSWrap
 from replay.models import PopRec
 from replay.models.base_rec import BaseRecommender
-from replay.scenarios import TwoStagesScenario
+from replay.scenarios import TwoStagesScenario, OneStageUser2ItemScenario
 from replay.scenarios.two_stages.reranker import LamaWrap, ReRanker
 from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.scenarios.two_stages.two_stages_scenario import get_first_level_model_features
@@ -442,6 +442,57 @@ class RefitableTwoStageScenario(TwoStagesScenario):
         self._are_split_data_dumped = row["_are_split_data_dumped"]
 
 
+class PartialOneStageScenario(OneStageUser2ItemScenario):
+    def __init__(
+            self,
+            train_val_splitter: Splitter = UserSplitter(
+                item_test_size=0.2, shuffle=True, seed=42
+            ),
+            first_level_models: Union[
+                List[BaseRecommender], BaseRecommender
+            ] = ALSWrap(rank=128),
+            fallback_model: Optional[BaseRecommender] = PopRec(),
+            user_cat_features_list: Optional[List] = None,
+            item_cat_features_list: Optional[List] = None,
+            custom_features_processor: HistoryBasedFeaturesProcessor = None,
+            seed: int = 123,
+            set_best_model: bool = False,
+            k: int = 10,
+            first_level_train_path: str = None,
+            first_level_val_path: str = None
+    ):
+
+        super().__init__(
+            train_val_splitter=train_val_splitter,
+            first_level_models=first_level_models,
+            fallback_model=fallback_model,
+            user_cat_features_list=user_cat_features_list,
+            item_cat_features_list=item_cat_features_list,
+            custom_features_processor=custom_features_processor,
+            seed=seed,
+            set_best_model=set_best_model,
+            k=k,
+            )
+
+        self._first_level_train_path = first_level_train_path
+        self._first_level_val_path = first_level_val_path
+
+    def _split_wrap(self, log):
+
+        output_dict = {}
+
+        first_level_train = spark.read.parquet(self._first_level_train_path).repartition(
+            spark.sparkContext.defaultParallelism)
+
+        first_level_val = spark.read.parquet(self._first_level_val_path).repartition(
+            spark.sparkContext.defaultParallelism)
+
+        output_dict["first_level_train"] = first_level_train
+        output_dict["first_level_val"] = first_level_val
+
+        return output_dict
+
+
 def load_model(path: str):
     setattr(replay.model_handler, 'EmptyRecommender', EmptyRecommender)
     setattr(replay.model_handler, 'EmptyWrap', EmptyWrap)
@@ -592,6 +643,20 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
         mlflow.log_metric(metric_name, metric_value)
 
 
+def _estimate_and_report_budget_metrics(model_name: str, test: DataFrame, recs: DataFrame, b: int):
+    from replay.experiment import Experiment
+    from replay.metrics import MAP, NDCG, HitRate
+
+    e = Experiment(
+        test,
+        {
+            NDCG(): 100,
+        },
+    )
+    e.add_result(model_name, recs)
+    mlflow.log_metric(f"NDCG.100-b{b}", e.results.iloc[0]["NDCG@100"])
+
+
 def _log_model_settings(model_name: str,
                         model_type: str,
                         k: int,
@@ -672,12 +737,16 @@ def do_dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
 
             print("data columns")
             print(data.columns)
-            preparator.setColumnsMapping({"user_id": "user_id", "item_id": "item_id",
-                                          "relevance": "rating", "timestamp": "timestamp"})
+            # preparator.setColumnsMapping({"user_id": "user_id", "item_id": "item_id",
+            #                               "relevance": "rating", "timestamp": "timestamp"})
 
-            log = preparator.transform(data
-                                       ).withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id",
-                                                                                                    "item_idx")
+            log = preparator.transform(data=data,
+                                       columns_mapping={
+                                           "user_id": "user_id",
+                                           "item_id": "item_id",
+                                           "relevance": "rating",
+                                           "timestamp": "timestamp"})\
+                .withColumnRenamed("user_id", "user_idx").withColumnRenamed("item_id","item_idx")
 
             # log = preparator.transform(
             # columns_mapping = {"user_id": "user_id", "item_id": "item_id",
@@ -807,7 +876,7 @@ def do_fit_feature_transformers(artifacts: ArtifactPaths, cpu: int = DEFAULT_CPU
         save_transformer(hbt_transformer, artifacts.history_based_transformer_path, overwrite=True)
 
 
-def do_presplit_data(artifacts: ArtifactPaths, item_test_size: float,
+def do_presplit_data(artifacts: ArtifactPaths, item_test_size_second_level: float, item_test_size_opt: float,
                      cpu: int = DEFAULT_CPU, memory: int = DEFAULT_MEMORY):
     with _init_spark_session(cpu, memory):
         flt_exists = do_path_exists(artifacts.first_level_train_path)
@@ -835,12 +904,222 @@ def do_presplit_data(artifacts: ArtifactPaths, item_test_size: float,
             second_level_positives_path=artifacts.second_level_positives_path,
             first_level_train_opt_path=artifacts.first_level_train_opt_path,
             first_level_val_opt_path=artifacts.first_level_val_opt_path,
-            train_splitter=UserSplitter(item_test_size=item_test_size, shuffle=True, seed=42),  ## for fair comparison)
+            train_splitter=UserSplitter(item_test_size=item_test_size_second_level, shuffle=True, seed=42),
+            splitter_opt=UserSplitter(item_test_size=item_test_size_opt, shuffle=True, seed=42),
             presplitted_data=False
         )
 
         scenario._split_data(artifacts.train)
         scenario._split_optimize(artifacts.first_level_train)
+
+
+def do_fit_predict_one_stage(
+        artifacts: ArtifactPaths,
+        model_class_name: str,
+        k: int,
+        cpu: int = DEFAULT_CPU,
+        memory: int = DEFAULT_MEMORY,
+        get_optimized_params: bool = False,
+        do_optimization: bool = False,
+        mlflow_experiments_id: str = "delete"):
+
+    with _init_spark_session(cpu, memory):
+        with _init_spark_session(cpu, memory):
+
+            mlflow.set_tracking_uri("http://node2.bdcl:8822")
+            mlflow.set_experiment(mlflow_experiments_id)
+
+            # if get_optimized_params:
+            #     with open(os.path.join("file://", artifacts.base_path,
+            #                            f"best_params_{model_class_name}.pickle"), "rb") as f:
+            #         model_kwargs = pickle.load(f)[0][0]
+            # else:
+            model_kwargs = FIRST_LEVELS_MODELS_PARAMS[model_class_name]
+
+            logger.debug(f"model params: {model_kwargs}")
+
+            with mlflow.start_run():
+
+                _log_model_settings(
+                    model_name=model_class_name,
+                    model_type=model_class_name,
+                    k=k,
+                    artifacts=artifacts,
+                    model_params=model_kwargs,
+                    model_config_path=None
+                )
+
+                scenario_name_postfix = 'optimized' if do_optimization else 'default'
+                mlflow.log_param("scenario", f"one-stage_{scenario_name_postfix}")
+
+                if get_optimized_params:
+                    mlflow.log_param("optimized", "True")
+                    optimized_postfix = "optimized"
+                else:
+                    mlflow.log_param("optimized", "False")
+                    optimized_postfix = "default"
+
+                base_path = artifacts.base_path
+                logger.debug(f"base_path: {base_path}")
+
+                mlflow.log_param("opt_split", base_path.split("_")[-1])
+                mlflow.log_param("2lvl_split", base_path.split("_")[-3])
+
+                first_level_model = _get_model(artifacts, model_class_name, model_kwargs)
+
+                if artifacts.user_features is not None:
+                    user_feature_transformer = load_transformer(artifacts.user_features_transformer_path)
+                else:
+                    user_feature_transformer = None
+                if artifacts.item_features is not None:
+                    item_feature_transformer = load_transformer(artifacts.item_features_transformer_path)
+                else:
+                    item_feature_transformer = None
+                # history_based_transformer = load_transformer(artifacts.history_based_transformer_path)
+
+                scenario = PartialOneStageScenario(
+                    first_level_models=first_level_model,
+                    user_cat_features_list=None,
+                    item_cat_features_list=None,
+                    set_best_model=True,
+                    first_level_train_path=artifacts.first_level_train_opt_path,
+                    first_level_val_path=artifacts.first_level_val_opt_path,
+                    k=100
+
+                )
+
+                user_features = artifacts.user_features
+                item_features = artifacts.item_features
+
+
+                if do_optimization:
+                    budget_list = [5, 10, 20, 50]
+                    budget_time_list = []
+                    with JobGroup("optimize", "optimization of first lvl models"):
+                        for b_idx, b in enumerate(budget_list):
+                            logger.debug(f"optimization budget: {b}")
+                            if b_idx != 0:
+                                delta_b = b - budget_list[b_idx-1]
+                                new_study = False  # continue study
+                            else:
+                                delta_b = b
+                                new_study = True
+
+                            with log_exec_timer(
+                                    f"budget_{b}_optimization"
+                            ) as timer:
+                                params_found, fallback_params, metrics_values = scenario.optimize(
+                                    train=artifacts.first_level_train_opt,
+                                    test=artifacts.first_level_val_opt,
+                                    param_borders=[
+                                        FIRST_LEVELS_MODELS_PARAMS_BORDERS[model_class_name],
+                                        None],
+                                    k=k,
+                                    budget=delta_b,
+                                    criterion=NDCG(),
+                                    new_study=new_study
+                                )
+                                mlflow.log_metric(f"NDCG.{k}_opt_b{b}", metrics_values[0])
+                            budget_time_list.append(timer.duration)
+
+                            with log_exec_timer(
+                                    f"budget_{b}_fit_predict_calc_metrics"
+                            ) as fit_predict_timer:
+                                scenario.fit(
+                                    log=artifacts.train,
+                                    user_features=user_features,
+                                    item_features=item_features)
+
+                                test_recs = scenario.predict(
+                                    log=artifacts.train,
+                                    k=k,
+                                    items=artifacts.train.select("item_idx").distinct(),
+                                    users=artifacts.test.select("user_idx").distinct(),
+                                    user_features=artifacts.user_features,
+                                    item_features=artifacts.item_features,
+                                    filter_seen_items=True
+                                ).cache()
+
+                                logger.info("Estimating metrics...")
+                                _estimate_and_report_budget_metrics(model_class_name, artifacts.test, test_recs, b=b)
+
+                                if b_idx == 0:
+                                    b_time = budget_time_list[-1]
+                                else:
+                                    b_time += budget_time_list[-1]
+
+                            mlflow.log_metric(f"budget_{b}_duration", b_time+fit_predict_timer.duration)
+
+
+
+                        # best_params = scenario.optimize(train=artifacts.first_level_train_opt,
+                        #                                 test=artifacts.first_level_val_opt,
+                        #                                 param_borders=[
+                        #                                     FIRST_LEVELS_MODELS_PARAMS_BORDERS[model_class_name],
+                        #                                     None],
+                        #                                 k=k,
+                        #                                 budget=20,
+                        #                                 criterion=NDCG(),
+                        #                                 )
+                        # # for ALS only + fallback {"rank": [50, 200]}
+                        # print(best_params)
+                        # logger.info(best_params)
+                        # print("cwd")
+                        # print(os.getcwd())
+                        # print(os.path.join(artifacts.base_path, f"best_params_{model_class_name}.pickle"))
+                        # with open(os.path.join(artifacts.base_path, f"best_params_{model_class_name}.pickle"),
+                        #           "wb") as f:
+                        #     pickle.dump(best_params, f)
+                        return 0
+
+                else:
+
+                    with JobGroup("fit", "fitting of one stage"):
+                        scenario.fit(
+                            log=artifacts.train,
+                            user_features=user_features,
+                            item_features=item_features)
+
+                    logger.info("Fit is ended. Predicting...")
+
+                    with JobGroup("predict", "predicting the test"):
+                        test_recs = scenario.predict(
+                            log=artifacts.train,
+                            k=k,
+                            items=artifacts.train.select("item_idx").distinct(),
+                            users=artifacts.test.select("user_idx").distinct(),
+                            user_features=artifacts.user_features,
+                            item_features=artifacts.item_features,
+                            filter_seen_items=True
+                        ).cache()
+
+                # rel_cols = [c for c in test_recs.columns if c.startswith('rel_')]
+                # assert len(rel_cols) == 1
+                #
+                # test_recs = test_recs.withColumnRenamed(rel_cols[0], 'relevance')
+
+                # test_recs = filter_seen_custom(recs=test_recs, log=artifacts.train, k=k,
+                #                                users=artifacts.train.select('user_idx').distinct())
+
+
+
+                    mlflow.log_metric("NDCG.100-val", scenario._experiment.results.iloc[0]["NDCG@100"])
+
+
+                    logger.info("Estimating metrics...")
+
+                    _estimate_and_report_metrics(model_class_name, artifacts.test, test_recs)
+
+                # test_recs = test_recs.withColumnRenamed('relevance', rel_cols[0])
+                # test_recs.write.parquet(artifacts.partial_predicts_path(model_class_name, optimized_postfix))
+                # test_recs.unpersist()
+
+                # logger.info("Saving the model")
+                # with JobGroup("save", "saving the model"):
+                #
+                #     save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name, optimized_postfix),
+                #          overwrite=True)
+
 
 
 def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
@@ -1682,11 +1961,6 @@ if __name__ == "__main__":
     with open(config_filename, "rb") as f:
         task_config = pickle.load(f)
 
-    # print("Task config artifacts:")
-    # print(f"{task_config['artifacts']}")
-    # print("config_filename")
-    # print(config_filename)
-    # print(config_filename.split('_')[2])
     print("Task configs")
     for k, v in task_config.items():
         print(k, v)
@@ -1701,4 +1975,5 @@ if __name__ == "__main__":
     elif config_filename.split('_')[2] == "pure":
         do_fit_predict_second_level_pure(**task_config)
     else:
-        do_fit_predict_first_level_model(**task_config)
+        # do_fit_predict_first_level_model(**task_config)
+        do_fit_predict_one_stage(**task_config)

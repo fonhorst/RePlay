@@ -89,24 +89,22 @@ FIRST_LEVELS_MODELS_PARAMS = {
     },
     "replay.models.ucb.UCB": {"seed": 42},
 }
+
 FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
     "replay.models.als.ALSWrap": {
         "rank": [10, 300]
     },
-    "replay.models.knn.ItemKNN": {"num_neighbours": [50, 200], #!!!was 1000
-                                  # "weighting": [None, 'tf_idf', 'bm25'],
-                                  # "shrink": [0, 0.1]},
+    "replay.models.knn.ItemKNN": {
+        "num_neighbours": [50, 1000],
                                   },
-    "replay.models.slim.SLIM": {"beta": [0.01, 0.1],
-                                "lambda_": [0.01, 0.1]},
+    "replay.models.slim.SLIM": {
+        "beta": [1e-6, 1],
+        "lambda_": [1e-6, 1]
+    },
     "replay.models.word2vec.Word2VecRec": {
         "rank": [10, 300],
-        # "min_count": [3, 10],
-        # "step_size": [0.01, 0.04],
-        # "max_iter": [1, 3],
         "window_size": [1, 3],
         "use_idf": [True, False]
-
     },
 }
 
