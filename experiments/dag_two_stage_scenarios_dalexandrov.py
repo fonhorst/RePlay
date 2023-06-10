@@ -277,9 +277,9 @@ def build_two_stage_dag(
         os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
 
         if all_splits:
-            item_test_size_2nd_level = [0.10, 0.15] # todo, 0.20, 0.25, 0.30]
+            item_test_size_2nd_level = [0.10, 0.15, 0.20, 0.25, 0.30]
             if do_optimization:
-                item_test_size_opt_list = [0.10, 0.15] # todo, 0.20, 0.25, 0.30]
+                item_test_size_opt_list = [0.10, 0.15, 0.20, 0.25, 0.30]
 
                 splits = [x for x in itertools.product(
                     item_test_size_2nd_level,
@@ -327,7 +327,7 @@ def build_two_stage_dag(
                         mlflow_experiments_id=mlflow_exp_id
                     ))
 
-            all_models = ["alswrap", "itemknn", "slim"] # TODO: # , "word2vecrec"]
+            all_models = ["alswrap", "itemknn", "slim", "word2vecrec"]
             desired_combinations = [list(x) for x in itertools.combinations(all_models, 2)] \
                                     + [list(x) for x in itertools.combinations(all_models, 3)] \
                                     + [list(x) for x in itertools.combinations(all_models, 4)]
@@ -338,7 +338,7 @@ def build_two_stage_dag(
                 for d in desired_combinations:
 
                     if do_optimization:
-                        for b in [5, 10]:  # todo 50]:
+                        for b in [5, 10, 50]:
                             combiner_suffix = f"combiner_{a_idx}_{'_'.join(d)}_b{b}"
                             combiners_list.append(do_combiner_task(
                                 artifacts=a,
@@ -351,7 +351,7 @@ def build_two_stage_dag(
                             combined_train_path = a.make_path(f"combined_train_{combiner_suffix}.parquet")
                             combined_predicts_path = a.make_path(f"combined_predicts_{combiner_suffix}.parquet")
 
-                            for max_iter in [10, 50]:  # todo#, 100]:
+                            for max_iter in [10, 50, 100]:
                                 model_name = "longer_slama_for_paper"
                                 second_levels.append(
                                     fit_predict_second_level_model_spark_submit(
@@ -924,7 +924,7 @@ ml1m_one_stage_opt = build_fit_predict_first_level_models_dag(
 ml1m_two_stage_default = build_two_stage_dag(
     dag_id="ml1m_two_stage_default",
     mlflow_exp_id="paper_recsys",
-    models=["als", "itemknn", "slim"], #todo "word2vec"],
+    models=["als", "itemknn", "slim", "word2vec"],
     dataset=DATASETS["ml1m"],
     path_suffix="fair",
     item_test_size_opt=0.0,
@@ -937,7 +937,7 @@ ml1m_two_stage_default = build_two_stage_dag(
 ml1m_two_stage_opt = build_two_stage_dag(
     dag_id="ml1m_two_stage_opt",
     mlflow_exp_id="paper_recsys",
-    models=["als", "itemknn", "slim"], #todo "word2vec"],
+    models=["als", "itemknn", "slim", "word2vec"],
     dataset=DATASETS["ml1m"],
     do_optimization=True,
     k=100,

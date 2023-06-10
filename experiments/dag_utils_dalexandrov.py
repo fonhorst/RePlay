@@ -1193,7 +1193,7 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                 presplitted_data=True,
                 use_generated_features=False,
                 use_first_level_models_feat=False,
-                num_negatives=10 #todo
+                num_negatives=100
             )
 
             bucketing_key = _get_bucketing_key(default='user_idx')
@@ -1218,7 +1218,7 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
 
             if do_optimization:
                 if do_optimization:
-                    budget_list = [5, 10] # todo#, 20, 50]
+                    budget_list = [5, 10, 20, 50]
                     budget_time_list = []
                     with JobGroup("optimize", "optimization of first lvl models"):
                         for b_idx, b in enumerate(budget_list):
@@ -1316,7 +1316,7 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
             else:
 
                 with JobGroup("fit", "fitting of two stage :empty wrap for second stage"):
-                    scenario.fit(log=artifacts.train.limit(10_000), user_features=user_features, #todo
+                    scenario.fit(log=artifacts.train, user_features=user_features,
                                  item_features=item_features)
                     # print("scenario")
                     # print(scenario.first_level_models[0].__dict__)
@@ -1332,7 +1332,7 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                         log=artifacts.train,
                         k=100,
                         items=artifacts.train.select("item_idx").distinct(),
-                        users=artifacts.test.select("user_idx").distinct().limit(100), #todo
+                        users=artifacts.test.select("user_idx").distinct(),
                         user_features=artifacts.user_features,
                         item_features=artifacts.item_features,
                         filter_seen_items=True
