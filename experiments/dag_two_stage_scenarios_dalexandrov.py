@@ -5,9 +5,11 @@ sys.path.insert(0, "/opt/airflow/dags/dalexandrov_packages")
 import os
 import pickle
 import uuid
+import itertools
+import logging
+
 from datetime import timedelta
 from typing import Dict, Any, Optional, Union, List
-
 import pendulum
 from airflow import DAG
 from airflow.decorators import task
@@ -21,6 +23,19 @@ from dag_entities_dalexandrov import EXTRA_BIG_CPU, EXTRA_BIG_MEMORY, SECOND_LEV
 from dag_entities_dalexandrov import extra_big_executor_config
 from dag_entities_dalexandrov import YARN_SUBMIT_CONF
 
+StreamHandler = logging.StreamHandler(sys.stdout)
+formatter = logging.Formatter(
+    "%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+StreamHandler.setFormatter(formatter)
+
+logging.basicConfig(
+    level=logging.ERROR,
+    handlers=[StreamHandler])
+
+logger = logging.getLogger("replay")
+logger.setLevel(logging.DEBUG)
 
 @task
 def dataset_splitting(artifacts: ArtifactPaths, partitions_num: int):
@@ -220,6 +235,191 @@ def build_fit_predict_first_level_models_dag(
     return dag
 
 
+def do_combiner_task(artifacts: ArtifactPaths, combiner_suffix: str, model_type: str, desired_models: list[str], b: str):
+    combined_train_path = artifacts.make_path(f"combined_train_{combiner_suffix}.parquet")
+    combined_predicts_path = artifacts.make_path(f"combined_predicts_{combiner_suffix}.parquet")
+
+    combiner = combine_1lvl_datasets_spark_submit(
+        task_name=f"combiner_{combiner_suffix}",
+        artifacts=artifacts,
+        combined_train_path=combined_train_path,
+        combined_predicts_path=combined_predicts_path,
+        desired_models=desired_models,
+        mode='union',
+        model_type=model_type,
+        b=b
+    )
+    return combiner
+
+
+def build_two_stage_dag(
+        dag_id: str,
+        mlflow_exp_id: str,
+        models: list[str],
+        dataset: DatasetInfo,
+        path_suffix: str = 'default',
+        item_test_size_second_level: float = 0.5,
+        item_test_size_opt: float = 0.0,
+        get_optimized_params: bool = False,
+        do_optimization: bool = False,
+        k: int = 100,
+        all_splits: bool = False
+):
+    with DAG(
+            dag_id=dag_id,
+            schedule=timedelta(days=10086),
+            start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
+            catchup=False,
+            tags=['two_stage', 'replay', 'paper']
+    ) as dag:
+
+        os.environ["MLFLOW_TRACKING_URI"] = "http://node2.bdcl:8822"
+        os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
+
+        if all_splits:
+            item_test_size_2nd_level = [0.10, 0.15] # todo, 0.20, 0.25, 0.30]
+            if do_optimization:
+                item_test_size_opt_list = [0.10, 0.15] # todo, 0.20, 0.25, 0.30]
+
+                splits = [x for x in itertools.product(
+                    item_test_size_2nd_level,
+                    item_test_size_opt_list,
+                    repeat=1)]
+
+                artifacts_list = [ArtifactPaths(
+                    base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_"
+                              f"second_level_{test_size_2_lvl}_opt_{test_size_opt}",
+                    dataset=dataset
+                ) for test_size_2_lvl, test_size_opt in splits]
+
+                dataset_splitting_list = [dataset_splitting(a, partitions_num=100) for a in artifacts_list]
+                presplit_data_list = [presplit_data(
+                    a,
+                    item_test_size_second_level=test_size_2_lvl,
+                    item_test_size_opt=test_size_opt) for (test_size_2_lvl, test_size_opt), a in zip(splits, artifacts_list)]
+
+
+            else:
+
+                artifacts_list = [ArtifactPaths(
+                    base_path=f"/opt/spark_data/replay/experiments/{dataset.name}_"
+                              f"second_level_{x}_opt_{item_test_size_opt}",
+                    dataset=dataset
+                ) for x in item_test_size_2nd_level]
+
+                dataset_splitting_list = [dataset_splitting(a, partitions_num=100) for a in artifacts_list]
+                presplit_data_list = [presplit_data(
+                    a,
+                    item_test_size_second_level=i,
+                    item_test_size_opt=item_test_size_opt) for i, a in zip(item_test_size_2nd_level, artifacts_list)]
+
+
+            first_level_models_list = []
+            for model_name in models:
+                for i, a in enumerate(artifacts_list):
+                    first_level_models_list.append(fit_predict_first_level_model_spark_submit(
+                        task_name=f"fit_predict_first_level_model_{MODELNAME2FULLNAME[model_name].split('.')[-1]}_{i}",
+                        artifacts=a,
+                        model_class_name=MODELNAME2FULLNAME[model_name],
+                        k=k,
+                        get_optimized_params=get_optimized_params,
+                        do_optimization=do_optimization,
+                        mlflow_experiments_id=mlflow_exp_id
+                    ))
+
+            all_models = ["alswrap", "itemknn", "slim"] # TODO: # , "word2vecrec"]
+            desired_combinations = [list(x) for x in itertools.combinations(all_models, 2)] \
+                                    + [list(x) for x in itertools.combinations(all_models, 3)] \
+                                    + [list(x) for x in itertools.combinations(all_models, 4)]
+
+            combiners_list = []
+            second_levels = []
+            for a_idx, a in enumerate(artifacts_list):
+                for d in desired_combinations:
+
+                    if do_optimization:
+                        for b in [5, 10]:  # todo 50]:
+                            combiner_suffix = f"combiner_{a_idx}_{'_'.join(d)}_b{b}"
+                            combiners_list.append(do_combiner_task(
+                                artifacts=a,
+                                combiner_suffix=combiner_suffix,
+                                model_type="",
+                                desired_models=d,
+                                b=str(b)
+                            ))
+
+                            combined_train_path = a.make_path(f"combined_train_{combiner_suffix}.parquet")
+                            combined_predicts_path = a.make_path(f"combined_predicts_{combiner_suffix}.parquet")
+
+                            for max_iter in [10, 50]:  # todo#, 100]:
+                                model_name = "longer_slama_for_paper"
+                                second_levels.append(
+                                    fit_predict_second_level_model_spark_submit(
+                                        task_name=f"2lvl_{model_name.split('.')[-1]}_{combiner_suffix}_{max_iter}",
+                                        artifacts=a,
+                                        model_name=f"{model_name}_{combiner_suffix}",
+                                        k=k,
+                                        train_path=combined_train_path,
+                                        first_level_predicts_path=combined_predicts_path,
+                                        second_model_type=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_type"],
+                                        second_model_params=SECOND_LEVELS_MODELS_PARAMS[model_name]
+                                        ["second_model_params"][max_iter],
+                                        second_model_config_path=SECOND_LEVELS_MODELS_CONFIGS.get(model_name, None),
+                                        cpu=EXTRA_BIG_CPU,
+                                        memory=EXTRA_BIG_MEMORY,
+                                    ))
+
+                    else:
+
+                        combiner_suffix = f"combiner_{a_idx}_{'_'.join(d)}"
+
+                        combiners_list.append(do_combiner_task(
+                            artifacts=a,
+                            combiner_suffix=combiner_suffix,
+                            model_type="pad",
+                            desired_models=d,
+                            b=""
+                        ))
+
+                        combined_train_path = a.make_path(f"combined_train_{combiner_suffix}.parquet")
+                        combined_predicts_path = a.make_path(f"combined_predicts_{combiner_suffix}.parquet")
+
+                        for max_iter in [10, 50]: #todo#, 100]:
+                            model_name = "longer_slama_for_paper"
+                            second_levels.append(
+                                fit_predict_second_level_model_spark_submit(
+                                    task_name=f"2lvl_{model_name.split('.')[-1]}_{combiner_suffix}_{max_iter}",
+                                    artifacts=a,
+                                    model_name=f"{model_name}_{combiner_suffix}",
+                                    k=k,
+                                    train_path=combined_train_path,
+                                    first_level_predicts_path=combined_predicts_path,
+                                    second_model_type=SECOND_LEVELS_MODELS_PARAMS[model_name]["second_model_type"],
+                                    second_model_params=SECOND_LEVELS_MODELS_PARAMS[model_name]
+                                    ["second_model_params"][max_iter],
+                                    second_model_config_path=SECOND_LEVELS_MODELS_CONFIGS.get(model_name, None),
+                                    cpu=EXTRA_BIG_CPU,
+                                    memory=EXTRA_BIG_MEMORY,
+                            ))
+
+            chain(*dataset_splitting_list)
+            chain(*presplit_data_list)
+            chain(*first_level_models_list)
+            chain(*combiners_list)
+            chain(*second_levels)
+
+            dataset_splitting_list[-1] >> presplit_data_list[0]
+            presplit_data_list[-1] >> first_level_models_list[0]
+
+            first_level_models_list[-1] >> combiners_list[0]
+            combiners_list[-1] >> second_levels[0]
+
+        else:
+            pass
+
+    return dag
+
+
 def build_autorecsys_dag(
         dag_id: str,
         models: list[str],
@@ -399,7 +599,8 @@ def combine_1lvl_datasets_spark_submit(
         combined_predicts_path: str,
         desired_models: Optional[List[str]] = None,
         mode: str = 'union',
-        model_type = ""
+        model_type: str = "",
+        b: str=""
 ):
     config_filename = f"task_config_{task_name}_{uuid.uuid4()}.pickle"
     with open(config_filename, "wb") as f:
@@ -409,7 +610,8 @@ def combine_1lvl_datasets_spark_submit(
             "combined_predicts_path": combined_predicts_path,
             "desired_models": desired_models,
             "mode": mode,
-            "model_type": model_type
+            "model_type": model_type,
+            "b": b
         }, f)
 
     submit_job = SparkSubmitOperator(
@@ -690,6 +892,7 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
 
 # DAG SUBMIT series
 
+# One-stage default
 ml1m_one_stage_default = build_fit_predict_first_level_models_dag(
     dag_id="ml1m_one_stage_default",
     mlflow_exp_id="paper_recsys",
@@ -703,6 +906,7 @@ ml1m_one_stage_default = build_fit_predict_first_level_models_dag(
     all_splits=True
 )
 
+# One-stage opt
 ml1m_one_stage_opt = build_fit_predict_first_level_models_dag(
     dag_id="ml1m_one_stage_opt",
     mlflow_exp_id="paper_recsys",
@@ -716,6 +920,28 @@ ml1m_one_stage_opt = build_fit_predict_first_level_models_dag(
     all_splits=True
 )
 
+# Two-stage default
+ml1m_two_stage_default = build_two_stage_dag(
+    dag_id="ml1m_two_stage_default",
+    mlflow_exp_id="paper_recsys",
+    models=["als", "itemknn", "slim"], #todo "word2vec"],
+    dataset=DATASETS["ml1m"],
+    path_suffix="fair",
+    item_test_size_opt=0.0,
+    get_optimized_params=False,
+    do_optimization=False,
+    k=100,
+    all_splits=True)
+
+# Two-stage with 1st level optimization
+ml1m_two_stage_opt = build_two_stage_dag(
+    dag_id="ml1m_two_stage_opt",
+    mlflow_exp_id="paper_recsys",
+    models=["als", "itemknn", "slim"], #todo "word2vec"],
+    dataset=DATASETS["ml1m"],
+    do_optimization=True,
+    k=100,
+    all_splits=True)
 
 # fair first lvl DAGS
 

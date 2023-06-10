@@ -134,10 +134,13 @@ def get_top_k_recs(recs: DataFrame, k: int, id_type: str = "idx") -> DataFrame:
     :param id_type: id or idx
     :return: top k recommendations `[user_id, item_id, relevance]`
     """
+
+    rel_col = [x for x in recs.columns if x.startswith("rel")][0]
+
     return get_top_k(
         dataframe=recs,
         partition_by_col=sf.col(f"user_{id_type}"),
-        order_by_col=[sf.col("relevance").desc()],
+        order_by_col=[sf.col(rel_col).desc()],
         k=k,
     )
 

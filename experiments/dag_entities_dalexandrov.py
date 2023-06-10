@@ -174,6 +174,34 @@ SECOND_LEVELS_MODELS_PARAMS = {
         }
     },
 
+    "longer_slama_for_paper": {
+            "second_model_type": "slama",
+            "second_model_params":
+                {10:
+                    {
+                "cpu_limit": EXTRA_BIG_CPU,
+                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                "timeout": 3600*48,
+                "general_params": {"use_algos": [["lgb_tuned"]]},
+                "reader_params": {"cv": 5, "advanced_roles": False},
+                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 10, 'max_tuning_time': 3600*48}},
+
+                50: {"cpu_limit": EXTRA_BIG_CPU,
+                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                "timeout": 3600*48,
+                "general_params": {"use_algos": [["lgb_tuned"]]},
+                "reader_params": {"cv": 5, "advanced_roles": False},
+                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 50, 'max_tuning_time': 3600*48}},
+
+                100: {"cpu_limit": EXTRA_BIG_CPU,
+                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                "timeout": 3600*48,
+                "general_params": {"use_algos": [["lgb_tuned"]]},
+                "reader_params": {"cv": 5, "advanced_roles": False},
+                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 100, 'max_tuning_time': 3600*48}}}
+
+        },
+
     "slama_fast": {
         "second_model_type": "slama",
         "second_model_params": {
@@ -252,14 +280,14 @@ KUBERNETES_SUBMIT_CONF = {
 YARN_SUBMIT_CONF = {
     "spark.yarn.appMasterEnv.SCRIPT_ENV": "cluster",
     "spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/python_envs/.replay_venv/bin/python3",
-    "spark.yarn.appMasterEnv.MLFLOW_TRACKING_URI": "http://node2.bdcl:8811",
+    "spark.yarn.appMasterEnv.MLFLOW_TRACKING_URI": "http://node2.bdcl:8822",
     "spark.yarn.appMasterEnv.GIT_PYTHON_REFRESH": "quiet",
     "spark.yarn.tags": "replay",
     "spark.kryoserializer.buffer.max": "512m",
     "spark.driver.cores": "2",
     "spark.driver.memory": "20g",
     "spark.driver.maxResultSize": "5g",
-    "spark.executor.instances": "16",
+    "spark.executor.instances": "12",
     "spark.executor.cores": "6",
     "spark.executor.memory": "24g",
     "spark.cores.max": "48",

@@ -481,6 +481,8 @@ class BaseRecommender(RecommenderCommons, IsSavable, ABC):
         Filter seen items (presented in log) out of the users' recommendations.
         For each user return from `k` to `k + number of seen by user` recommendations.
         """
+        rel_col = [x for x in recs.columns if x.startswith("rel")][0]
+
         users_log = log.join(users, on="user_idx")
         self._cache_model_temp_view(users_log, "filter_seen_users_log")
         num_seen = users_log.groupBy("user_idx").agg(
@@ -498,7 +500,7 @@ class BaseRecommender(RecommenderCommons, IsSavable, ABC):
             "temp_rank",
             sf.row_number().over(
                 Window.partitionBy("user_idx").orderBy(
-                    sf.col("relevance").desc()
+                    sf.col(rel_col).desc()
                 )
             ),
         ).filter(sf.col("temp_rank") <= sf.lit(max_seen + k))
@@ -583,9 +585,12 @@ class BaseRecommender(RecommenderCommons, IsSavable, ABC):
         if filter_seen_items and log:
             recs = self._filter_seen(recs=recs, log=log, users=users, k=k)
 
-        recs = get_top_k_recs(recs, k=k).select(
-            "user_idx", "item_idx", "relevance"
-        )
+        rel_col = [x for x in recs.columns if x.startswith("rel")][0]
+
+        # recs = get_top_k_recs(recs, k=k).select(
+        #     "user_idx", "item_idx", rel_col
+        # )
+        recs = get_top_k_recs(recs, k=k)
 
         output = return_recs(recs, recs_file_path)
         self._clear_model_temp_view("filter_seen_users_log")

@@ -14,13 +14,11 @@ import inspect
 
 import mlflow
 from pyspark.sql import functions as sf, SparkSession, DataFrame, Window
-from pyspark.sql import functions as F
 
 sys.path.insert(0, "/opt/airflow/dags/dalexandrov_packages")
 import replay
-# help(replay)
 from dag_entities_dalexandrov import ArtifactPaths, DEFAULT_CPU, DEFAULT_MEMORY, TASK_CONFIG_FILENAME_ENV_VAR
-from dag_entities_dalexandrov import FIRST_LEVELS_MODELS_PARAMS_BORDERS, MODELNAME2FULLNAME, FIRST_LEVELS_MODELS_PARAMS
+from dag_entities_dalexandrov import FIRST_LEVELS_MODELS_PARAMS_BORDERS, FIRST_LEVELS_MODELS_PARAMS
 from replay.data_preparator import Indexer
 from replay.history_based_fp import HistoryBasedFeaturesProcessor
 from replay.model_handler import save, Splitter, load, ALSWrap
@@ -32,27 +30,34 @@ from replay.scenarios.two_stages.slama_reranker import SlamaWrap
 from replay.scenarios.two_stages.two_stages_scenario import get_first_level_model_features
 from replay.session_handler import State
 from replay.splitters import DateSplitter, UserSplitter
-from replay.utils import get_log_info, save_transformer, log_exec_timer, do_path_exists, JobGroup, load_transformer, \
-    list_folder, join_with_col_renaming
+from replay.utils import log_exec_timer, JobGroup, join_with_col_renaming, save_transformer, do_path_exists,\
+    load_transformer, list_folder, get_log_info
 from replay.metrics import NDCG
-from replay.utils import get_top_k_recs
 from pyspark.ml import PipelineModel
 from pyspark.sql.functions import udf
-from pyspark.sql.types import FloatType, DoubleType
-from sparklightautoml.dataset.base import SparkDataset
+from pyspark.sql.types import DoubleType
 from sparklightautoml.ml_algo.boost_lgbm import SparkBoostLGBM
-from sparklightautoml.pipelines.features.lgb_pipeline import SparkLGBSimpleFeatures, SparkLGBAdvancedPipeline
+from sparklightautoml.pipelines.features.lgb_pipeline import SparkLGBSimpleFeatures
 from sparklightautoml.pipelines.ml.base import SparkMLPipeline
 from sparklightautoml.reader.base import SparkToSparkReader
 from sparklightautoml.tasks.base import SparkTask as SparkTask
-from sparklightautoml.utils import logging_config, VERBOSE_LOGGING_FORMAT, log_exec_time
 from sparklightautoml.validation.iterators import SparkFoldsIterator
-from synapse.ml.lightgbm import LightGBMClassifier, LightGBMRegressor
-from pyspark.ml.feature import VectorAssembler
 from sparklightautoml.dataset import persistence
 
-logger = logging.getLogger('airflow.task')
+# logger = logging.getLogger('airflow.task')
+StreamHandler = logging.StreamHandler(sys.stdout)
+formatter = logging.Formatter(
+    "%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+StreamHandler.setFormatter(formatter)
 
+logging.basicConfig(
+    level=logging.ERROR,
+    handlers=[StreamHandler])
+
+logger = logging.getLogger("replay")
+logger.setLevel(logging.DEBUG)
 
 def filter_seen_custom(
         recs: DataFrame, log: DataFrame, k: int, users: DataFrame
@@ -637,9 +642,7 @@ def _estimate_and_report_metrics(model_name: str, test: DataFrame, recs: DataFra
     for metric, k in itertools.product(metrics, K_list_metrics):
         metric_name = f"{metric}.{k}"
         metric_value = e.results.at[model_name, f"{metric}@{k}"]
-
         print(f"Estimated metric {metric_name}={metric_value} for {model_name}")
-
         mlflow.log_metric(metric_name, metric_value)
 
 
@@ -1104,21 +1107,20 @@ def do_fit_predict_one_stage(
 
 
                     mlflow.log_metric("NDCG.100-val", scenario._experiment.results.iloc[0]["NDCG@100"])
-
-
                     logger.info("Estimating metrics...")
 
                     _estimate_and_report_metrics(model_class_name, artifacts.test, test_recs)
 
-                # test_recs = test_recs.withColumnRenamed('relevance', rel_cols[0])
-                # test_recs.write.parquet(artifacts.partial_predicts_path(model_class_name, optimized_postfix))
-                # test_recs.unpersist()
+                    test_recs = test_recs.withColumnRenamed('relevance',
+                                                            f"rel_type{type(scenario.best_model).__name__}")
+                    test_recs.write.parquet(artifacts.partial_predicts_path(model_class_name, optimized_postfix))
+                    test_recs.unpersist()
 
-                # logger.info("Saving the model")
-                # with JobGroup("save", "saving the model"):
-                #
-                #     save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name, optimized_postfix),
-                #          overwrite=True)
+                    logger.info("Saving the model")
+                    with JobGroup("save", "saving the model"):
+
+                        save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name, optimized_postfix),
+                             overwrite=True)
 
 
 
@@ -1133,12 +1135,8 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                                      mlflow_experiments_id: str = "delete"):
     with _init_spark_session(cpu, memory):
 
-        mlflow_tracking_uri = os.environ.get(
-            "MLFLOW_TRACKING_URI"
-        )
-        mlflow.set_tracking_uri(mlflow_tracking_uri)
-        os.environ["MLFLOW_EXPERIMENT_ID"] = mlflow_experiments_id
-        mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_ID", "delete"))
+        mlflow.set_tracking_uri("http://node2.bdcl:8822")
+        mlflow.set_experiment(mlflow_experiments_id)
 
         if get_optimized_params:
             with open(os.path.join("file://", artifacts.base_path,
@@ -1161,12 +1159,12 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                 model_config_path=None
             )
 
-            if get_optimized_params:
-                mlflow.log_param("optimized", "True")
-                optimized_postfix = "optimized"
-            else:
-                mlflow.log_param("optimized", "False")
-                optimized_postfix = "default"
+            # if get_optimized_params:
+            #     mlflow.log_param("optimized", "True")
+            #     optimized_postfix = "optimized"
+            # else:
+            #     mlflow.log_param("optimized", "False")
+            #     optimized_postfix = "default"
 
             first_level_model = _get_model(artifacts, model_class_name, model_kwargs)
 
@@ -1179,6 +1177,7 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
             else:
                 item_feature_transformer = None
             # history_based_transformer = load_transformer(artifacts.history_based_transformer_path)
+            optimized_postfix = "pad"
 
             scenario = PartialTwoStageScenario(
                 train_splitter=UserSplitter(
@@ -1191,7 +1190,10 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                 first_level_item_features_transformer=None,  # item_feature_transformer,
                 first_level_user_features_transformer=None,  # user_feature_transformer,
                 custom_features_processor=None,  # history_based_transformer,
-                presplitted_data=True
+                presplitted_data=True,
+                use_generated_features=False,
+                use_first_level_models_feat=False,
+                num_negatives=10 #todo
             )
 
             bucketing_key = _get_bucketing_key(default='user_idx')
@@ -1215,30 +1217,107 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                 item_features = None  # artifacts.item_features ###!!!
 
             if do_optimization:
-                with JobGroup("optimize", "optimization of first lvl models"):
-                    best_params = scenario.optimize(train=artifacts.first_level_train_opt,
-                                                    test=artifacts.first_level_val_opt,
-                                                    param_borders=[FIRST_LEVELS_MODELS_PARAMS_BORDERS[model_class_name],
-                                                                   None],
-                                                    k=k,
-                                                    budget=20,
-                                                    criterion=NDCG(),
-                                                    )
-                    # for ALS only + fallback {"rank": [50, 200]}
-                    print(best_params)
-                    logger.info(best_params)
-                    print("cwd")
-                    print(os.getcwd())
-                    print(os.path.join(artifacts.base_path, f"best_params_{model_class_name}.pickle"))
-                    with open(os.path.join(artifacts.base_path, f"best_params_{model_class_name}.pickle"), "wb") as f:
-                        pickle.dump(best_params, f)
-                    return 0
+                if do_optimization:
+                    budget_list = [5, 10] # todo#, 20, 50]
+                    budget_time_list = []
+                    with JobGroup("optimize", "optimization of first lvl models"):
+                        for b_idx, b in enumerate(budget_list):
+                            scenario.second_stage_model = EmptyWrap(
+                                dump_path=artifacts.partial_train_path(model_class_name, str(b)))
+                            logger.debug(f"optimization budget: {b}")
+                            if b_idx != 0:
+                                delta_b = b - budget_list[b_idx-1]
+                                new_study = False  # continue study
+                            else:
+                                delta_b = b
+                                new_study = True
+
+                            with log_exec_timer(
+                                    f"budget_{b}_optimization"
+                            ) as timer:
+                                params_found, fallback_params, metrics_values = scenario.optimize(
+                                    train=artifacts.first_level_train_opt,
+                                    test=artifacts.first_level_val_opt,
+                                    param_borders=[
+                                        FIRST_LEVELS_MODELS_PARAMS_BORDERS[model_class_name],
+                                        None],
+                                    k=k,
+                                    budget=delta_b,
+                                    criterion=NDCG(),
+                                    new_study=new_study
+                                )
+                                mlflow.log_metric(f"NDCG.{k}_opt_b{b}", metrics_values[0])
+                            budget_time_list.append(timer.duration)
+
+                            with log_exec_timer(
+                                    f"budget_{b}_fit_predict_calc_metrics"
+                            ) as fit_predict_timer:
+                                scenario.fit(
+                                    log=artifacts.train,
+                                    user_features=user_features,
+                                    item_features=item_features)
+
+                                test_recs = scenario.predict(
+                                    log=artifacts.train,
+                                    k=k,
+                                    items=artifacts.train.select("item_idx").distinct(),
+                                    users=artifacts.test.select("user_idx").distinct(),
+                                    user_features=artifacts.user_features,
+                                    item_features=artifacts.item_features,
+                                    filter_seen_items=True
+                                ).cache()
+
+                                rel_cols = [c for c in test_recs.columns if c.startswith('rel_')]
+                                assert len(rel_cols) == 1
+                                test_recs = test_recs.withColumnRenamed(rel_cols[0], 'relevance')
+
+                                logger.info("Estimating metrics...")
+                                _estimate_and_report_budget_metrics(model_class_name, artifacts.test, test_recs, b=b)
+                                test_recs = test_recs.withColumnRenamed('relevance', rel_cols[0])
+
+                                test_recs.write.parquet(
+                                    artifacts.partial_predicts_path(model_class_name, str(b)))
+
+                                test_recs.unpersist()
+
+                                if b_idx == 0:
+                                    b_time = budget_time_list[-1]
+                                else:
+                                    b_time += budget_time_list[-1]
+
+                            mlflow.log_metric(f"budget_{b}_duration", b_time+fit_predict_timer.duration)
+
+                            logger.info("Saving the model")
+                            with JobGroup("save", "saving the model"):
+
+                                save(scenario,
+                                     artifacts.partial_two_stage_scenario_path(model_class_name, str(b)),
+                                     overwrite=True)
+
+                # with JobGroup("optimize", "optimization of first lvl models"):
+                #     best_params = scenario.optimize(train=artifacts.first_level_train_opt,
+                #                                     test=artifacts.first_level_val_opt,
+                #                                     param_borders=[FIRST_LEVELS_MODELS_PARAMS_BORDERS[model_class_name],
+                #                                                    None],
+                #                                     k=k,
+                #                                     budget=20,
+                #                                     criterion=NDCG(),
+                #                                     )
+                #     # for ALS only + fallback {"rank": [50, 200]}
+                #     print(best_params)
+                #     logger.info(best_params)
+                #     print("cwd")
+                #     print(os.getcwd())
+                #     print(os.path.join(artifacts.base_path, f"best_params_{model_class_name}.pickle"))
+                #     with open(os.path.join(artifacts.base_path, f"best_params_{model_class_name}.pickle"), "wb") as f:
+                #         pickle.dump(best_params, f)
+                #     return 0
 
             else:
 
                 with JobGroup("fit", "fitting of two stage :empty wrap for second stage"):
-                    scenario.fit(log=artifacts.train, user_features=user_features,
-                                 item_features=item_features)  # ?How it doesn't splitting to 1/2 lvl?
+                    scenario.fit(log=artifacts.train.limit(10_000), user_features=user_features, #todo
+                                 item_features=item_features)
                     # print("scenario")
                     # print(scenario.first_level_models[0].__dict__)
                     # sim_m = scenario.first_level_models[0].similarity
@@ -1246,39 +1325,43 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                     # print(sim_m.count())
                     # print(sim_m.show(3))
 
-            logger.info("Fit is ended. Predicting...")
+                logger.info("Fit is ended. Predicting...")
 
-            with JobGroup("predict", "predicting the test"):
-                test_recs = scenario.predict(
-                    log=artifacts.train,
-                    k=k,
-                    user_features=None,  # artifacts.user_features
-                    item_features=None,  # artifacts.item_features,
-                    filter_seen_items=False  # !
-                ).cache()
+                with JobGroup("predict", "predicting the test"):
+                    test_recs = scenario.predict(
+                        log=artifacts.train,
+                        k=100,
+                        items=artifacts.train.select("item_idx").distinct(),
+                        users=artifacts.test.select("user_idx").distinct().limit(100), #todo
+                        user_features=artifacts.user_features,
+                        item_features=artifacts.item_features,
+                        filter_seen_items=True
+                    ).cache()
 
-            rel_cols = [c for c in test_recs.columns if c.startswith('rel_')]
-            assert len(rel_cols) == 1
+                logger.info(f"test_recs columns: {test_recs.columns}")
+                rel_cols = [c for c in test_recs.columns if c.startswith('rel_')]
+                assert len(rel_cols) == 1
 
-            test_recs = test_recs.withColumnRenamed(rel_cols[0], 'relevance')
-            test_recs = filter_seen_custom(recs=test_recs, log=artifacts.train, k=k,
-                                           users=artifacts.train.select('user_idx').distinct())
+                test_recs = test_recs.withColumnRenamed(rel_cols[0], 'relevance')
+                test_recs = filter_seen_custom(recs=test_recs, log=artifacts.train, k=k,
+                                               users=artifacts.train.select('user_idx').distinct())
 
-            logger.info("Estimating metrics...")
+                logger.info("Estimating metrics...")
 
-            _estimate_and_report_metrics(model_class_name, artifacts.test, test_recs)
+                _estimate_and_report_metrics(model_class_name, artifacts.test, test_recs)
 
-            test_recs = test_recs.withColumnRenamed('relevance', rel_cols[0])
+                test_recs = test_recs.withColumnRenamed('relevance', rel_cols[0])
 
-            test_recs.write.parquet(artifacts.partial_predicts_path(model_class_name, optimized_postfix))
+                logger.info(f"partial predict save: {test_recs}")
+                test_recs.write.parquet(artifacts.partial_predicts_path(model_class_name, optimized_postfix))
 
-            test_recs.unpersist()
+                test_recs.unpersist()
 
-            logger.info("Saving the model")
-            with JobGroup("save", "saving the model"):
+                logger.info("Saving the model")
+                with JobGroup("save", "saving the model"):
 
-                save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name, optimized_postfix),
-                     overwrite=True)
+                    save(scenario, artifacts.partial_two_stage_scenario_path(model_class_name, optimized_postfix),
+                         overwrite=True)
 
 
 # this is @task (old comment)
@@ -1300,11 +1383,8 @@ def do_fit_predict_second_level(
 
     with _init_spark_session(cpu, memory, mem_coeff=mem_coeff) as spark:
 
-        mlflow_tracking_uri = os.environ.get(
-            "MLFLOW_TRACKING_URI"
-        )
-        mlflow.set_tracking_uri(mlflow_tracking_uri)
-        mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_ID", "delete"))
+        mlflow.set_tracking_uri("http://node2.bdcl:8822")
+        mlflow.set_experiment("paper_recsys")
 
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
         model_name = f"{model_name}_{str(uuid.uuid4()).replace('-', '')}"
@@ -1336,7 +1416,7 @@ def do_fit_predict_second_level(
             with log_exec_timer("fit") as timer:
 
                 # train_path = train_path.replace(".parquet", "") + "48.parquet"
-                train_path = train_path.replace(".parquet", "") + "_10neg.parquet"
+                # train_path = train_path.replace(".parquet", "") + "_10neg.parquet"
 
                 print(train_path)
                 tr = spark.read.parquet(train_path)
@@ -1582,7 +1662,7 @@ def do_fit_predict_second_level_pure(
             print(fi)
 
 
-def _infer_trained_models_files(artifacts: ArtifactPaths, model_type: str = "default") -> List[FirstLevelModelFiles]:
+def _infer_trained_models_files(artifacts: ArtifactPaths, model_type: str = "", b='') -> List[FirstLevelModelFiles]: #model_type: str = "default"
     files = list_folder(artifacts.base_path)
     MODEL_NAMES = ["Word2VecRec", "SLIM", "ItemKNN", "ALSWrap"]
 
@@ -1598,15 +1678,24 @@ def _infer_trained_models_files(artifacts: ArtifactPaths, model_type: str = "def
                 print(f"model name {mname} does not recognised as one of {MODEL_NAMES} models")
                 assert False
 
-    def get_files(prefix: str, model_type=model_type) -> Dict[str, str]:
-        return {
-            model_name(file):
-            artifacts.make_path(file) for file in files if file.startswith(prefix) and model_type in file
-        }
+    def get_files(prefix: str, model_type=model_type, b='') -> Dict[str, str]:
+        print(f"b in get_files: {b}")
 
-    partial_predicts = get_files('partial_predict')
-    partial_trains = get_files('partial_train')
-    partial_scenarios = get_files('two_stage_scenario')  # It is required for making missed predictions
+        if b != "":
+            return {
+                model_name(file):
+                artifacts.make_path(file) for file in files if file.startswith(prefix) and model_type in file and f"_{b}" in file
+            }
+        else:
+            return {
+                model_name(file):
+                    artifacts.make_path(file) for file in files if
+                file.startswith(prefix) and model_type in file
+            }
+
+    partial_predicts = get_files('partial_predict',b=b)
+    partial_trains = get_files('partial_train', b=b)
+    partial_scenarios = get_files('two_stage_scenario', b=b)  # It is required for making missed predictions
     finished_model_names = set(partial_predicts).intersection(partial_trains).intersection(partial_scenarios)
 
     first_lvl_model_files = [
@@ -1640,226 +1729,122 @@ class DatasetCombiner:
         for df in partial_dfs:
             df.printSchema()
         # ===============================
-        if full_outer_join:
-            if len(partial_dfs) == 1:
-                combined_df = partial_dfs[0]
-            else:
-                combined_df = partial_dfs[0]
-                for right_df in partial_dfs[1:]:
-                    common_cols = [
-                        sf.coalesce(f"left_df.{c}", f"right_df.{c}").alias(c)
-                        for c in combined_df.columns
-                        if c in right_df.columns
-                           and c not in ["user_idx", "item_idx"]
-                    ]
-                    columns_from_left = [
-                        sf.col(f"left_df.{c}").alias(c)
-                        for c in combined_df.columns
-                        if (
-                                c not in ["user_idx", "item_idx"]
-                                and c not in right_df.columns
-                        )
-                    ]
-                    columns_from_right = [
-                        sf.col(f"right_df.{c}").alias(c)
-                        for c in right_df.columns
-                        if (
-                                c not in ["user_idx", "item_idx"]
-                                and c not in combined_df.columns
-                        )
-                    ]
-                    combined_df = combined_df.alias("left_df")
-                    right_df = right_df.alias("right_df")
-                    combined_df = combined_df.join(
-                        right_df, on=["user_idx", "item_idx"], how="outer"
-                    ).select(
-                        "user_idx",
-                        "item_idx",
-                        *common_cols,
-                        *columns_from_left,
-                        *columns_from_right,
-                    )
 
-            for model in models:
-                if isinstance(model, ALSWrap):
-                    print("ALSWrap in models list. Will join item_factors and user_factors to combined_df.")
-                    item_factors: DataFrame = model.model.itemFactors.select(
-                        sf.col("id").alias("item_idx"),
-                        sf.col("features").alias("item_factors")
-                    )
-                    user_factors: DataFrame = model.model.userFactors.select(
-                        sf.col("id").alias("user_idx"),
-                        sf.col("features").alias("user_factors")
-                    )
-                    item_factors.printSchema()
-                    user_factors.printSchema()
-
-                    combined_df = combined_df.drop("item_factors", "user_factors")
-                    combined_df = combined_df.join(item_factors, on="item_idx", how="left")
-                    combined_df = combined_df.join(user_factors, on="user_idx", how="left")
-
-                    break
-
-                # DEBUG: checking number of lines where user_factors/item_factors is null
-                count_null_user_factors = combined_df.where(
-                    sf.col("user_factors").isNull()
-                ).count()
-                count_null_item_factors = combined_df.where(
-                    sf.col("item_factors").isNull()
-                ).count()
-                print(f"count_null_user_factors: {count_null_user_factors}")
-                print(f"count_null_item_factors: {count_null_item_factors}")
-
-                # processing "rel_*" columns
-                rel_cols = []
-                for c in combined_df.columns:
-                    if c.startswith("rel_"):
-                        # adding "rel_*_is_null" features
-                        rel_cols.append(
-                            sf.when(sf.col(c).isNull(), True)
-                            .otherwise(False)
-                            .alias(c + "_is_null")
-                        )
-                        # null -> NaN
-                        rel_cols.append(
-                            sf.when(sf.col(c).isNull(), float("nan"))
-                            .otherwise(sf.col(c))
-                            .alias(c)
-                        )
-                other_cols = [
-                    c for c in combined_df.columns if not c.startswith("rel_")
-                ]
-                combined_df = combined_df.select(*other_cols, *rel_cols)
-
-                # DEBUG: final schema
-                combined_df.printSchema()
-
-                # DEBUG: final rows number
-                print(f"final rows number: {combined_df.count()}")
-
-                print("Saving new parquet in ", combined_df_path)
-                # combined_df.write.parquet(combined_df_path)
-
-                print("Saved")
-
+        if mode == 'union':
+            required_pairs = (
+                functools.reduce(
+                    lambda acc, x: acc.unionByName(x),
+                    (df.select('user_idx', 'item_idx') for df in partial_dfs)
+                ).distinct()
+            )
         else:
-
-            if mode == 'union':
-                required_pairs = (
-                    functools.reduce(
-                        lambda acc, x: acc.unionByName(x),
-                        (df.select('user_idx', 'item_idx') for df in partial_dfs)
-                    ).distinct()
-                )
-            else:
-                # "leading_<model_name>"
-                leading_model_name = mode.split('_')[-1]
-                required_pairs = (
-                    partial_dfs[model_names.index(leading_model_name)]
-                    .select('user_idx', 'item_idx')
-                    .distinct()
-                )
-
-            logger.info("Selecting missing pairs")
-
-            missing_pairs = [
-                required_pairs.join(df, on=['user_idx', 'item_idx'], how='anti').select('user_idx',
-                                                                                        'item_idx').distinct()
-                for df in partial_dfs
-            ]
-
-            def get_rel_col(df: DataFrame) -> str:
-
-                logger.info("columns", df.columns)
-                rel_col = [c for c in df.columns if c.startswith('rel_')][0]
-
-                # try:
-                # except IndexError:
-                #     rel_col = "relevance"
-                return rel_col
-
-            def make_missing_predictions(model, mpairs: DataFrame, partial_df: DataFrame) -> DataFrame:
-
-                # with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY) as spark:
-
-                mpairs = mpairs.cache()
-
-                if mpairs.count() == 0:
-                    return partial_df
-
-                current_pred = model._predict_pairs(
-                    mpairs,
-                    log=artifacts.train,
-                    user_features=artifacts.user_features,
-                    item_features=artifacts.item_features
-                ).withColumnRenamed('relevance', get_rel_col(partial_df))
-
-                features = get_first_level_model_features(
-                    model=model,
-                    pairs=current_pred.select(
-                        "user_idx", "item_idx"
-                    ),
-                    user_features=artifacts.user_features.cache() if artifacts.user_features is not None else None,
-                    item_features=artifacts.item_features.cache() if artifacts.item_features is not None else None,
-                    prefix=f"m_0",
-                )
-                current_pred_with_features = join_with_col_renaming(
-                    left=current_pred,
-                    right=features,
-                    on_col_name=["user_idx", "item_idx"],
-                    how="left",
-                )
-                current_pred_with_features.write.mode("overwrite").parquet(os.path.join("hdfs://node21.bdcl:9000",
-                                                                                        artifacts.base_path,
-                                                                                        f"current_pred_with_features_{model}.parquet"))
-                current_pred_with_features = sprk_ses.read.parquet(os.path.join("hdfs://node21.bdcl:9000",
-                                                                                artifacts.base_path,
-                                                                                f"current_pred_with_features_{model}.parquet"))
-
-                # return current_pred_with_features
-                return partial_df.unionByName(current_pred_with_features.select(*partial_df.columns))
-
-            common_cols = functools.reduce(
-                lambda acc, cols: acc.intersection(cols),
-                [set(df.columns) for df in partial_dfs]
-            )
-            common_cols.remove('user_idx')
-            common_cols.remove('item_idx')
-
-            logger.info("common cols", common_cols)
-            logger.info("Making missing predictions")
-            logger.info("partial df cols before drop", partial_dfs[0].columns)
-            logger.info("partial df cols after drop", partial_dfs[0].drop(*common_cols))
-            extended_train_dfs = [
-                make_missing_predictions(model, mpairs, partial_df.drop(*common_cols))
-                for model, mpairs, partial_df in zip(models, missing_pairs, partial_dfs)
-            ]
-
-            features_for_required_pairs_df = [
-                required_pairs.join(df.select('user_idx', 'item_idx', *common_cols), on=['user_idx', 'item_idx'])
-                for df in partial_dfs
-            ]
-            logger.info("Collecting required pairs with features")
-
-            required_pairs_with_features = functools.reduce(
-                lambda acc, df: acc.unionByName(df),  # !!
-                features_for_required_pairs_df
-            ).drop_duplicates(['user_idx', 'item_idx'])
-
-            # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
-            new_train_df = functools.reduce(
-                lambda acc, x: acc.join(x, on=['user_idx', 'item_idx'], how='left'),
-                extended_train_dfs,
-                required_pairs_with_features
+            # "leading_<model_name>"
+            leading_model_name = mode.split('_')[-1]
+            required_pairs = (
+                partial_dfs[model_names.index(leading_model_name)]
+                .select('user_idx', 'item_idx')
+                .distinct()
             )
 
-            # logger.info("count new train df ")
-            # new_train_df.count()
-            # logger.info("count new is ok ")
-            logger.info("Saving new parquet in ", combined_df_path)
-            new_train_df.write.parquet(combined_df_path)  # mode("overwrite")
+        logger.info("Selecting missing pairs")
 
-            logger.info("Saved")
+        missing_pairs = [
+            required_pairs.join(df, on=['user_idx', 'item_idx'], how='anti').select('user_idx',
+                                                                                    'item_idx').distinct()
+            for df in partial_dfs
+        ]
+
+        def get_rel_col(df: DataFrame) -> str:
+
+            logger.info(f"get_rel_col func columns: {df.columns}")
+            rel_col = [c for c in df.columns if c.startswith('rel_')][0]
+
+            # try:
+            # except IndexError:
+            #     rel_col = "relevance"
+            return rel_col
+
+        def make_missing_predictions(model, mpairs: DataFrame, partial_df: DataFrame) -> DataFrame:
+
+            # with _init_spark_session(DEFAULT_CPU, DEFAULT_MEMORY) as spark:
+
+            mpairs = mpairs.cache()
+
+            if mpairs.count() == 0:
+                return partial_df
+
+            current_pred = model._predict_pairs(
+                mpairs,
+                log=artifacts.train,
+                user_features=artifacts.user_features,
+                item_features=artifacts.item_features
+            ).withColumnRenamed('relevance', get_rel_col(partial_df))
+
+            features = get_first_level_model_features(
+                model=model,
+                pairs=current_pred.select(
+                    "user_idx", "item_idx"
+                ),
+                user_features=artifacts.user_features.cache() if artifacts.user_features is not None else None,
+                item_features=artifacts.item_features.cache() if artifacts.item_features is not None else None,
+                prefix=f"m_0",
+            )
+            current_pred_with_features = join_with_col_renaming(
+                left=current_pred,
+                right=features,
+                on_col_name=["user_idx", "item_idx"],
+                how="left",
+            )
+            current_pred_with_features.write.mode("overwrite").parquet(os.path.join("hdfs://node21.bdcl:9000",
+                                                                                    artifacts.base_path,
+                                                                                    f"current_pred_with_features_{model}.parquet"))
+            current_pred_with_features = sprk_ses.read.parquet(os.path.join("hdfs://node21.bdcl:9000",
+                                                                            artifacts.base_path,
+                                                                            f"current_pred_with_features_{model}.parquet"))
+
+            # return current_pred_with_features
+            return partial_df.unionByName(current_pred_with_features.select(*partial_df.columns))
+
+        common_cols = functools.reduce(
+            lambda acc, cols: acc.intersection(cols),
+            [set(df.columns) for df in partial_dfs]
+        )
+        common_cols.remove('user_idx')
+        common_cols.remove('item_idx')
+
+        logger.info(f"common cols: {common_cols}")
+        logger.info("Making missing predictions")
+        logger.info(f"partial df cols before drop: {partial_dfs[0].columns}", )
+        logger.info(f"partial df cols after drop: {partial_dfs[0].drop(*common_cols)}")
+        extended_train_dfs = [
+            make_missing_predictions(model, mpairs, partial_df.drop(*common_cols))
+            for model, mpairs, partial_df in zip(models, missing_pairs, partial_dfs)
+        ]
+
+        features_for_required_pairs_df = [
+            required_pairs.join(df.select('user_idx', 'item_idx', *common_cols), on=['user_idx', 'item_idx'])
+            for df in partial_dfs
+        ]
+        logger.info("Collecting required pairs with features")
+
+        required_pairs_with_features = functools.reduce(
+            lambda acc, df: acc.unionByName(df),  # !!
+            features_for_required_pairs_df
+        ).drop_duplicates(['user_idx', 'item_idx'])
+
+        # we apply left here because some algorithms like itemknn cannot predict beyond their inbuilt top
+        new_train_df = functools.reduce(
+            lambda acc, x: acc.join(x, on=['user_idx', 'item_idx'], how='left'),
+            extended_train_dfs,
+            required_pairs_with_features
+        )
+
+        logger.info(f"Saving new parquet in {combined_df_path}")
+        logger.info(f"combiner columns is {new_train_df.columns}")
+
+        new_train_df.write.parquet(combined_df_path)  # mode("overwrite")
+
+        logger.info("Saved")
 
     @staticmethod
     def do_combine_datasets(
@@ -1868,88 +1853,112 @@ class DatasetCombiner:
             combined_predicts_path: str,
             desired_models: Optional[List[str]] = None,
             mode: str = "union",
-            model_type: str = ""
+            model_type: str = "",
+            b: str = ""
     ):
-        with _init_spark_session() as spark, mlflow.start_run():
+        with _init_spark_session() as spark:
 
-            train_exists = do_path_exists(combined_train_path)
-            predicts_exists = do_path_exists(combined_predicts_path)
+            mlflow.set_tracking_uri("http://node2.bdcl:8822")
+            mlflow.set_experiment("paper_recsys")
 
-            assert train_exists == predicts_exists, \
-                f"The both datasets should either exist or be absent. " \
-                f"Train {combined_train_path}, Predicts {combined_predicts_path}"
+            with mlflow.start_run():
 
-            if train_exists and predicts_exists:
-                logger.info(f"Datasets {combined_train_path} and {combined_predicts_path} exist. Nothing to do.")
+                _log_model_settings(
+                    model_name="",
+                    model_type="",
+                    model_params={},
+                    k=k,
+                    artifacts=artifacts,
 
-                return
-
-            logger.info("Inferring trained models and their files")
-            logger.info("Base path", artifacts.base_path)
-            model_files = _infer_trained_models_files(artifacts, model_type)
-
-            logger.info(f"Found the following models that have all required files: "
-                        f"{[mfiles.model_name for mfiles in model_files]}")
-            found_mpaths = '\n'.join([mfiles.model_path for mfiles in model_files])
-            logger.info(f"Found models paths:\n {found_mpaths}")
-            print(f"Found models paths:\n {found_mpaths}")
-            if desired_models is not None:
-                logger.info(f"Checking availability of the desired models: {desired_models}")
-                model_files = [mfiles for mfiles in model_files if mfiles.model_name.lower() in desired_models]
-                not_available_models = set(desired_models).difference(
-                    mfiles.model_name.lower() for mfiles in model_files
                 )
-                assert len(not_available_models) == 0, f"Not all desired models available: {not_available_models}"
 
-            used_mpaths = '\n'.join([mfiles.model_path for mfiles in model_files])
-            logger.info(f"Continue with models:\n {used_mpaths}")
+                train_exists = do_path_exists(combined_train_path)
+                predicts_exists = do_path_exists(combined_predicts_path)
 
-            # creating combined train
-            logger.info("Creating combined train")
-            model_names = [mfiles.model_name.lower() for mfiles in model_files]
-            partial_train_dfs = [spark.read.parquet(mfiles.train_path) for mfiles in
-                                 model_files]  # train files for 1st lvl models
-            partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
-            logger.info("Loading models")
-            models = [
-                cast(BaseRecommender, cast(PartialTwoStageScenario, load_model(mfiles.model_path))
-                     .first_level_models[0])
-                for mfiles in model_files
-            ]
-            logger.info("Models loaded")
+                assert train_exists == predicts_exists, \
+                    f"The both datasets should either exist or be absent. " \
+                    f"Train {combined_train_path}, Predicts {combined_predicts_path}"
 
-            DatasetCombiner._combine(
-                artifacts=artifacts,
-                mode=mode,
-                model_names=model_names,
-                models=models,
-                partial_dfs=partial_train_dfs,
-                combined_df_path=combined_train_path,
-                sprk_ses=spark
-            )
+                if train_exists and predicts_exists:
+                    logger.info(f"Datasets {combined_train_path} and {combined_predicts_path} exist. Nothing to do.")
 
-            # combine predicts
-            logger.info("Creating combined predicts")
+                    return
 
-            DatasetCombiner._combine(
-                artifacts=artifacts,
-                mode=mode,
-                model_names=model_names,
-                models=models,
-                partial_dfs=partial_predicts_dfs,
-                combined_df_path=combined_predicts_path,
-                sprk_ses=spark
-            )
-            # common_cols.remove('target')
-            # partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
-            # full_predicts_df = functools.reduce(
-            #     lambda acc, x: acc.join(x.drop(*common_cols), on=['user_idx', 'item_idx']),
-            #     partial_predicts_dfs,
-            #     partial_predicts_dfs[0].select('user_idx', 'item_idx', *common_cols)
-            # )
-            # full_predicts_df.write.parquet(combined_predicts_path)
+                logger.info("Inferring trained models and their files")
+                logger.info(f"Base path: {artifacts.base_path}")
+                model_files = _infer_trained_models_files(artifacts, model_type, b)
 
-            logger.info("Combining finished")
+                logger.info(f"Found the following models that have all required files: "
+                            f"{[mfiles.model_name for mfiles in model_files]}")
+                found_mpaths = '\n'.join([mfiles.model_path for mfiles in model_files])
+                logger.info(f"Found models paths:\n {found_mpaths}")
+                if desired_models is not None:
+                    logger.info(f"Checking availability of the desired models: {desired_models}")
+                    model_files = [mfiles for mfiles in model_files if mfiles.model_name.lower() in desired_models]
+                    not_available_models = set(desired_models).difference(
+                        mfiles.model_name.lower() for mfiles in model_files
+                    )
+                    assert len(not_available_models) == 0, f"Not all desired models available: {not_available_models}"
+
+                used_mpaths = '\n'.join([mfiles.model_path for mfiles in model_files])
+                logger.info(f"Continue with models:\n {used_mpaths}")
+
+                # creating combined train
+                logger.info("Creating combined train")
+                model_names = [mfiles.model_name.lower() for mfiles in model_files]
+                partial_train_dfs = [spark.read.parquet(mfiles.train_path) for mfiles in
+                                     model_files]  # train files for 1st lvl models
+                partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
+                logger.info("Loading models")
+                models = [
+                    cast(BaseRecommender, cast(PartialTwoStageScenario, load_model(mfiles.model_path))
+                         .one_stage_scenario.first_level_models[0])
+                    for mfiles in model_files
+                ]
+                logger.info("Models loaded")
+
+                with log_exec_timer(
+                        "train_combiner"
+                ) as train_combiner_timer:
+                    DatasetCombiner._combine(
+                        artifacts=artifacts,
+                        mode=mode,
+                        model_names=model_names,
+                        models=models,
+                        partial_dfs=partial_train_dfs,
+                        combined_df_path=combined_train_path,
+                        sprk_ses=spark
+                    )
+
+                with log_exec_timer(
+                        "predicts_combiner"
+                ) as predicts_combiner_timer:
+                    logger.info("Creating combined predicts")
+
+                    DatasetCombiner._combine(
+                        artifacts=artifacts,
+                        mode=mode,
+                        model_names=model_names,
+                        models=models,
+                        partial_dfs=partial_predicts_dfs,
+                        combined_df_path=combined_predicts_path,
+                        sprk_ses=spark
+                    )
+                # common_cols.remove('target')
+                # partial_predicts_dfs = [spark.read.parquet(mfiles.predict_path) for mfiles in model_files]
+                # full_predicts_df = functools.reduce(
+                #     lambda acc, x: acc.join(x.drop(*common_cols), on=['user_idx', 'item_idx']),
+                #     partial_predicts_dfs,
+                #     partial_predicts_dfs[0].select('user_idx', 'item_idx', *common_cols)
+                # )
+                # full_predicts_df.write.parquet(combined_predicts_path)
+                mlflow.log_metric("train_combiner_time", train_combiner_timer.duration)
+                mlflow.log_metric("pred_combiner_time", predicts_combiner_timer.duration)
+                mlflow.log_param("combined_train_path", combined_train_path)
+                mlflow.log_param("combined_predicts_path", combined_predicts_path)
+                mlflow.log_param("budget", b)
+
+                logger.info("Combining finished")
 
 
 if __name__ == "__main__":
@@ -1975,5 +1984,5 @@ if __name__ == "__main__":
     elif config_filename.split('_')[2] == "pure":
         do_fit_predict_second_level_pure(**task_config)
     else:
-        # do_fit_predict_first_level_model(**task_config)
-        do_fit_predict_one_stage(**task_config)
+        do_fit_predict_first_level_model(**task_config)
+        # do_fit_predict_one_stage(**task_config)
