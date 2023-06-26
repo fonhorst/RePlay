@@ -1,5 +1,6 @@
 import pickle
 import sys
+
 sys.path.insert(0, "/opt/airflow/dags/dalexandrov_packages")
 
 import os
@@ -34,7 +35,6 @@ big_executor_config = {
         )
     ),
 }
-
 
 extra_big_executor_config = {
     "pod_override": k8s.V1Pod(
@@ -78,10 +78,10 @@ FIRST_LEVELS_MODELS_PARAMS = {
         "seed": 42,
         "hnswlib_params": hnswlib_params,
     },
-    "replay.models.knn.ItemKNN": {"num_neighbours": 100}, #!!!was 1000
+    "replay.models.knn.ItemKNN": {"num_neighbours": 100},  # !!!was 1000
     "replay.models.cluster.ClusterRec": {"num_clusters": 100},
-    "replay.models.slim.SLIM": {"seed": 42,},
-                                # "hnswlib_params": nmslib_hnsw_params},
+    "replay.models.slim.SLIM": {"seed": 42, },
+    # "hnswlib_params": nmslib_hnsw_params},
     "replay.models.word2vec.Word2VecRec": {
         "rank": 100,
         "seed": 42,
@@ -96,7 +96,7 @@ FIRST_LEVELS_MODELS_PARAMS_BORDERS = {
     },
     "replay.models.knn.ItemKNN": {
         "num_neighbours": [50, 1000],
-                                  },
+    },
     "replay.models.slim.SLIM": {
         "beta": [1e-6, 1],
         "lambda_": [1e-6, 1]
@@ -119,11 +119,11 @@ MODELNAME2FULLNAME = {
 
 SECOND_LEVELS_MODELS_PARAMS = {
     "test": {
-            "general_params": {"use_algos": [["lgb"]]},
-            # "lgb_params": {
-            #     'default_params': {'numIteration': 10}
-            # },
-            "reader_params": {"cv": 2, "advanced_roles": False}
+        "general_params": {"use_algos": [["lgb"]]},
+        # "lgb_params": {
+        #     'default_params': {'numIteration': 10}
+        # },
+        "reader_params": {"cv": 2, "advanced_roles": False}
     },
 
     "lama_fast": {
@@ -167,40 +167,40 @@ SECOND_LEVELS_MODELS_PARAMS = {
         "second_model_params": {
             "cpu_limit": EXTRA_BIG_CPU,
             "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
-            "timeout": 3600*4,
+            "timeout": 3600 * 4,
             "general_params": {"use_algos": [["lgb_tuned"]]},
             "reader_params": {"cv": 5, "advanced_roles": False},
-            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 100, 'max_tuning_time': 3600*3}
+            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 100, 'max_tuning_time': 3600 * 3}
         }
     },
 
     "longer_slama_for_paper": {
-            "second_model_type": "slama",
-            "second_model_params":
-                {10:
-                    {
-                "cpu_limit": EXTRA_BIG_CPU,
-                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
-                "timeout": 3600*48,
-                "general_params": {"use_algos": [["lgb_tuned"]]},
-                "reader_params": {"cv": 5, "advanced_roles": False},
-                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 10, 'max_tuning_time': 3600*48}},
+        "second_model_type": "slama",
+        "second_model_params":
+            {10:
+                {
+                    "cpu_limit": EXTRA_BIG_CPU,
+                    "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                    "timeout": 3600 * 48,
+                    "general_params": {"use_algos": [["lgb_tuned"]]},
+                    "reader_params": {"cv": 5, "advanced_roles": False},
+                    "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 10, 'max_tuning_time': 3600 * 48}},
 
                 50: {"cpu_limit": EXTRA_BIG_CPU,
-                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
-                "timeout": 3600*48,
-                "general_params": {"use_algos": [["lgb_tuned"]]},
-                "reader_params": {"cv": 5, "advanced_roles": False},
-                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 50, 'max_tuning_time': 3600*48}},
+                     "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                     "timeout": 3600 * 48,
+                     "general_params": {"use_algos": [["lgb_tuned"]]},
+                     "reader_params": {"cv": 5, "advanced_roles": False},
+                     "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 50, 'max_tuning_time': 3600 * 48}},
 
                 100: {"cpu_limit": EXTRA_BIG_CPU,
-                "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
-                "timeout": 3600*48,
-                "general_params": {"use_algos": [["lgb_tuned"]]},
-                "reader_params": {"cv": 5, "advanced_roles": False},
-                "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 100, 'max_tuning_time': 3600*48}}}
+                      "memory_limit": int(EXTRA_BIG_MEMORY * 0.95),
+                      "timeout": 3600 * 48,
+                      "general_params": {"use_algos": [["lgb_tuned"]]},
+                      "reader_params": {"cv": 5, "advanced_roles": False},
+                      "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 100, 'max_tuning_time': 3600 * 48}}}
 
-        },
+    },
 
     "slama_fast": {
         "second_model_type": "slama",
@@ -210,7 +210,7 @@ SECOND_LEVELS_MODELS_PARAMS = {
             "timeout": 400,
             "general_params": {"use_algos": [["lgb_tuned"]]},
             "reader_params": {"cv": 5, "advanced_roles": False, "samples": 10_000},
-            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 80} #add lgb params
+            "tuning_params": {'fit_on_holdout': True, 'max_tuning_iter': 101, 'max_tuning_time': 80}  # add lgb params
         }
     }
 }
@@ -281,6 +281,7 @@ YARN_SUBMIT_CONF = {
     "spark.yarn.appMasterEnv.SCRIPT_ENV": "cluster",
     "spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/python_envs/.replay_venv/bin/python3",
     "spark.yarn.appMasterEnv.MLFLOW_TRACKING_URI": "http://node2.bdcl:8822",
+    "spark.yarn.appMasterEnv.REDIS_HOST": "redis-slama.airflow",
     "spark.yarn.appMasterEnv.GIT_PYTHON_REFRESH": "quiet",
     "spark.yarn.tags": "replay",
     "spark.kryoserializer.buffer.max": "512m",
@@ -317,8 +318,8 @@ YARN_SUBMIT_CONF = {
     "spark.python.worker.reuse": "true",
     "spark.sql.optimizer.maxIterations": "100",
 }
-#"/jars/replay_jars/*"
-#"/jars/replay_jars/*"
+# "/jars/replay_jars/*"
+# "/jars/replay_jars/*"
 
 TASK_CONFIG_FILENAME_ENV_VAR = "TASK_CONFIG_FILENAME"
 
@@ -394,7 +395,8 @@ DATASETS = {
 
         DatasetInfo(
             name="netflix",
-            log_path="file:///opt/spark_data/replay_datasets/netflix_train_indexed.parquet"  #netflix_correct_timestamp.csv"
+            log_path="file:///opt/spark_data/replay_datasets/netflix_train_indexed.parquet"
+            # netflix_correct_timestamp.csv"
         ),
 
         DatasetInfo(
@@ -548,7 +550,6 @@ class ArtifactPaths:
     @property
     def first_level_val_opt_path(self) -> str:
         return os.path.join(self.base_path, "first_level_val_opt.parquet")
-
 
     @property
     def second_level_positives_path(self) -> str:

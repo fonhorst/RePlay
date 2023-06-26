@@ -6,6 +6,7 @@ import itertools
 import logging
 import os
 import pickle
+import json
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from typing import Dict, cast, Optional, List, Union, Tuple
 import inspect
 
 import mlflow
+import redis
 from pyspark.sql import functions as sf, SparkSession, DataFrame, Window
 
 sys.path.insert(0, "/opt/airflow/dags/dalexandrov_packages")
@@ -912,7 +914,7 @@ def do_presplit_data(artifacts: ArtifactPaths, item_test_size_second_level: floa
             presplitted_data=False
         )
 
-        scenario._split_data(artifacts.train)
+        scenario._split_data(artifacts.train) # dumps splits (train splitter) into first_level_train_path, second_level_positives_path
         scenario._split_optimize(artifacts.first_level_train)
 
 
@@ -1375,7 +1377,9 @@ def do_fit_predict_second_level(
         second_model_params: Optional[Union[Dict, str]] = None,
         second_model_config_path: Optional[str] = None,
         cpu: int = DEFAULT_CPU,
-        memory: int = DEFAULT_MEMORY):
+        memory: int = DEFAULT_MEMORY,
+        mlflow_experiments_id: str = "paper_recsys",
+):
     if second_model_type == "lama":
         mem_coeff = 0.3
     else:
@@ -1384,7 +1388,7 @@ def do_fit_predict_second_level(
     with _init_spark_session(cpu, memory, mem_coeff=mem_coeff) as spark:
 
         mlflow.set_tracking_uri("http://node2.bdcl:8822")
-        mlflow.set_experiment("paper_recsys")
+        mlflow.set_experiment(mlflow_experiments_id)
 
         # checks MLFLOW_EXPERIMENT_ID for the experiment id
         model_name = f"{model_name}_{str(uuid.uuid4()).replace('-', '')}"
@@ -1854,23 +1858,24 @@ class DatasetCombiner:
             desired_models: Optional[List[str]] = None,
             mode: str = "union",
             model_type: str = "",
-            b: str = ""
+            b: str = "",
+            mlflow_experiments_id: str = "paper_recsys",
     ):
         with _init_spark_session() as spark:
 
             mlflow.set_tracking_uri("http://node2.bdcl:8822")
-            mlflow.set_experiment("paper_recsys")
+            mlflow.set_experiment(mlflow_experiments_id)
 
             with mlflow.start_run():
 
-                _log_model_settings(
-                    model_name="",
-                    model_type="",
-                    model_params={},
-                    k=k,
-                    artifacts=artifacts,
-
-                )
+                # _log_model_settings(
+                #     model_name="",
+                #     model_type="",
+                #     model_params={},
+                #     k=0,
+                #     artifacts=artifacts,
+                #
+                # )
 
                 train_exists = do_path_exists(combined_train_path)
                 predicts_exists = do_path_exists(combined_predicts_path)
@@ -1966,9 +1971,11 @@ if __name__ == "__main__":
     spark = get_cluster_session()
 
     config_filename = os.environ.get(TASK_CONFIG_FILENAME_ENV_VAR, "task_config.pickle")
-
-    with open(config_filename, "rb") as f:
-        task_config = pickle.load(f)
+    redis_host = os.environ.get('REDIS_HOST', "localhost")
+    redis_db = redis.Redis(host=redis_host, port=6379, decode_responses=False)
+    # with open(config_filename, "rb") as f:
+    #     task_config = pickle.load(f)
+    task_config = pickle.loads(redis_db.get(config_filename))
 
     print("Task configs")
     for k, v in task_config.items():

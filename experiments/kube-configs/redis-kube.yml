@@ -1,0 +1,41 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-slama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-slama
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        "sidecar.istio.io/inject": "false"
+      labels:
+        app: redis-slama
+    spec:
+      volumes:
+        - name: redis-data-vol
+          persistentVolumeClaim:
+            claimName: redis-slama-pvc
+      containers:
+        - name: redis
+          image: redis:7.2-rc-alpine3.18
+          volumeMounts:
+            - mountPath: "/data"
+              name: redis-data-vol
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-slama
+spec:
+  ports:
+    - port: 6379
+  selector:
+    app: redis-slama
