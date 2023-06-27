@@ -1130,11 +1130,13 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
                                      model_class_name: str,
                                      # model_kwargs: Dict,
                                      k: int,
+                                     budget_list: list,
                                      cpu: int = DEFAULT_CPU,
                                      memory: int = DEFAULT_MEMORY,
                                      get_optimized_params: bool = False,
                                      do_optimization: bool = False,
-                                     mlflow_experiments_id: str = "delete"):
+                                     mlflow_experiments_id: str = "delete",
+                                                                         ):
     with _init_spark_session(cpu, memory):
 
         mlflow.set_tracking_uri("http://node2.bdcl:8822")
@@ -1220,7 +1222,7 @@ def do_fit_predict_first_level_model(artifacts: ArtifactPaths,
 
             if do_optimization:
                 if do_optimization:
-                    budget_list = [5, 10, 20, 50]
+                    # budget_list = [5, 10, 20, 50]
                     budget_time_list = []
                     with JobGroup("optimize", "optimization of first lvl models"):
                         for b_idx, b in enumerate(budget_list):

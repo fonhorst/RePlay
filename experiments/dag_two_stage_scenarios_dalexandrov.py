@@ -71,6 +71,7 @@ def fit_predict_first_level_model_spark_submit(
         model_class_name: str,
         # model_kwargs: Dict,
         k: int,
+        budget_list: list[int],
         get_optimized_params: bool = False,
         do_optimization: bool = False,
         mlflow_experiments_id: str = "default",
@@ -96,7 +97,8 @@ def fit_predict_first_level_model_spark_submit(
             "k": k,
             "get_optimized_params": get_optimized_params,
             "do_optimization": do_optimization,
-            "mlflow_experiments_id": mlflow_experiments_id
+            "mlflow_experiments_id": mlflow_experiments_id,
+            "budget_list":budget_list
         }
     ))
 
@@ -234,6 +236,8 @@ def build_two_stage_dag(
         dag_id: str,
         mlflow_exp_id: str,
         models: list[str],
+        do_optimization_b: list[int],
+        do_optimization_max_iter: list[int],
         dataset: DatasetInfo,
         path_suffix: str = 'default',
         item_test_size_second_level: float = 0.5,
@@ -241,9 +245,7 @@ def build_two_stage_dag(
         get_optimized_params: bool = False,
         do_optimization: bool = False,
         k: int = 100,
-        all_splits: bool = False,
-        do_optimization_b: list = [5, 10, 50],
-        do_optimization_max_iter: list = [10, 50, 100],
+        all_splits: bool = False
 ):
     with DAG(
             dag_id=dag_id,
@@ -257,9 +259,10 @@ def build_two_stage_dag(
         os.environ["MLFLOW_EXPERIMENT_ID"] = os.environ.get("MLFLOW_EXPERIMENT_ID", mlflow_exp_id)
 
         if do_optimization:
-            item_test_size_opt_list = [0.10, 0.15, 0.20, 0.25, 0.30]
+            # item_test_size_opt_list = [0.10, 0.15, 0.20, 0.25, 0.30]
+            item_test_size_opt_list = [0.20]
             if all_splits:
-                item_test_size_2nd_level = [0.10, 0.15, 0.20, 0.25, 0.30]
+                item_test_size_2nd_level = [0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50]
 
                 splits = [x for x in itertools.product(
                     item_test_size_2nd_level,
@@ -280,7 +283,6 @@ def build_two_stage_dag(
                 item_test_size_second_level=test_size_2_lvl,
                 item_test_size_opt=test_size_opt) for (test_size_2_lvl, test_size_opt), a in
                 zip(splits, artifacts_list)]
-
 
         else:
             if all_splits:
@@ -310,7 +312,8 @@ def build_two_stage_dag(
                     k=k,
                     get_optimized_params=get_optimized_params,
                     do_optimization=do_optimization,
-                    mlflow_experiments_id=mlflow_exp_id
+                    mlflow_experiments_id=mlflow_exp_id,
+                    budget_list=do_optimization_b
                 ))
 
         all_models = ["alswrap", "itemknn", "slim", "word2vecrec"]
@@ -373,7 +376,7 @@ def build_two_stage_dag(
                     combined_train_path = a.make_path(f"combined_train_{combiner_suffix}.parquet")
                     combined_predicts_path = a.make_path(f"combined_predicts_{combiner_suffix}.parquet")
 
-                    for max_iter in [10, 50]:  # todo#, 100]:
+                    for max_iter in do_optimization_max_iter:
                         model_name = "longer_slama_for_paper"
                         second_levels.append(
                             fit_predict_second_level_model_spark_submit(
@@ -403,7 +406,6 @@ def build_two_stage_dag(
 
         first_level_models_list[-1] >> combiners_list[0]
         combiners_list[-1] >> second_levels[0]
-
 
     return dag
 
@@ -938,7 +940,7 @@ def build_combiner_second_level(dag_id: str, mlflow_exp_id: str, dataset: Datase
 from airflow.models import Variable
 
 dataset = Variable.get("dataset")
-item_test_size_opt = float(Variable.get("item_test_size_opt"))
+# item_test_size_opt = float(Variable.get("item_test_size_opt"))
 # One-stage default
 # [0.10, 0.15, 0.20, 0.25, 0.30]
 
@@ -1014,16 +1016,17 @@ item_test_size_opt = float(Variable.get("item_test_size_opt"))
 
 # # Two-stage with 1st level optimization
 two_stage_opt = build_two_stage_dag(
-    dag_id=f"{dataset}_two_stage_opt_{item_test_size_opt}",
+    # dag_id=f"{dataset}_two_stage_opt_{item_test_size_opt}",
+    dag_id=f"{dataset}_two_stage_opt_fixed_setup",
     mlflow_exp_id="paper_recsys_test",
     models=["als", "itemknn", "slim", "word2vec"],
     dataset=DATASETS[dataset],
     do_optimization=True,
     k=100,
-    all_splits=False,
-    item_test_size_second_level=item_test_size_opt,
-    do_optimization_b=[5], #, 10, 50
-    do_optimization_max_iter=[10, 50], #, 100
+    all_splits=True,
+    # item_test_size_second_level=item_test_size_opt,
+    do_optimization_b=[10],  #[5], #, 10, 50
+    do_optimization_max_iter=[50]  #[10, 50], #, 100
 )
 
 # two_stage_opt = build_two_stage_dag(
