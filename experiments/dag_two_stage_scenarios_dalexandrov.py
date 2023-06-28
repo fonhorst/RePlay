@@ -1029,6 +1029,21 @@ two_stage_opt = build_two_stage_dag(
     do_optimization_max_iter=[50]  #[10, 50], #, 100
 )
 
+ds = "ml25m"
+two_stage_opt_ml25m = build_two_stage_dag(
+    # dag_id=f"{dataset}_two_stage_opt_{item_test_size_opt}",
+    dag_id=f"{ds}_two_stage_opt_fixed_setup",
+    mlflow_exp_id="paper_recsys_test",
+    models=["als", "itemknn", "slim", "word2vec"],
+    dataset=DATASETS[ds],
+    do_optimization=True,
+    k=100,
+    all_splits=True,
+    # item_test_size_second_level=item_test_size_opt,
+    do_optimization_b=[10],  #[5], #, 10, 50
+    do_optimization_max_iter=[50]  #[10, 50], #, 100
+)
+
 # two_stage_opt = build_two_stage_dag(
 #     dag_id=f"{dataset}_two_stage_opt",
 #     mlflow_exp_id="paper_recsys",
