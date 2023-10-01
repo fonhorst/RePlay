@@ -17,7 +17,7 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
 from pyspark.sql.column import Column
 
-from replay.ann.ann_mixin import ANNMixin
+from replay.models.extensions.ann.ann_mixin import ANNMixin
 from replay.models.base_rec import Recommender
 
 
@@ -37,7 +37,8 @@ class NeighbourRec(Recommender, ANNMixin, ABC):
 
     def _clear_cache(self):
         if hasattr(self, "similarity"):
-            self.similarity.unpersist()
+            if self.similarity:
+                self.similarity.unpersist()
 
     # pylint: disable=missing-function-docstring
     @property
