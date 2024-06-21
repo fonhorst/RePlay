@@ -413,6 +413,13 @@ class ReplayALSModel private[ml] (
     recommendForAll(srcFactorSubset, userFactors, $(itemCol), $(userCol), numUsers, $(blockSize))
   }
 
+  @Since("2.3.0")
+  def recommendItemsForUserItemSubset(usersDataset: Dataset[_], itemsDataset: Dataset[_], numItems: Int): DataFrame = {
+    val srcUserFactorSubset = getSourceFactorSubset(usersDataset, userFactors, $(userCol))
+    val dstItemFactorSubset = getSourceFactorSubset(itemsDataset, itemFactors, $(itemCol))
+    recommendForAll(srcUserFactorSubset, dstItemFactorSubset, $(userCol), $(itemCol), numItems, $(blockSize))
+  }
+
   /**
    * Returns a subset of a factor DataFrame limited to only those unique ids contained
    * in the input dataset.
